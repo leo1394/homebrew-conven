@@ -54,8 +54,27 @@ type PolicyRouting struct {
 }
 
 type ServerRoute struct {
-	Port    string        `yaml:"port"`
-	Patches []ConfigPatch `yaml:"patches"`
+	Port      string          `yaml:"port"`
+	Patches   []ConfigPatch   `yaml:"patches"`
+	Isolation ServerIsolation `yaml:"isolation"`
+}
+
+type ServerIsolation struct {
+	Registration RegistrationGuard `yaml:"registration"`
+	Listener     ListenerGuard     `yaml:"listener"`
+}
+
+type RegistrationGuard struct {
+	Mode          string      `yaml:"mode"`
+	File          string      `yaml:"file"`
+	Path          string      `yaml:"path"`
+	DisabledValue interface{} `yaml:"disabledValue"`
+}
+
+type ListenerGuard struct {
+	File  string      `yaml:"file"`
+	Path  string      `yaml:"path"`
+	Value interface{} `yaml:"value"`
 }
 
 type RouteRule struct {

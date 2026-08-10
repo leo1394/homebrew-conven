@@ -227,6 +227,11 @@ func validateManifest(manifest *model.Manifest) error {
 				if _, found := service.Ports[server.Port]; !found {
 					return fmt.Errorf("services.%s kind %q requires policy %q server port %q", name, service.Kind, policyName, server.Port)
 				}
+				if service.Kind == "rpc" && server.Isolation.Registration.Mode != "config" {
+					return fmt.Errorf("services.%s kind %q requires policy %q registration isolation mode config", name, service.Kind, policyName)
+				}
+			} else {
+				return fmt.Errorf("services.%s kind %q requires policy %q to declare a matching server route", name, service.Kind, policyName)
 			}
 		}
 	}
@@ -326,6 +331,9 @@ func validatePolicy(name string, policy model.Policy) error {
 				return err
 			}
 		}
+		if err := validateServerIsolation(server.Isolation, fmt.Sprintf("%s.routing.servers.%s.isolation", prefix, kind)); err != nil {
+			return err
+		}
 	}
 	if err := validateRouteRule(policy.Routing.LocalDependency, prefix+".routing.localDependency"); err != nil {
 		return err
@@ -371,6 +379,65 @@ func validateConfigPatch(patch model.ConfigPatch, field string) error {
 		return fmt.Errorf("%s.value is required", field)
 	}
 	return nil
+}
+
+func validateServerIsolation(isolation model.ServerIsolation, field string) error {
+	registrationField := field + ".registration"
+	switch isolation.Registration.Mode {
+	case "config":
+		if err := validateConfigGuardLocation(isolation.Registration.File, isolation.Registration.Path, registrationField); err != nil {
+			return err
+		}
+		if isolation.Registration.DisabledValue == nil {
+			return fmt.Errorf("%s.disabledValue is required", registrationField)
+		}
+		if !scalarGuardValue(isolation.Registration.DisabledValue) {
+			return fmt.Errorf("%s.disabledValue must be a scalar", registrationField)
+		}
+	case "not-applicable":
+		if isolation.Registration.File != "" || isolation.Registration.Path != "" || isolation.Registration.DisabledValue != nil {
+			return fmt.Errorf("%s must not declare file, path, or disabledValue for not-applicable mode", registrationField)
+		}
+	default:
+		return fmt.Errorf("%s.mode must be config or not-applicable, got %q", registrationField, isolation.Registration.Mode)
+	}
+	listenerField := field + ".listener"
+	if err := validateConfigGuardLocation(isolation.Listener.File, isolation.Listener.Path, listenerField); err != nil {
+		return err
+	}
+	if isolation.Listener.Value == nil {
+		return fmt.Errorf("%s.value is required", listenerField)
+	}
+	if _, ok := isolation.Listener.Value.(string); !ok {
+		return fmt.Errorf("%s.value must be a string", listenerField)
+	}
+	return nil
+}
+
+func validateConfigGuardLocation(file string, path string, field string) error {
+	if file != "" {
+		if err := validateRelativeConfigPath(file, field+".file", false); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("%s.path is required", field)
+	}
+	for _, segment := range strings.Split(path, ".") {
+		if invalidName(segment) {
+			return fmt.Errorf("%s.path contains invalid segment %q", field, segment)
+		}
+	}
+	return nil
+}
+
+func scalarGuardValue(value interface{}) bool {
+	switch value.(type) {
+	case string, bool, int, int64, uint64, float64:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateRouteRule(rule model.RouteRule, field string) error {

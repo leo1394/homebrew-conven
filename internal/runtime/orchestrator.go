@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leo1394/homebrew-conven/internal/materialize"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
@@ -131,9 +130,57 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	if err := workspace.Store.Save(session); err != nil {
 		return nil, errors.Join(err, releaseConnection(context.Background(), connection, workspace.Store.Root, false, output))
 	}
-	started := make(map[string]ServiceProcess, len(plan.Order))
+	if err := materializeRuntimeConfigs(ctx, plan, plan.Order, output); err != nil {
+		return nil, failStartup(workspace, session, connection, output, err)
+	}
+	if err := runRuntimePreflight(ctx, plan, output, true); err != nil {
+		return nil, failStartup(workspace, session, connection, output, err)
+	}
 	sourceFingerprints := make(map[string]string, len(plan.Order))
 	planFingerprints := make(map[string]string, len(plan.Order))
+	for _, name := range plan.Order {
+		if err := ctx.Err(); err != nil {
+			return nil, failStartup(workspace, session, connection, output, err)
+		}
+		service := plan.Services[name]
+		sourceFingerprint, err := SourceFingerprint(service.Directory)
+		if err != nil {
+			return nil, failStartup(workspace, session, connection, output, fmt.Errorf("fingerprint %s source: %w", name, err))
+		}
+		planFingerprint, err := PlanFingerprint(service)
+		if err != nil {
+			return nil, failStartup(workspace, session, connection, output, fmt.Errorf("fingerprint %s plan: %w", name, err))
+		}
+		sourceFingerprints[name] = sourceFingerprint
+		planFingerprints[name] = planFingerprint
+		if len(service.Prepare) > 0 {
+			fmt.Fprintf(output, "%s %s\n", style.Stage("Preparing"), style.Identifier(name))
+			if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
+				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("prepare %s: %w", name, err))
+			}
+			prepareLog := filepath.Join(plan.RunDir, "logs", name+"-prepare.log")
+			if err := RunForeground(ctx, service.Prepare, service.Workdir, service.Environment, output, prepareLog); err != nil {
+				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("prepare %s: %w", name, err))
+			}
+		}
+		if !options.SkipBuild && len(service.Build) > 0 {
+			fmt.Fprintf(output, "%s %s\n", style.Stage("Building"), style.Identifier(name))
+			if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
+				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("build %s: %w", name, err))
+			}
+			buildLog := filepath.Join(plan.RunDir, "logs", name+"-build.log")
+			if err := RunForeground(ctx, service.Build, service.Workdir, service.Environment, output, buildLog); err != nil {
+				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("build %s: %w", name, err))
+			}
+		}
+		if err := inspectRunWorkdir(service); err != nil {
+			return nil, failStartup(workspace, session, connection, output, err)
+		}
+	}
+	if err := runRuntimePreflight(ctx, plan, output, false); err != nil {
+		return nil, failStartup(workspace, session, connection, output, err)
+	}
+	started := make(map[string]ServiceProcess, len(plan.Order))
 	for _, group := range plan.Groups {
 		if len(group) > 1 {
 			fmt.Fprintf(output, "%s: %s\n", style.Stage("Starting dependency cycle together"), style.Identifier(strings.Join(group, ", ")))
@@ -143,52 +190,8 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 				return nil, failStartup(workspace, session, connection, output, err)
 			}
 			service := plan.Services[name]
-			sourceFingerprint, err := SourceFingerprint(service.Directory)
-			if err != nil {
-				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("fingerprint %s source: %w", name, err))
-			}
-			planFingerprint, err := PlanFingerprint(service)
-			if err != nil {
-				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("fingerprint %s plan: %w", name, err))
-			}
-			sourceFingerprints[name] = sourceFingerprint
-			planFingerprints[name] = planFingerprint
-			configDirectory := filepath.Join(plan.RunDir, "configs", name)
-			if err := ensurePrivateDirectory(configDirectory); err != nil {
-				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("create %s runtime config directory: %w", name, err))
-			}
-			if service.Config != nil {
-				fmt.Fprintf(output, "%s %s config\n", style.Stage("Materializing"), style.Identifier(name))
-				fmt.Fprintln(output, style.Detail(fmt.Sprintf("Drivers: %s -> %s", service.Config.Plan.SourceDriver, service.Config.Plan.Driver)))
-				if err := materialize.Materialize(ctx, service.Config.Plan); err != nil {
-					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("materialize %s config: %w", name, err))
-				}
-			}
-			if len(service.Prepare) > 0 {
-				fmt.Fprintf(output, "%s %s\n", style.Stage("Preparing"), style.Identifier(name))
-				if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
-					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("prepare %s: %w", name, err))
-				}
-				prepareLog := filepath.Join(plan.RunDir, "logs", name+"-prepare.log")
-				if err := RunForeground(ctx, service.Prepare, service.Workdir, service.Environment, output, prepareLog); err != nil {
-					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("prepare %s: %w", name, err))
-				}
-			}
-			if !options.SkipBuild && len(service.Build) > 0 {
-				fmt.Fprintf(output, "%s %s\n", style.Stage("Building"), style.Identifier(name))
-				if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
-					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("build %s: %w", name, err))
-				}
-				buildLog := filepath.Join(plan.RunDir, "logs", name+"-build.log")
-				if err := RunForeground(ctx, service.Build, service.Workdir, service.Environment, output, buildLog); err != nil {
-					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("build %s: %w", name, err))
-				}
-			}
-			if err := ctx.Err(); err != nil {
-				return nil, failStartup(workspace, session, connection, output, err)
-			}
-			if err := inspectRunWorkdir(service); err != nil {
-				return nil, failStartup(workspace, session, connection, output, err)
+			if err := appendIsolationEvidence(service, plan.Connection); err != nil {
+				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("record %s local isolation: %w", name, err))
 			}
 			fmt.Fprintf(output, "%s %s\n", style.Stage("Starting"), style.Identifier(name))
 			process, err := StartService(name, service.Run, service.RunWorkdir, service.Environment, service.LogPath)
@@ -592,14 +595,10 @@ func printPlan(output io.Writer, plan *Plan, dryRun bool) {
 	fmt.Fprintln(output, style.Detail("Current: "+plan.RunDir))
 	fmt.Fprintln(output, style.Detail("Environment: "+style.Identifier(plan.EnvironmentName)))
 	fmt.Fprintln(output, style.Detail("Local services: "+style.Identifiers(plan.Selected, ", ")))
-	registry := plan.Environment.Registry
-	if registry == "" {
-		registry = "configured registry"
-	}
-	if len(plan.Remote) > 0 {
-		fmt.Fprintln(output, style.Detail("Remote dependencies via "+style.Identifier(registry)+": "+style.Identifiers(plan.Remote, ", ")))
+	if len(plan.DeclaredRemote) > 0 {
+		fmt.Fprintln(output, style.Detail("Declared remote dependencies: "+style.Identifiers(plan.DeclaredRemote, ", ")))
 	} else {
-		fmt.Fprintln(output, style.Detail("Remote dependencies: none"))
+		fmt.Fprintln(output, style.Detail("Declared remote dependencies: none"))
 	}
 	groups := make([]string, 0, len(plan.Groups))
 	for _, group := range plan.Groups {
@@ -621,6 +620,9 @@ func printPlan(output io.Writer, plan *Plan, dryRun bool) {
 			service.Config.Plan.Driver,
 		)))
 		fmt.Fprintln(output, style.Detail("Output: "+service.Config.Plan.TargetDir))
+		if isolation := plannedIsolationDescription(service.Config); isolation != "" {
+			fmt.Fprintln(output, style.Detail("Local isolation: "+isolation))
+		}
 		for _, route := range service.Config.Routes {
 			location := "Remote"
 			if route.Local {

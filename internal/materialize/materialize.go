@@ -35,6 +35,13 @@ type Patch struct {
 	Value any
 }
 
+type Guard struct {
+	File        string
+	Path        string
+	Value       any
+	AllowCreate bool
+}
+
 type Plan struct {
 	Service          string
 	Driver           Driver
@@ -47,6 +54,7 @@ type Plan struct {
 	RuntimeBootstrap string
 	Apollo           Apollo
 	Patches          []Patch
+	Guards           []Guard
 }
 
 func Materialize(ctx context.Context, plan Plan) error {
@@ -121,6 +129,18 @@ func Materialize(ctx context.Context, plan Plan) error {
 	if err := writePrivateFile(applicationPath, application); err != nil {
 		return fmt.Errorf("write materialized application: %w", err)
 	}
+	for index, guard := range validated.Guards {
+		if guard.AllowCreate {
+			continue
+		}
+		path, err := secureGuardPath(staging, guard.File)
+		if err != nil {
+			return fmt.Errorf("resolve guard %d file: %w", index, err)
+		}
+		if err := requireExistingYAMLGuard(path, guard.Path); err != nil {
+			return fmt.Errorf("inspect guard %d target in %s: %w", index, guard.File, err)
+		}
+	}
 	for index, patch := range validated.Patches {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -132,6 +152,21 @@ func Materialize(ctx context.Context, plan Plan) error {
 		if err := applyYAMLPatch(path, patch.Path, patch.Value); err != nil {
 			return fmt.Errorf("apply patch %d to %s: %w", index, patch.File, err)
 		}
+	}
+	for index, guard := range validated.Guards {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		path, err := secureGuardPath(staging, guard.File)
+		if err != nil {
+			return fmt.Errorf("resolve guard %d file: %w", index, err)
+		}
+		if err := applyYAMLGuard(path, guard.Path, guard.Value, guard.AllowCreate); err != nil {
+			return fmt.Errorf("apply guard %d to %s: %w", index, guard.File, err)
+		}
+	}
+	if err := VerifyGuards(staging, validated.Guards); err != nil {
+		return err
 	}
 	if err := protectTree(staging); err != nil {
 		return err
@@ -227,6 +262,11 @@ func validatePlan(plan Plan) (Plan, error) {
 			return Plan{}, fmt.Errorf("patch %d path: %w", index, err)
 		}
 	}
+	for index, guard := range plan.Guards {
+		if err := validateGuard(guard); err != nil {
+			return Plan{}, fmt.Errorf("guard %d: %w", index, err)
+		}
+	}
 	if plan.Apollo.Attempts < 0 {
 		return Plan{}, errors.New("Apollo attempts must not be negative")
 	}
@@ -240,6 +280,38 @@ func validatePlan(plan Plan) (Plan, error) {
 	plan.ConfigRoot = configRoot
 	plan.TargetDir = target
 	return plan, nil
+}
+
+func validateGuard(guard Guard) error {
+	if err := validateRelativeFile(guard.File); err != nil {
+		return fmt.Errorf("file: %w", err)
+	}
+	if err := validatePatchPath(guard.Path); err != nil {
+		return fmt.Errorf("path: %w", err)
+	}
+	if _, err := encodeYAMLGuardValue(guard.Value); err != nil {
+		return fmt.Errorf("value: %w", err)
+	}
+	return nil
+}
+
+func VerifyGuards(targetDir string, guards []Guard) error {
+	if err := requireRealDirectory(targetDir, "guard target directory"); err != nil {
+		return err
+	}
+	for index, guard := range guards {
+		if err := validateGuard(guard); err != nil {
+			return fmt.Errorf("validate guard %d: %w", index, err)
+		}
+		path, err := secureGuardPath(targetDir, guard.File)
+		if err != nil {
+			return fmt.Errorf("resolve guard %d file: %w", index, err)
+		}
+		if err := verifyYAMLGuard(path, guard.Path, guard.Value); err != nil {
+			return fmt.Errorf("verify guard %d in %s: %w", index, guard.File, err)
+		}
+	}
+	return nil
 }
 
 func requireRealDirectory(path string, label string) error {
@@ -271,6 +343,36 @@ func secureJoin(root string, relative string) (string, error) {
 	path := filepath.Join(root, filepath.Clean(relative))
 	if !withinDirectory(root, path) {
 		return "", errors.New("path escapes the materialization directory")
+	}
+	return path, nil
+}
+
+func secureGuardPath(root string, relative string) (string, error) {
+	path, err := secureJoin(root, relative)
+	if err != nil {
+		return "", err
+	}
+	relativePath, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", err
+	}
+	current := root
+	segments := strings.Split(relativePath, string(filepath.Separator))
+	for index, segment := range segments {
+		current = filepath.Join(current, segment)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return "", fmt.Errorf("inspect guard path component %q: %w", current, err)
+		}
+		if index == len(segments)-1 {
+			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+				return "", fmt.Errorf("guard file %q must be a real file", current)
+			}
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", fmt.Errorf("guard path component %q must be a real directory", current)
+		}
 	}
 	return path, nil
 }

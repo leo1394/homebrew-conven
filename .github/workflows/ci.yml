@@ -89,7 +89,7 @@ jobs:
             grep -Fq -- "--$action" "$completion_dir/_conven"
             grep -Fq -- "-l $action" "$completion_dir/conven.fish"
           done
-          for action in install list run; do
+          for action in install list remove run; do
             grep -Fq -- "--$action" "$completion_dir/conven.bash"
             grep -Fq -- "--$action" "$completion_dir/_conven"
             grep -Fq -- "-l $action" "$completion_dir/conven.fish"

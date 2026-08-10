@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -15,10 +17,13 @@ import (
 	"strings"
 
 	"github.com/leo1394/homebrew-conven/internal/convenhome"
+	"golang.org/x/sys/unix"
 )
 
 //go:embed builtin/*
 var builtinFiles embed.FS
+
+var ErrAlreadyInstalled = errors.New("Conven plugin is already installed")
 
 func Directory() (string, error) {
 	root, err := convenhome.Root("")
@@ -53,7 +58,7 @@ func InstallBuiltins() error {
 		if err := validatePythonShebang(bytes.NewReader(content), "built-in plugin "+filename); err != nil {
 			return err
 		}
-		if _, err := installPlugin(directory, filename, bytes.NewReader(content), true); err != nil {
+		if _, err := installPlugin(directory, filename, bytes.NewReader(content), true, false); err != nil {
 			return err
 		}
 	}
@@ -61,6 +66,14 @@ func InstallBuiltins() error {
 }
 
 func Install(source string) (string, error) {
+	return installSource(source, false)
+}
+
+func Replace(source string) (string, error) {
+	return installSource(source, true)
+}
+
+func installSource(source string, replaceExisting bool) (string, error) {
 	if source == "" {
 		return "", errors.New("install Conven plugin: source path is empty")
 	}
@@ -111,25 +124,45 @@ func Install(source string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return installPlugin(directory, filename, input, false)
+	return installPlugin(directory, filename, input, false, replaceExisting)
 }
 
-func installPlugin(directory string, filename string, input io.Reader, preserveExisting bool) (string, error) {
+func installPlugin(directory string, filename string, input io.Reader, preserveExisting bool, replaceExisting bool) (string, error) {
 	destination := filepath.Join(directory, filename)
-	if _, err := os.Lstat(destination); err == nil {
+	directoryHandle, err := openPluginDirectory(directory)
+	if err != nil {
+		return "", err
+	}
+	defer directoryHandle.Close()
+	if err := lockPluginDirectory(directoryHandle, directory); err != nil {
+		return "", err
+	}
+	directoryDescriptor := int(directoryHandle.Fd())
+	destinationInfo := unix.Stat_t{}
+	destinationExists := true
+	if err := unix.Fstatat(directoryDescriptor, filename, &destinationInfo, unix.AT_SYMLINK_NOFOLLOW); err == nil {
 		if preserveExisting {
 			return destination, nil
 		}
-		return "", fmt.Errorf("Conven plugin %q is already installed; refusing to overwrite it", destination)
-	} else if !os.IsNotExist(err) {
+		if !replaceExisting {
+			return "", alreadyInstalledError(destination)
+		}
+		if destinationInfo.Mode&unix.S_IFMT == unix.S_IFLNK {
+			return "", fmt.Errorf("Conven plugin %q is a symbolic link; symbolic links are not allowed", destination)
+		}
+		if destinationInfo.Mode&unix.S_IFMT != unix.S_IFREG {
+			return "", fmt.Errorf("Conven plugin %q is not a regular file", destination)
+		}
+	} else if errors.Is(err, unix.ENOENT) {
+		destinationExists = false
+	} else {
 		return "", fmt.Errorf("inspect Conven plugin destination %q: %w", destination, err)
 	}
-	temporary, err := os.CreateTemp(directory, "."+filename+"-*")
+	temporary, temporaryName, err := createTemporaryPlugin(directoryHandle, directory, filename)
 	if err != nil {
-		return "", fmt.Errorf("create temporary Conven plugin: %w", err)
+		return "", err
 	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer unix.Unlinkat(directoryDescriptor, temporaryName, 0)
 	if err := temporary.Chmod(0700); err != nil {
 		temporary.Close()
 		return "", fmt.Errorf("protect temporary Conven plugin: %w", err)
@@ -145,16 +178,90 @@ func installPlugin(directory string, filename string, input io.Reader, preserveE
 	if err := temporary.Close(); err != nil {
 		return "", fmt.Errorf("close temporary Conven plugin: %w", err)
 	}
-	if err := os.Link(temporaryPath, destination); err != nil {
-		if os.IsExist(err) {
+	if replaceExisting {
+		currentInfo := unix.Stat_t{}
+		currentErr := unix.Fstatat(directoryDescriptor, filename, &currentInfo, unix.AT_SYMLINK_NOFOLLOW)
+		if destinationExists {
+			if currentErr != nil || !samePluginEntry(destinationInfo, currentInfo) {
+				return "", fmt.Errorf("Conven plugin %q changed while its replacement was prepared; refusing to overwrite it", destination)
+			}
+		} else if currentErr == nil || !errors.Is(currentErr, unix.ENOENT) {
+			return "", fmt.Errorf("Conven plugin %q changed while its replacement was prepared; refusing to overwrite it", destination)
+		}
+		if err := unix.Renameat(directoryDescriptor, temporaryName, directoryDescriptor, filename); err != nil {
+			return "", fmt.Errorf("replace Conven plugin %q: %w", destination, err)
+		}
+		return destination, nil
+	}
+	if err := unix.Linkat(directoryDescriptor, temporaryName, directoryDescriptor, filename, 0); err != nil {
+		if errors.Is(err, unix.EEXIST) {
 			if preserveExisting {
 				return destination, nil
 			}
-			return "", fmt.Errorf("Conven plugin %q is already installed; refusing to overwrite it", destination)
+			return "", alreadyInstalledError(destination)
 		}
 		return "", fmt.Errorf("install Conven plugin %q: %w", destination, err)
 	}
 	return destination, nil
+}
+
+func openPluginDirectory(directory string) (*os.File, error) {
+	root := filepath.Dir(directory)
+	rootDescriptor, err := unix.Open(root, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open Conven home %q without following symbolic links: %w", root, err)
+	}
+	directoryDescriptor, openErr := unix.Openat(rootDescriptor, filepath.Base(directory), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	unix.Close(rootDescriptor)
+	if openErr != nil {
+		return nil, fmt.Errorf("open Conven plugin directory %q without following symbolic links: %w", directory, openErr)
+	}
+	handle := os.NewFile(uintptr(directoryDescriptor), directory)
+	if handle == nil {
+		unix.Close(directoryDescriptor)
+		return nil, fmt.Errorf("open Conven plugin directory %q", directory)
+	}
+	return handle, nil
+}
+
+func lockPluginDirectory(directory *os.File, path string) error {
+	if err := unix.Flock(int(directory.Fd()), unix.LOCK_EX); err != nil {
+		return fmt.Errorf("lock Conven plugin directory %q: %w", path, err)
+	}
+	return nil
+}
+
+func createTemporaryPlugin(directory *os.File, directoryPath string, filename string) (*os.File, string, error) {
+	for attempt := 0; attempt < 100; attempt++ {
+		random := make([]byte, 8)
+		if _, err := rand.Read(random); err != nil {
+			return nil, "", fmt.Errorf("create temporary Conven plugin name: %w", err)
+		}
+		name := "." + filename + "-" + hex.EncodeToString(random)
+		descriptor, err := unix.Openat(int(directory.Fd()), name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0700)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("create temporary Conven plugin: %w", err)
+		}
+		temporary := os.NewFile(uintptr(descriptor), filepath.Join(directoryPath, name))
+		if temporary == nil {
+			unix.Close(descriptor)
+			unix.Unlinkat(int(directory.Fd()), name, 0)
+			return nil, "", errors.New("create temporary Conven plugin")
+		}
+		return temporary, name, nil
+	}
+	return nil, "", errors.New("create temporary Conven plugin: exhausted unique filenames")
+}
+
+func samePluginEntry(left unix.Stat_t, right unix.Stat_t) bool {
+	return left.Dev == right.Dev && left.Ino == right.Ino && left.Mode&unix.S_IFMT == right.Mode&unix.S_IFMT
+}
+
+func alreadyInstalledError(destination string) error {
+	return fmt.Errorf("%w at %q; refusing to overwrite it", ErrAlreadyInstalled, destination)
 }
 
 func List() ([]string, error) {
@@ -189,6 +296,46 @@ func List() ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func Remove(name string) (string, error) {
+	name, filename, err := normalizeName(name)
+	if err != nil {
+		return "", err
+	}
+	directory, exists, err := inspectPluginDirectory()
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("Conven plugin %q is not installed", name)
+	}
+	path := filepath.Join(directory, filename)
+	directoryHandle, err := openPluginDirectory(directory)
+	if err != nil {
+		return "", err
+	}
+	defer directoryHandle.Close()
+	if err := lockPluginDirectory(directoryHandle, directory); err != nil {
+		return "", err
+	}
+	info := unix.Stat_t{}
+	if err := unix.Fstatat(int(directoryHandle.Fd()), filename, &info, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return "", fmt.Errorf("Conven plugin %q is not installed", name)
+		}
+		return "", fmt.Errorf("inspect Conven plugin %q: %w", path, err)
+	}
+	if info.Mode&unix.S_IFMT == unix.S_IFLNK {
+		return "", fmt.Errorf("Conven plugin %q is a symbolic link; symbolic links are not allowed", path)
+	}
+	if info.Mode&unix.S_IFMT != unix.S_IFREG {
+		return "", fmt.Errorf("Conven plugin %q is not a regular file", path)
+	}
+	if err := unix.Unlinkat(int(directoryHandle.Fd()), filename, 0); err != nil {
+		return "", fmt.Errorf("remove Conven plugin %q: %w", path, err)
+	}
+	return path, nil
 }
 
 func Run(ctx context.Context, name string, workspace string, args []string, input io.Reader, output io.Writer, errorOutput io.Writer) error {
@@ -270,6 +417,17 @@ func inspectPluginDirectory() (string, bool, error) {
 	directory, err := Directory()
 	if err != nil {
 		return "", false, err
+	}
+	root := filepath.Dir(directory)
+	rootInfo, err := os.Lstat(root)
+	if os.IsNotExist(err) {
+		return directory, false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("inspect Conven home %q: %w", root, err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return "", false, fmt.Errorf("Conven home %q must be a directory; symbolic links are not allowed", root)
 	}
 	info, err := os.Lstat(directory)
 	if os.IsNotExist(err) {

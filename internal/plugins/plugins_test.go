@@ -3,6 +3,8 @@ package plugins
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -103,7 +105,7 @@ func TestBuiltinInstallPreservesExistingUserPlugin(t *testing.T) {
 	const userContent = "#!/usr/bin/env python3\nprint('user copy')\n"
 	writeTestPlugin(t, path, userContent, 0700)
 
-	destination, err := installPlugin(directory, "generic.py", strings.NewReader("#!/usr/bin/env python3\nprint('builtin')\n"), true)
+	destination, err := installPlugin(directory, "generic.py", strings.NewReader("#!/usr/bin/env python3\nprint('builtin')\n"), true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +133,7 @@ func TestInstallDoesNotOverwriteExistingPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Install(secondSource); err == nil || !strings.Contains(err.Error(), "already installed") || !strings.Contains(err.Error(), "refusing to overwrite") {
+	if _, err := Install(secondSource); err == nil || !errors.Is(err, ErrAlreadyInstalled) || !strings.Contains(err.Error(), "already installed") || !strings.Contains(err.Error(), "refusing to overwrite") {
 		t.Fatalf("install error = %v, want explicit no-overwrite error", err)
 	}
 	data, err := os.ReadFile(destination)
@@ -140,6 +142,198 @@ func TestInstallDoesNotOverwriteExistingPlugin(t *testing.T) {
 	}
 	if string(data) != original {
 		t.Fatalf("existing plugin was overwritten: %q", data)
+	}
+}
+
+func TestReplaceOverwritesExistingPluginWithProtectedPermissions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	firstSource := filepath.Join(t.TempDir(), "inspect.py")
+	secondSource := filepath.Join(t.TempDir(), "inspect.py")
+	writeTestPlugin(t, firstSource, "#!/usr/bin/env python3\nprint('original')\n", 0600)
+	const replacement = "#!/usr/bin/env python3\nprint('replacement')\n"
+	writeTestPlugin(t, secondSource, replacement, 0600)
+	destination, err := Install(firstSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(destination, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	replaced, err := Replace(secondSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced != destination {
+		t.Fatalf("replacement destination = %q, want %q", replaced, destination)
+	}
+	data, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != replacement {
+		t.Fatalf("replacement content = %q, want %q", data, replacement)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0700 {
+		t.Fatalf("replacement mode = %o, want 700", mode)
+	}
+}
+
+func TestReplaceFailurePreservesExistingPlugin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	directory := prepareTestPluginDirectory(t)
+	const original = "#!/usr/bin/env python3\nprint('original')\n"
+	path := filepath.Join(directory, "inspect.py")
+	writeTestPlugin(t, path, original, 0700)
+	invalidSource := filepath.Join(t.TempDir(), "inspect.py")
+	writeTestPlugin(t, invalidSource, "print('missing shebang')\n", 0600)
+
+	if _, err := Replace(invalidSource); err == nil || !strings.Contains(err.Error(), "python3 shebang") {
+		t.Fatalf("invalid replacement error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Fatalf("existing plugin changed after replacement failure: %q", data)
+	}
+}
+
+func TestReplaceRejectsDestinationChangedWhileStaging(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	directory := prepareTestPluginDirectory(t)
+	destination := filepath.Join(directory, "inspect.py")
+	writeTestPlugin(t, destination, "#!/usr/bin/env python3\nprint('original')\n", 0700)
+	newer := filepath.Join(directory, "newer.py")
+	const newerContent = "#!/usr/bin/env python3\nprint('newer')\n"
+	writeTestPlugin(t, newer, newerContent, 0700)
+	input := &callbackReader{
+		input: strings.NewReader("#!/usr/bin/env python3\nprint('replacement')\n"),
+		beforeFirstRead: func() error {
+			return os.Rename(newer, destination)
+		},
+	}
+
+	if _, err := installPlugin(directory, "inspect.py", input, false, true); err == nil || !strings.Contains(err.Error(), "changed while its replacement was prepared") {
+		t.Fatalf("changed destination replacement error = %v", err)
+	}
+	data, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != newerContent {
+		t.Fatalf("newer plugin was overwritten: %q", data)
+	}
+}
+
+func TestReplaceRejectsSymlinkDestination(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	directory := prepareTestPluginDirectory(t)
+	target := filepath.Join(t.TempDir(), "target.py")
+	const targetContent = "#!/usr/bin/env python3\nprint('target')\n"
+	writeTestPlugin(t, target, targetContent, 0700)
+	destination := filepath.Join(directory, "linked.py")
+	if err := os.Symlink(target, destination); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "linked.py")
+	writeTestPlugin(t, source, "#!/usr/bin/env python3\nprint('replacement')\n", 0600)
+
+	if _, err := Replace(source); err == nil || !strings.Contains(err.Error(), "symbolic links are not allowed") {
+		t.Fatalf("symlink replacement error = %v", err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != targetContent {
+		t.Fatalf("symlink target changed: %q", data)
+	}
+}
+
+func TestRemoveDeletesOnlySafeNamedRegularPlugin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	directory := prepareTestPluginDirectory(t)
+	path := filepath.Join(directory, "inspect.py")
+	writeTestPlugin(t, path, "#!/usr/bin/env python3\n", 0700)
+
+	removed, err := Remove("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != path {
+		t.Fatalf("removed path = %q, want %q", removed, path)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("removed plugin still exists: %v", err)
+	}
+	if _, err := Remove("inspect.py"); err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("missing plugin removal error = %v", err)
+	}
+}
+
+func TestRemoveRejectsUnsafeNamesAndEntries(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	directory := prepareTestPluginDirectory(t)
+	target := filepath.Join(directory, "target.py")
+	writeTestPlugin(t, target, "#!/usr/bin/env python3\n", 0700)
+	if err := os.Symlink(target, filepath.Join(directory, "linked.py")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(directory, "nested.py"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name string
+		want string
+	}{
+		{name: "../target", want: "invalid plugin name"},
+		{name: "linked", want: "symbolic links are not allowed"},
+		{name: "nested", want: "not a regular file"},
+	} {
+		t.Run(strings.ReplaceAll(test.name, "/", "_"), func(t *testing.T) {
+			if _, err := Remove(test.name); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("remove error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestReplaceAndRemoveRejectSymlinkConvenHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	targetRoot := filepath.Join(t.TempDir(), "state")
+	targetDirectory := filepath.Join(targetRoot, "plugins")
+	if err := os.MkdirAll(targetDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const original = "#!/usr/bin/env python3\nprint('original')\n"
+	targetPlugin := filepath.Join(targetDirectory, "inspect.py")
+	writeTestPlugin(t, targetPlugin, original, 0700)
+	if err := os.Symlink(targetRoot, filepath.Join(home, ".conven")); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(t.TempDir(), "inspect.py")
+	writeTestPlugin(t, replacement, "#!/usr/bin/env python3\nprint('replacement')\n", 0600)
+
+	if _, err := Replace(replacement); err == nil || !strings.Contains(err.Error(), "symbolic links are not allowed") {
+		t.Fatalf("replacement through symlink Conven home error = %v", err)
+	}
+	if _, err := Remove("inspect"); err == nil || !strings.Contains(err.Error(), "symbolic links are not allowed") {
+		t.Fatalf("removal through symlink Conven home error = %v", err)
+	}
+	data, err := os.ReadFile(targetPlugin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Fatalf("plugin outside Conven home changed: %q", data)
 	}
 }
 
@@ -364,6 +558,22 @@ func prepareTestPluginDirectory(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return directory
+}
+
+type callbackReader struct {
+	input           io.Reader
+	beforeFirstRead func() error
+	called          bool
+}
+
+func (reader *callbackReader) Read(buffer []byte) (int, error) {
+	if !reader.called {
+		reader.called = true
+		if err := reader.beforeFirstRead(); err != nil {
+			return 0, err
+		}
+	}
+	return reader.input.Read(buffer)
 }
 
 func writeTestPlugin(t *testing.T, path string, content string, mode os.FileMode) {

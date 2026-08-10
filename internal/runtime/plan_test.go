@@ -75,6 +75,33 @@ func TestRemoteDependenciesOnlyIncludesUnselected(t *testing.T) {
 	}
 }
 
+func TestBuildRestartPlanRejectsManifestCommandConnection(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := &WorkspaceData{
+		Root: workspaceRoot,
+		Manifest: &model.Manifest{
+			Environments: map[string]model.Environment{
+				"dev": {Connection: model.Connection{Driver: "command"}},
+			},
+			Services: map[string]model.Service{
+				"api": {Path: "api", Runner: model.Runner{Run: []string{"api"}}},
+			},
+		},
+		Store: store,
+	}
+	_, err = BuildRestartPlan(workspace, CommonOptions{Environment: "dev"}, []string{"api"})
+	if err == nil || !strings.Contains(err.Error(), "cannot prove") {
+		t.Fatalf("restart plan command connection error = %v", err)
+	}
+}
+
 func TestPlanServiceRejectsConflictingDependencyEnvironment(t *testing.T) {
 	plan := dependencyEnvironmentPlan(t, "false", "true")
 	_, err := planService(plan, "api", map[string]bool{"api": true, "a-svc": true})
@@ -107,7 +134,10 @@ func TestPlanServiceMaterializesSelectedDependencyWithoutLocalEnv(t *testing.T) 
 		if err := os.MkdirAll(filepath.Join(workspaceRoot, name, "resources"), 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(workspaceRoot, name, "resources", "application.yaml"), []byte("port: 8080\ndbRpc:\n  discovType: consul\n"), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(workspaceRoot, name, "resources", "application.yaml"), []byte("host: 0.0.0.0\nport: 8080\ndbRpc:\n  discovType: consul\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workspaceRoot, name, "resources", "config-dev.yaml"), []byte("appId: test\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -124,7 +154,7 @@ func TestPlanServiceMaterializesSelectedDependencyWithoutLocalEnv(t *testing.T) 
 					Discovery:    "consul",
 					Materializer: "yaml-overlay",
 				},
-				Config: model.PolicyConfig{SourceDir: "resources", Application: "application.yaml"},
+				Config: model.PolicyConfig{SourceDir: "resources", Application: "application.yaml", Bootstrap: "config-dev.yaml", RuntimeBootstrap: "config-local.yaml"},
 				Process: model.PolicyProcess{
 					Env:  map[string]string{"PROFILE_ACTIVE": "local"},
 					Args: []string{"-f", "${configDir}"},
@@ -132,8 +162,12 @@ func TestPlanServiceMaterializesSelectedDependencyWithoutLocalEnv(t *testing.T) 
 				Routing: model.PolicyRouting{
 					Servers: map[string]model.ServerRoute{
 						"http": {
-							Port: "http",
+							Port:    "http",
 							Patches: []model.ConfigPatch{{Path: "port", Value: "${port.http}"}},
+							Isolation: model.ServerIsolation{
+								Registration: model.RegistrationGuard{Mode: "not-applicable"},
+								Listener: model.ListenerGuard{Path: "host", Value: "127.0.0.1"},
+							},
 						},
 					},
 					LocalDependency: model.RouteRule{
@@ -182,6 +216,16 @@ func TestPlanServiceMaterializesSelectedDependencyWithoutLocalEnv(t *testing.T) 
 	if len(api.Config.Plan.Patches) != 2 {
 		t.Fatalf("planned patches = %#v", api.Config.Plan.Patches)
 	}
+	if len(api.Config.Plan.Guards) != 3 || api.Config.Plan.Guards[0].Path != "host" || api.Config.Plan.Guards[0].Value != "127.0.0.1" {
+		t.Fatalf("planned local isolation guards = %#v", api.Config.Plan.Guards)
+	}
+	if api.Config.Plan.Guards[1].File != "config-local.yaml" || api.Config.Plan.Guards[1].Path != "localConfigEnable" || api.Config.Plan.Guards[1].Value != true || !api.Config.Plan.Guards[1].AllowCreate {
+		t.Fatalf("planned local bootstrap enable guard = %#v", api.Config.Plan.Guards[1])
+	}
+	applicationPath := filepath.Join(store.CurrentDir, "configs", "api", "application.yaml")
+	if api.Config.Plan.Guards[2].File != "config-local.yaml" || api.Config.Plan.Guards[2].Path != "localConfigPath" || api.Config.Plan.Guards[2].Value != applicationPath || !api.Config.Plan.Guards[2].AllowCreate {
+		t.Fatalf("planned local isolation guards = %#v", api.Config.Plan.Guards)
+	}
 	if api.Config.Plan.Patches[0].Value != 18080 {
 		t.Fatalf("server port patch = %#v", api.Config.Plan.Patches[0].Value)
 	}
@@ -204,8 +248,8 @@ func TestPlanServiceMaterializesSelectedDependencyWithoutLocalEnv(t *testing.T) 
 	if len(remoteRoutes) != 1 || remoteRoutes[0].Local || remoteRoutes[0].Mode != "preserve" {
 		t.Fatalf("remote route was not preserved: %#v", remoteRoutes)
 	}
-	if !reflect.DeepEqual(remotePlan.Remote, []string{"db"}) {
-		t.Fatalf("remote dependencies = %#v", remotePlan.Remote)
+	if !reflect.DeepEqual(remotePlan.DeclaredRemote, []string{"db"}) {
+		t.Fatalf("declared remote dependencies = %#v", remotePlan.DeclaredRemote)
 	}
 }
 

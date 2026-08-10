@@ -15,29 +15,33 @@ class Conven < Formula
 
   test do
     ENV["HOME"] = testpath.to_s
-    assert_equal "conven 0.2.1\n", shell_output("#{bin}/conven --version")
+    if build.head?
+      assert_equal "conven 0.2.2\n", shell_output("#{bin}/conven --version")
+    else
+      expected_version = "conven #{version}\n"
+      actual_version = shell_output("#{bin}/conven --version")
+      assert_equal expected_version, actual_version
+    end
     assert_predicate bin/"conven", :executable?
 
     workspace = testpath/"workspace"
     workspace.mkpath
     Dir.chdir(workspace) do
-      workspace_state = workspace/(build.head? ? ".conven" : ".loom")
-      manifest = workspace_state/(build.head? ? "conven.yaml" : "loom.yaml")
+      workspace_state = workspace/".conven"
+      manifest = workspace_state/"conven.yaml"
       system bin/"conven", "init"
       assert_path_exists manifest
-      if build.head?
-        plugin_directory = testpath/".conven/plugins"
-        assert_predicate plugin_directory, :directory?
-        assert_empty plugin_directory.children
-        plugin_source = testpath/"formula-plugin.py"
-        plugin_source.write("#!/usr/bin/env python3\nprint('formula plugin')\n")
-        plugin_source.chmod(0700)
-        system bin/"conven", "plugins", "--install", plugin_source
-        plugin = plugin_directory/"formula-plugin.py"
-        assert_path_exists plugin
-        assert_predicate plugin, :executable?
-        assert_includes shell_output("#{bin}/conven plugins --list").lines, "formula-plugin\n"
-      end
+      plugin_directory = testpath/".conven/plugins"
+      assert_predicate plugin_directory, :directory?
+      assert_empty plugin_directory.children
+      plugin_source = testpath/"formula-plugin.py"
+      plugin_source.write("#!/usr/bin/env python3\nprint('formula plugin')\n")
+      plugin_source.chmod(0700)
+      system bin/"conven", "plugins", "--install", plugin_source
+      plugin = plugin_directory/"formula-plugin.py"
+      assert_path_exists plugin
+      assert_predicate plugin, :executable?
+      assert_includes shell_output("#{bin}/conven plugins --list").lines, "formula-plugin\n"
       manifest.write("#{manifest.read}\n# preserve this line\n")
       expected_manifest = manifest.read
       system bin/"conven", "init"
@@ -58,11 +62,11 @@ class Conven < Formula
     assert_path_exists bash_completion/"conven"
     assert_path_exists zsh_completion/"_conven"
     assert_path_exists fish_completion/"conven.fish"
-    top_level_commands = %w[init services config policy doctor help version]
-    top_level_commands.insert(4, "plugins") if build.head?
+    top_level_commands = %w[init services config policy plugins doctor help version]
     service_actions = %w[list registry status logs start restart stop stop-all]
     policy_actions = %w[edit import reset]
-    plugin_actions = build.head? ? %w[install list run] : []
+    plugin_actions = %w[install list run]
+    plugin_actions.insert(2, "remove") if build.head? || version >= "0.2.2"
     removed_top_level_commands = %w[discover list status logs start restart stop]
     %w[bash zsh fish].each do |shell|
       completion = shell_output("#{bin}/conven __completion #{shell}")

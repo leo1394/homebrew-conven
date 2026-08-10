@@ -30,22 +30,30 @@ declared manually in the manifest.
 - Can read configuration from a service repository or Apollo, generate
   `.conven/runtime/current/configs/<service>` outside the source tree, and overlay
   server-port and dependency-routing patches from a policy.
+- Requires every selected service with a non-empty `services.<name>.kind` to
+  resolve a policy-backed local-isolation contract. Registration is either
+  verified disabled in the final runtime YAML or explicitly not applicable,
+  and the listener is forced to a loopback IP.
 - Can establish local-to-cluster connectivity through `ktctl connect`.
 - Records process metadata and per-service logs for later inspection and
   shutdown. Health checks run only during startup; they are not persisted as
   continuous monitoring.
-- Does not provide `ktctl exchange`, Mesh, or Preview behavior. Cluster traffic
-  is not routed back to local services.
-- Does not infer business dependencies or safely register local services in a
-  remote registry. Those behaviors must be configured explicitly in the
-  manifest.
+- Does not provide `ktctl exchange`, Mesh, or Preview behavior. Conven does not
+  create or configure a reverse route from cluster traffic to local services.
+- Does not infer business dependencies and does not register local services in
+  a remote registry. Typed local services fail closed unless the trusted adapter
+  proves registration is disabled in the final runtime configuration or is not
+  applicable to that server kind.
 - A passing health check proves only that a local process or endpoint is ready.
   End-to-end behavior still requires the project's own smoke tests.
 
-When starting a service locally, use `localEnv` to disable service registration
-so traffic from other development environments cannot reach a personal process.
-Use `remoteEnv` to retain remote discovery for dependencies that are not started
-locally.
+Runner-only integrations are limited to services whose `kind` is omitted or
+empty. For those services, `localEnv` can still carry an application-specific
+registration-disable switch, but the application must consume it. Once a
+service declares or is scanned with a non-empty `kind`, `localEnv` alone is not
+sufficient; it must use the verified policy-backed isolation contract described
+below. `remoteEnv` and preserved YAML routes retain remote discovery for
+dependencies that are not started locally.
 
 ## Requirements
 
@@ -299,7 +307,7 @@ central manifest.
 | Service name/path | Immediate child Git repositories | May enforce a reviewed service inventory | Non-standard layouts, renamed or missing services |
 | `kind`, `discovery` | Unambiguous HTTP/RPC kind, analyzer, binding candidates | May resolve known project conventions | Ambiguous kind and the real dependency behind each binding |
 | Runner | Standard Go root or `go/` module workdir/build/run | May apply reviewed project runners | Special argv, prepare, artifact, or `runWorkdir` |
-| Policy/config/routing | Not generated | May encode reviewed framework and routing defaults | Bootstrap fields, registration disabling, and routing semantics |
+| Policy/config/routing | Not generated | May encode reviewed framework and routing defaults | Bootstrap fields, registration guards, loopback listeners, and routing semantics |
 | Environment/connection | Not generated | May emit a credential-free connection skeleton | Cluster, namespace, context, network entry, and authentication |
 | Ports | Not generated | May apply a reviewed project port table | Actual listeners and local conflicts |
 | Dependencies | Binding-name candidates only; no graph | May map reviewed project dependencies | Complete business graph, target ports, and remote-preserve choices |
@@ -490,6 +498,7 @@ conven policy --import <yaml-file> [--edit]
 conven policy --reset
 conven plugins --install <python-file>
 conven plugins --list
+conven plugins --remove <name>
 conven plugins --run <name> [plugin args...]
 conven doctor [flags]
 conven services --list
@@ -651,13 +660,17 @@ relative source paths are resolved from the command's current directory:
 ```bash
 conven plugins --install ./generate-apollo-consul.py
 conven plugins --list
+conven plugins --remove generate-apollo-consul
 ```
 
 Installation copies the file to `~/.conven/plugins` under its basename and
 makes the installed copy user-only executable (`0700`). The source must be a
 regular, non-symlink `.py` file with a Python 3 shebang. An existing destination
-is never overwritten; review and remove it explicitly before installing a
-replacement.
+opens an interactive `Overwrite? [y/N]` prompt. Only `y` or `yes` replaces the
+old file atomically; Enter, `n`, `no`, `cancel`, or any other answer leaves it
+unchanged. If stdin or stderr is not a TTY, the duplicate install fails without
+reading piped input or changing the existing plugin. Use `plugins --remove NAME`
+to delete one explicitly named regular plugin without an additional prompt.
 
 Run a plugin by its filename without the `.py` suffix from anywhere inside an
 initialized workspace. Everything after the plugin name is passed through
@@ -680,8 +693,9 @@ into the current workspace. The candidate is not published automatically; review
 
 Users can add their own executable `*.py` files to `~/.conven/plugins`. Conven
 only lists and runs regular, executable, non-symlink files and rejects names
-that could escape the plugin directory. Re-running `conven init` only installs
-missing generic built-ins and preserves every existing plugin file.
+that could escape the plugin directory. Removal applies the same normalized-name
+and real-regular-file checks. Re-running `conven init` only installs missing
+generic built-ins and preserves every existing plugin file.
 
 ## Workspace boundary and manifest discovery
 
@@ -776,12 +790,12 @@ quoting risks in the manifest.
 | `policies.<name>.drivers` | Framework, configuration source, discovery, and materializer selection |
 | `policies.<name>.config` | Source directory, application/bootstrap, Apollo retry settings, and shared YAML patches |
 | `policies.<name>.process` | Environment and argv appended uniformly by the policy |
-| `policies.<name>.routing` | Server-port patches by service kind and local/remote dependency YAML routing |
+| `policies.<name>.routing` | Server isolation by service kind plus local/remote dependency YAML routing |
 | `environments.<name>.env` | Environment variables shared by all local services in the selected environment |
 | `environments.<name>.registry` | Descriptive registry type; v1 does not interpret it automatically |
-| `environments.<name>.connection` | `none`, `ktctl`, or `command` connection configuration |
-| `environments.<name>.connection.command` | Optional `ktctl` executable fallback, or the required executable for the `command` driver |
-| `environments.<name>.connection.sudo` | Optional; start and stop the connection through `sudo` |
+| `environments.<name>.connection` | `none` or the built-in `ktctl` connection; `command` remains parseable in the low-level model but is rejected for service planning |
+| `environments.<name>.connection.command` | Optional `ktctl` executable fallback; also retained as the low-level executable field for the rejected `command` driver model |
+| `environments.<name>.connection.sudo` | Optional; start and stop the managed `ktctl` connection through `sudo` |
 | `services.<name>.path` | Service directory, absolute or relative to the workspace |
 | `services.<name>.kind` / `discovery` | Service type plus analyzer and statically extracted binding candidates |
 | `runner.workdir` | Prepare/build directory, absolute or relative to the service directory |
@@ -829,12 +843,102 @@ populated non-empty manifest fields. Service patches override shared/server
 defaults, while the final dependency route enforces the selected local/remote
 topology.
 
+### Local isolation contract
+
+A selected service whose `services.<name>.kind` is non-empty must resolve an
+explicit or inherited policy with a `yaml-overlay` configuration plan and a
+matching `routing.servers.<kind>` isolation contract. Repository scanning may
+populate `kind`, but it does not generate the project policy; `doctor`, start
+dry-run, start, and restart therefore fail closed until that policy has been
+reviewed and added. Only a service with an omitted or empty `kind` can remain a
+runner-only integration without policy-backed isolation.
+
+The built-in trusted isolation semantics currently cover only `rpc` and `http`
+services using `go-zero + consul + yaml-overlay`. Other framework/discovery
+combinations may still decode as YAML, but planning fails closed until their
+adapter-specific isolation semantics are implemented and reviewed in Conven.
+
+Every `policies.<name>.routing.servers.<kind>` entry must explicitly describe
+both registration and listener isolation. For example:
+
+```yaml
+policies:
+  retail:
+    routing:
+      servers:
+        rpc:
+          port: rpc
+          isolation:
+            registration:
+              mode: config
+              # file defaults to the policy application YAML.
+              path: discovType
+              disabledValue: ""
+            listener:
+              path: listenOn
+              value: "127.0.0.1:${port.rpc}"
+        http:
+          port: http
+          isolation:
+            registration:
+              mode: not-applicable
+            listener:
+              path: host
+              value: "127.0.0.1"
+```
+
+Existing policies that set `listenOn`, `host`, or registration fields only
+through ordinary `patches` must add the matching `isolation` declarations.
+The old patches may remain during review, but the isolation guards are the
+authoritative final values and duplicate safety patches should normally be
+removed.
+
+`registration.mode: config` requires `path` and a scalar `disabledValue`; its
+optional `file` defaults to the policy application YAML. Use
+`registration.mode: not-applicable` only when that server kind has no service
+registration behavior, and do not provide `file`, `path`, or `disabledValue` in
+that mode. RPC services must use `config` so disabled registration is verified
+from the final runtime YAML; HTTP services must use `not-applicable` for the
+current trusted adapter.
+For the current go-zero Consul adapter, `config` is further restricted to
+`discovType: ""` at the root of the policy application YAML. A different file,
+path, or value is not accepted as proof that registration is disabled.
+
+The current adapter fixes the listener guard to the policy application YAML:
+RPC uses `listenOn` with a loopback IP and the declared port, while HTTP uses
+`host` with a loopback IP and no port. A different file/path, a hostname, or a
+wildcard listener such as `localhost` or `0.0.0.0` is rejected.
+
+Isolation guards are applied after all ordinary policy, server, service, and
+dependency patches, so a later ordinary patch cannot re-enable registration or
+restore a wildcard listener. Manifest-declared registration and listener guard
+paths must already exist before the guard is applied, preventing a misspelled
+path from creating false evidence. Intermediate symlinks in a guard file path
+are also rejected. The only exception is Conven's internal `config-local.yaml`
+bootstrap selector guard, which may create its two known fields in the generated
+runtime copy. Conven verifies the final materialized files before startup. The
+current adapter accepts only an executable followed by exactly one `-f` flag
+pointing to `${configDir}`. In directory mode, the effective `PROFILE_ACTIVE`
+must be `local`,
+`config.runtimeBootstrap` must resolve to `config-local.yaml`, and Conven guards
+`localConfigEnable: true` plus `localConfigPath` pointing to the verified runtime
+application. This prevents a prepare/build step from redirecting the process
+back to source or remote Apollo configuration. The
+verified registration, loopback listener, and Conven inbound-route contract are
+recorded in the service log.
+
+Conven can verify argv but cannot infer arbitrary binary semantics; the trusted
+adapter must still establish that the service entrypoint parses and consumes
+`-f` (a Go entrypoint normally needs to call `flag.Parse()`).
+
 The materializer copies only the policy `config.sourceDir` content into
 `configs/<service>`; it does not automatically construct a script-style full
-`go/ + resources/` runtime tree. A policy can pass `-f ${configDir}` to consume
-the materialized application/bootstrap while leaving `runner.runWorkdir`
-unset, in which case the process cwd remains the source workdir. Other relative
-paths such as `../resources/...` continue to read source resources without
+`go/ + resources/` runtime tree. The current trusted adapter requires a policy
+to pass `-f ${configDir}` with the guarded `config-local.yaml` bootstrap
+contract. With an isolation contract, exactly one such `-f` reference is
+required. When
+`runner.runWorkdir` is unset, the process cwd remains the source workdir. Other
+relative paths such as `../resources/...` continue to read source resources without
 modifying them. A service that requires a fully independent runtime layout must
 declare `runner.runWorkdir` and the corresponding prepare/layout rules explicitly.
 
@@ -919,7 +1023,7 @@ and workspace leases. When multiple workspaces reuse one managed ktctl
 connection, releasing one workspace does not interrupt the others. Conven stops
 the connection only after the final lease is released. If networking is already
 provided by an external process, Conven reuses reachability without taking
-ownership. Set `connection.sudo: true` when a custom connection must run as
+ownership. Set `connection.sudo: true` when the managed ktctl connection must run as
 root. Conven first runs interactive `sudo -v`, starts through `sudo -n`, and tracks
 the actual connection descendant rather than only the outer sudo process. If
 the sudo timestamp has expired at shutdown, Conven requests authorization again.
@@ -952,10 +1056,55 @@ repository. Use `environments.<name>.env` for environment-wide values, then
 values for successive overrides. A selected dependency must have at least one local
 routing contract, otherwise Conven rejects the ambiguous plan before startup.
 
+The plan label **Declared remote dependencies** has a deliberately narrow
+meaning: it lists dependencies declared in the manifest for a selected service
+but not selected for local startup. It is not an inventory of every remote
+endpoint present in Apollo or the final application YAML, so `none` does not
+mean that the selected services have no external dependencies. The plan output
+does not append `environments.<name>.registry` to this label because that field
+is descriptive and does not prove which transport each dependency uses.
+
+After materialization, compatible `go-zero + consul + yaml-overlay` services
+have a separate **External Consul dependency preflight**. Conven scans active
+Consul client bindings in the final application YAML, rejects a declared local
+route that still uses Consul, and asks Consul health for at least one passing
+instance of each detected external service key. An active HTTP/RPC server-root
+Consul registration fails immediately instead of being treated as an external
+dependency; its normal disabled state is handled by the isolation contract.
+
+This preflight is intentionally format-specific. It recognizes only the known
+go-zero YAML structure with `discovType: consul` and sibling `consul.host`,
+`consul.port`, and `consul.key` fields, then calls the plain-HTTP Consul health
+endpoint. ACL tokens, HTTPS/TLS, mTLS, and other authentication mechanisms are
+not currently supported by this preflight, so secured Consul endpoints cannot
+use it yet. A compatible materialized application rejects YAML merge keys,
+custom or binary tags, non-string mapping keys, and duplicate keys so effective
+server registration and dependency fields cannot be hidden behind parser
+ambiguities. Guarded YAML files apply the same unambiguous mapping-key rule.
+
+If the External Consul dependency preflight succeeds, neither local isolation
+nor dependency selection rewrites unrelated runtime behavior. Conven does not
+rewrite or disable remote databases, Kafka brokers, RPC clients not selected
+for local routing, or background jobs; they remain configured according to the
+materialized application and project policy. The preflight can still block the
+service from starting when a detected Consul dependency is unavailable. It
+checks detected Consul clients only; it is not a database, Kafka, or
+job-readiness check.
+
 `connection.driver: ktctl` provides only network reachability from the local
-machine to the cluster. It does not make cluster services able to call local
-processes, and it does not replace service discovery, configuration services,
-or application authentication.
+machine to the cluster through `ktctl connect`. It creates no reverse route for
+cluster traffic to call local processes, which is why local registration remains
+disabled and listeners remain loopback-only. It does not replace service
+discovery, configuration services, or application authentication.
+
+`connection.driver: command` remains part of the low-level configuration model
+so manifests can be decoded and the boundary stays explicit. It is not an
+available local-service orchestration connection: Conven cannot prove that an
+arbitrary command creates no remote-to-local inbound route, so `doctor`, start
+dry-run, `services --start`, and `services --restart` reject it fail-closed before
+changing connection or service processes. Use `none` when networking already
+exists, or the built-in `ktctl` driver when Conven should establish
+local-to-cluster access.
 
 ## ktctl executable selection
 
@@ -974,12 +1123,13 @@ conven config ktctl.path /absolute/path/to/ktctl
 conven config --global ktctl.path ktctl-custom
 ```
 
-This setting applies only to the `ktctl` driver. A `command` driver always uses
-its manifest `connection.command` and is not affected by `ktctl.path`. Before
-launch, Conven resolves a PATH command to its executable path; this keeps
-`connection.sudo: true` working even when sudo has a restricted `secure_path`.
-A relative manifest command containing a path separator is resolved from the
-workspace root before that lookup.
+This setting applies only to the `ktctl` driver. The low-level `command` driver
+model retains its own `connection.command` resolution rules and is not affected
+by `ktctl.path`, but service planning rejects that driver before launch as
+described above. For ktctl, Conven resolves a PATH command to its executable
+path; this keeps `connection.sudo: true` working even when sudo has a restricted
+`secure_path`. A relative manifest command containing a path separator is
+resolved from the workspace root before that lookup.
 
 ## kubeconfig input and precedence
 

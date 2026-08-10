@@ -29,21 +29,22 @@ type WorkspaceData struct {
 }
 
 type Plan struct {
-	Workspace  *WorkspaceData
+	Workspace       *WorkspaceData
 	EnvironmentName string
-	Environment model.Environment
-	Selected   []string
-	Remote     []string
-	Order      []string
-	Groups     [][]string
-	RunDir     string
-	ReuseCurrent bool
-	Services   map[string]PlannedService
-	Connection ConnectionConfig
+	Environment     model.Environment
+	Selected        []string
+	DeclaredRemote  []string
+	Order           []string
+	Groups          [][]string
+	RunDir          string
+	ReuseCurrent    bool
+	Services        map[string]PlannedService
+	Connection      ConnectionConfig
 }
 
 type PlannedService struct {
 	Name        string
+	Kind        string
 	Directory   string
 	Workdir     string
 	RunWorkdir  string
@@ -127,12 +128,15 @@ func buildPlan(workspace *WorkspaceData, options CommonOptions, selected []strin
 		EnvironmentName: environmentName,
 		Environment:     environment,
 		Selected:        selected,
-		Remote:          remote,
+		DeclaredRemote:  remote,
 		Order:           order,
 		Groups:          groups,
 		RunDir:          workspace.Store.CurrentDir,
 		ReuseCurrent:    reuseCurrent,
 		Services:        make(map[string]PlannedService, len(selected)),
+	}
+	if err := validateInboundRouting(ConnectionConfig{Driver: environment.Connection.Driver}); err != nil {
+		return nil, err
 	}
 	selectedSet := make(map[string]bool, len(selected))
 	for _, name := range selected {
@@ -148,6 +152,9 @@ func buildPlan(workspace *WorkspaceData, options CommonOptions, selected []strin
 	if includeConnection {
 		connection, err := planConnection(plan, options)
 		if err != nil {
+			return nil, err
+		}
+		if err := validateInboundRouting(connection); err != nil {
 			return nil, err
 		}
 		plan.Connection = connection
@@ -208,6 +215,9 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	}
 	plannedConfig, err := planServiceConfig(plan, name, service, directory, baseContext, selected)
 	if err != nil {
+		return PlannedService{}, err
+	}
+	if err := validatePlannedIsolation(name, service.Kind, plannedConfig); err != nil {
 		return PlannedService{}, err
 	}
 	_, policy, hasPolicy := policyForService(plan.Workspace.Manifest, service)
@@ -295,12 +305,16 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	if err != nil {
 		return PlannedService{}, fmt.Errorf("expand %s environment: %w", name, err)
 	}
+	if err := validateRuntimeConfigConsumption(name, plannedConfig, run, expandedValues); err != nil {
+		return PlannedService{}, err
+	}
 	health, err := expandHealth(service.Health, baseContext, runWorkdir, CommandEnvironment(expandedValues))
 	if err != nil {
 		return PlannedService{}, fmt.Errorf("expand %s health check: %w", name, err)
 	}
 	return PlannedService{
 		Name:        name,
+		Kind:        service.Kind,
 		Directory:   directory,
 		Workdir:     workdir,
 		RunWorkdir:  runWorkdir,

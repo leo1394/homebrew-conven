@@ -158,7 +158,14 @@ func TestStartMaterializesConfigBeforePrepareWithoutWritingSource(t *testing.T) 
 		t.Fatal(err)
 	}
 	sourceApplication := filepath.Join(resources, "application.yaml")
-	if err := os.WriteFile(sourceApplication, []byte("port: 8080\n"), 0600); err != nil {
+	if err := os.WriteFile(sourceApplication, []byte("host: 0.0.0.0\nport: 8080\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(resources, "config-dev.yaml"), []byte("appId: test\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(workspaceRoot, "api", "start-test-service")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nwhile :; do sleep 1; done\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{
@@ -166,12 +173,17 @@ func TestStartMaterializesConfigBeforePrepareWithoutWritingSource(t *testing.T) 
 		Workspace: model.Workspace{Name: "materialized-start", Policy: "retail"},
 		Policies: map[string]model.Policy{
 			"retail": {
-				Drivers: model.PolicyDrivers{ConfigSource: "repository", Materializer: "yaml-overlay"},
-				Config:  model.PolicyConfig{SourceDir: "resources", Application: "application.yaml"},
+				Drivers: model.PolicyDrivers{Framework: "go-zero", ConfigSource: "repository", Discovery: "consul", Materializer: "yaml-overlay"},
+				Config:  model.PolicyConfig{SourceDir: "resources", Application: "application.yaml", Bootstrap: "config-dev.yaml", RuntimeBootstrap: "config-local.yaml"},
+				Process: model.PolicyProcess{Env: map[string]string{"PROFILE_ACTIVE": "local"}, Args: []string{"-f", "${configDir}"}},
 				Routing: model.PolicyRouting{Servers: map[string]model.ServerRoute{
 					"http": {
 						Port:    "http",
 						Patches: []model.ConfigPatch{{Path: "port", Value: "${port.http}"}},
+						Isolation: model.ServerIsolation{
+							Registration: model.RegistrationGuard{Mode: "not-applicable"},
+							Listener: model.ListenerGuard{Path: "host", Value: "127.0.0.1"},
+						},
 					},
 				}},
 			},
@@ -183,7 +195,7 @@ func TestStartMaterializesConfigBeforePrepareWithoutWritingSource(t *testing.T) 
 				Ports: map[string]int{"http": 18080},
 				Runner: model.Runner{
 					Prepare: []string{"sh", "-c", `grep -q 'port: 18080' "$CONVEN_CONFIG_DIR/application.yaml"`},
-					Run:     []string{"sh", "-c", "while :; do sleep 1; done"},
+					Run:     []string{launcher},
 				},
 			},
 		},
@@ -206,7 +218,7 @@ func TestStartMaterializesConfigBeforePrepareWithoutWritingSource(t *testing.T) 
 	if materializing < 0 || preparing < 0 || materializing > preparing {
 		t.Fatalf("config was not materialized before prepare:\n%s", output.String())
 	}
-	if source, err := os.ReadFile(sourceApplication); err != nil || string(source) != "port: 8080\n" {
+	if source, err := os.ReadFile(sourceApplication); err != nil || string(source) != "host: 0.0.0.0\nport: 8080\n" {
 		t.Fatalf("source application changed: data=%q err=%v", source, err)
 	}
 	runtimeApplication := filepath.Join(workspace.Store.CurrentDir, "configs", "api", "application.yaml")

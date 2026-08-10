@@ -18,7 +18,7 @@ func TestPrintPlanUsesPlainStageAndDetailStructure(t *testing.T) {
 		EnvironmentName: "dev",
 		Environment:     model.Environment{Registry: "consul"},
 		Selected:        []string{"partner", "api"},
-		Remote:          []string{"catalog"},
+		DeclaredRemote:  []string{"catalog"},
 		Order:           []string{"partner", "api"},
 		Groups:          [][]string{{"partner"}, {"api"}},
 		RunDir:          "/workspace/.conven/runtime/current",
@@ -30,10 +30,19 @@ func TestPrintPlanUsesPlainStageAndDetailStructure(t *testing.T) {
 					Policy:    "retail",
 					Framework: "go-zero",
 					Discovery: "consul",
+					Isolation: PlannedIsolation{
+						RegistrationMode:  "config",
+						RegistrationGuard: &materialize.Guard{File: "application.yaml", Path: "discovType", Value: ""},
+						ListenerGuard:     materialize.Guard{File: "application.yaml", Path: "listenOn", Value: "127.0.0.1:18080"},
+						ListenerPort:      18080,
+						RuntimeConfigDir:  true,
+					},
 					Plan: materialize.Plan{
-						SourceDriver: materialize.SourceApollo,
-						Driver:       materialize.DriverYAMLOverlay,
-						TargetDir:    "/workspace/.conven/runtime/current/configs/api",
+						SourceDriver:     materialize.SourceApollo,
+						Driver:           materialize.DriverYAMLOverlay,
+						TargetDir:        "/workspace/.conven/runtime/current/configs/api",
+						Application:      "application.yaml",
+						RuntimeBootstrap: "config-local.yaml",
 					},
 					Routes: []PlannedRoute{{Dependency: "partner", Binding: "partnerRpc", Local: true, Mode: "replace"}},
 				},
@@ -51,12 +60,13 @@ func TestPrintPlanUsesPlainStageAndDetailStructure(t *testing.T) {
 		"  - Current: /workspace/.conven/runtime/current\n" +
 		"  - Environment: dev\n" +
 		"  - Local services: partner, api\n" +
-		"  - Remote dependencies via consul: catalog\n" +
+		"  - Declared remote dependencies: catalog\n" +
 		"  - Start groups: partner -> api\n" +
 		"  - Connection: ktctl context=dev-cluster namespace=retail\n" +
 		"==> Config api\n" +
 		"  - Drivers: policy=retail, framework=go-zero, source=apollo, discovery=consul, materializer=yaml-overlay\n" +
 		"  - Output: /workspace/.conven/runtime/current/configs/api\n" +
+		"  - Local isolation: registration=disabled via application.yaml:discovType; listener=loopback(127.0.0.1:18080); runtime-config=guarded-bootstrap(config-local.yaml->application.yaml)\n" +
 		"  - Local route: partner via partnerRpc (replace)\n" +
 		"✓ Dry run complete; no connection, config fetch/materialization, build, process, or state changes were made.\n"
 	if output.String() != want {

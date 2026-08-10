@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leo1394/homebrew-conven/internal/materialize"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
@@ -57,6 +56,12 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 	if err != nil {
 		return nil, err
 	}
+	if session.Connection != nil {
+		plan.Connection = ConnectionConfig{Driver: session.Connection.Driver}
+	}
+	if err := validateInboundRouting(plan.Connection); err != nil {
+		return nil, err
+	}
 	if err := validatePlanCommands(workspace, plan); err != nil {
 		return nil, err
 	}
@@ -78,18 +83,15 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 	targetSet := make(map[string]bool, len(targets))
 	for _, name := range targets {
 		targetSet[name] = true
+	}
+	if err := materializeRuntimeConfigs(ctx, plan, targets, output); err != nil {
+		return nil, err
+	}
+	if err := runRuntimePreflight(ctx, plan, output, true); err != nil {
+		return nil, err
+	}
+	for _, name := range targets {
 		service := plan.Services[name]
-		configDirectory := filepath.Join(plan.RunDir, "configs", name)
-		if err := ensurePrivateDirectory(configDirectory); err != nil {
-			return nil, fmt.Errorf("create %s runtime config directory: %w", name, err)
-		}
-		if service.Config != nil {
-			fmt.Fprintf(output, "%s %s config\n", style.Stage("Materializing"), style.Identifier(name))
-			fmt.Fprintln(output, style.Detail(fmt.Sprintf("Drivers: %s -> %s", service.Config.Plan.SourceDriver, service.Config.Plan.Driver)))
-			if err := materialize.Materialize(ctx, service.Config.Plan); err != nil {
-				return nil, fmt.Errorf("materialize %s config: %w", name, err)
-			}
-		}
 		if len(service.Prepare) > 0 {
 			fmt.Fprintf(output, "%s %s\n", style.Stage("Preparing"), style.Identifier(name))
 			if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
@@ -113,6 +115,9 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		if err := inspectRunWorkdir(service); err != nil {
 			return nil, err
 		}
+	}
+	if err := runRuntimePreflight(ctx, plan, output, false); err != nil {
+		return nil, err
 	}
 
 	for index := len(plan.Order) - 1; index >= 0; index-- {
@@ -150,6 +155,9 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			service := plan.Services[name]
 			service.LogPath = processes[name].LogPath
 			if err := appendRestartMarker(service.LogPath); err != nil {
+				return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
+			}
+			if err := appendIsolationEvidence(service, plan.Connection); err != nil {
 				return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
 			}
 			fmt.Fprintf(output, "%s %s\n", style.Stage("Starting"), style.Identifier(name))

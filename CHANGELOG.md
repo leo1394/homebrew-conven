@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.2 - 2026-08-11
+
+- `conven plugins --install` 遇到同名插件时只在交互终端询问是否覆盖；仅 `y/yes`
+  原子替换，其他输入取消，非 TTY 环境 fail-closed 保留原文件。新增
+  `conven plugins --remove NAME`，按规范化名称删除一个真实普通插件，并同步三种 shell
+  completion 和中英文文档。
+- 破坏性变更：所有 `kind` 非空的本地服务都必须解析到 policy-backed 隔离契约；只有
+  `kind` 为空的 runner-only 服务可继续单独使用 `localEnv`。最终 guard 强制关闭适用的
+  服务注册、将 listener 限制为 loopback，并在启动前复核物化结果；当前可信语义限定为
+  go-zero Consul application 根节点的 `discovType: ""`、RPC `listenOn` 和 HTTP `host`。
+  Run argv 只允许 executable 加一个受信 `-f`；目录模式同时 guard local profile 的
+  `config-local.yaml` bootstrap→application 链。Guard 文件路径逐级拒绝 symlink；兼容
+  application 和受 guard 保护的 YAML 拒绝 merge、自定义 tag、非字符串及重复 key
+  等解析歧义。
+- 区分 manifest 声明的 `Declared remote dependencies` 与最终配置中检测并验证的
+  `External Consul dependency preflight`，计划输出不再用 `via registry` 暗示传输方式。
+  预检当前只识别已知 go-zero YAML 结构并调用明文 HTTP Consul health，不支持 ACL、
+  TLS 或其他认证；预检通过后不会改写远程数据库、Kafka、RPC client 或后台 job 配置。
+- 对 `connection.driver: command` 采取 fail-closed：底层配置模型仍可解析该 driver，
+  但因无法证明任意 command 不建立反向入站 route，`doctor`、start dry-run、start 和
+  restart 都会在修改进程前拒绝它；本地服务编排只接受 `none` 或内置 `ktctl` connection。
+
 ## 0.2.1 - 2026-08-07
 
 - 破坏性变更：将 workspace、manifest、配置和运行时环境变量完整迁移为 `.conven`、

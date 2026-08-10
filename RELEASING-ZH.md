@@ -392,7 +392,7 @@ for action in edit import reset; do
   done
   grep -Fq -- "-l $action" "$CONVEN_FISH_COMPLETION"
 done
-for action in install list run; do
+for action in install list remove run; do
   for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done

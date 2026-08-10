@@ -84,7 +84,7 @@ func Completion(shell string) (string, error) {
     if [ "$subcommand" = "plugins" ]; then
         action="${COMP_WORDS[2]}"
         if [ "$COMP_CWORD" -eq 2 ]; then
-            options="--install --list --run --help"
+            options="--install --list --remove --run --help"
         elif [ "$action" = "--install" ] && [ "$COMP_CWORD" -eq 3 ]; then
             compopt -o filenames 2>/dev/null
             COMPREPLY=()
@@ -132,7 +132,7 @@ _conven() {
         'services:manage workspace services'
         'config:read or write Conven configuration'
         'policy:edit, import, or rebuild the workspace policy manifest'
-        'plugins:install, list, or run Conven plugins'
+        'plugins:install, list, remove, or run Conven plugins'
         'doctor:validate workspace and connection configuration'
         'help:show conven usage'
         'version:show conven version'
@@ -276,6 +276,10 @@ _conven() {
                 --list)
                     _message 'this plugin action does not accept arguments'
                     ;;
+                --remove)
+                    _arguments \
+                        '1:plugin:'
+                    ;;
                 --run)
                     _arguments \
                         '1:plugin:' \
@@ -286,6 +290,7 @@ _conven() {
                         _arguments \
                             '--install[install a Python plugin]:Python plugin file:_files -g "*.py"' \
                             '--list[list installed plugins]' \
+                            '--remove[remove an installed plugin]:plugin:' \
                             '--run[run an installed plugin]:plugin:' \
                             '--help[show command help]'
                     else
@@ -372,7 +377,7 @@ complete -c conven -f -n '__fish_use_subcommand' -a init -d 'Initialize a Conven
 complete -c conven -f -n '__fish_use_subcommand' -a services -d 'Manage workspace services'
 complete -c conven -f -n '__fish_use_subcommand' -a config -d 'Read or write Conven configuration'
 complete -c conven -f -n '__fish_use_subcommand' -a policy -d 'Edit, import, or rebuild the workspace policy manifest'
-complete -c conven -f -n '__fish_use_subcommand' -a plugins -d 'Install, list, or run Conven plugins'
+complete -c conven -f -n '__fish_use_subcommand' -a plugins -d 'Install, list, remove, or run Conven plugins'
 complete -c conven -f -n '__fish_use_subcommand' -a doctor -d 'Validate workspace configuration'
 complete -c conven -f -n '__fish_use_subcommand' -a help -d 'Show conven usage'
 complete -c conven -f -n '__fish_use_subcommand' -a version -d 'Show conven version'
@@ -387,6 +392,7 @@ complete -c conven -n '__conven_policy_action_without_edit --import' -l edit -d 
 complete -c conven -n '__conven_policy_import_without_source' -F
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l install -r -a '(__fish_complete_suffix .py)' -d 'Install a Python plugin'
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l list -d 'List installed plugins'
+complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l remove -r -d 'Remove an installed plugin'
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l run -r -d 'Run an installed plugin'
 complete -c conven -n '__conven_using_subcommand doctor' -l env -r -d 'Environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l dev -d 'Use the dev environment profile'

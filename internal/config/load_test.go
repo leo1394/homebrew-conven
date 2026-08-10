@@ -67,9 +67,14 @@ policies:
       servers:
         rpc:
           port: rpc
-          patches:
-            - path: listenOn
-              value: "0.0.0.0:${port.rpc}"
+          isolation:
+            registration:
+              mode: config
+              path: discovType
+              disabledValue: ""
+            listener:
+              path: listenOn
+              value: "127.0.0.1:${port.rpc}"
       localDependency:
         mode: replace
         value:
@@ -161,6 +166,48 @@ func TestLoadRejectsUnknownNestedPolicyField(t *testing.T) {
 	_, err := Load(writeManifest(t, yaml))
 	if err == nil || !strings.Contains(err.Error(), "field companyMagic not found") {
 		t.Fatalf("error = %v, want strict nested policy field error", err)
+	}
+}
+
+func TestLoadValidatesServerIsolation(t *testing.T) {
+	tests := []struct {
+		name      string
+		yaml      string
+		wantError string
+	}{
+		{
+			name:      "missing registration mode",
+			yaml:      strings.Replace(policyManifestYAML, "              mode: config\n", "", 1),
+			wantError: "registration.mode must be config or not-applicable",
+		},
+		{
+			name:      "missing registration path",
+			yaml:      strings.Replace(policyManifestYAML, "              path: discovType\n", "", 1),
+			wantError: "registration.path is required",
+		},
+		{
+			name:      "missing disabled value",
+			yaml:      strings.Replace(policyManifestYAML, "              disabledValue: \"\"\n", "", 1),
+			wantError: "registration.disabledValue is required",
+		},
+		{
+			name:      "missing listener",
+			yaml:      strings.Replace(policyManifestYAML, "            listener:\n              path: listenOn\n              value: \"127.0.0.1:${port.rpc}\"\n", "", 1),
+			wantError: "listener.path is required",
+		},
+		{
+			name:      "not applicable registration fields",
+			yaml:      strings.Replace(policyManifestYAML, "mode: config", "mode: not-applicable", 1),
+			wantError: "must not declare file, path, or disabledValue",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Load(writeManifest(t, test.yaml))
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("error = %v, want error containing %q", err, test.wantError)
+			}
+		})
 	}
 }
 

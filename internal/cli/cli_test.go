@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"io"
 	"os"
@@ -211,7 +212,7 @@ func TestPluginsHelpUsesStdout(t *testing.T) {
 		if code := app.Run(arguments); code != 0 {
 			t.Fatalf("%v exit code = %d", arguments, code)
 		}
-		for _, action := range []string{"--install PYTHON_FILE", "--list", "--run NAME"} {
+		for _, action := range []string{"--install PYTHON_FILE", "--list", "--remove NAME", "--run NAME"} {
 			if !strings.Contains(output.String(), action) {
 				t.Fatalf("%v help is missing %s: %q", arguments, action, output.String())
 			}
@@ -252,6 +253,8 @@ func TestPluginsRequireKnownExclusiveAction(t *testing.T) {
 		{name: "install without source", arguments: []string{"plugins", "--install"}, code: 1, want: "requires exactly one Python file"},
 		{name: "install with extra argument", arguments: []string{"plugins", "--install", "plugin.py", "--list"}, code: 1, want: "requires exactly one Python file"},
 		{name: "list with second action", arguments: []string{"plugins", "--list", "--install"}, code: 1, want: "does not accept arguments or another action"},
+		{name: "remove without name", arguments: []string{"plugins", "--remove"}, code: 1, want: "requires exactly one plugin name"},
+		{name: "remove with extra argument", arguments: []string{"plugins", "--remove", "inspect", "--list"}, code: 1, want: "requires exactly one plugin name"},
 		{name: "run without name", arguments: []string{"plugins", "--run"}, code: 1, want: "requires a plugin name"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -312,8 +315,147 @@ func TestPluginsInstallAndListUseTemporaryHome(t *testing.T) {
 	if output.String() != "inspect\n" {
 		t.Fatalf("list output = %q", output.String())
 	}
+	output.Reset()
+	if code := app.Run([]string{"plugins", "--remove", "inspect"}); code != 0 {
+		t.Fatalf("remove exit code = %d: %s", code, errorOutput.String())
+	}
+	wantOutput = "==> Removed plugin inspect\n  - Path: " + destination + "\n"
+	if output.String() != wantOutput {
+		t.Fatalf("remove output = %q, want %q", output.String(), wantOutput)
+	}
+	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+		t.Fatalf("removed plugin still exists: %v", err)
+	}
 	if errorOutput.Len() != 0 {
 		t.Fatalf("stderr = %q", errorOutput.String())
+	}
+}
+
+func TestAskPluginOverwriteAcceptsOnlyExplicitYes(t *testing.T) {
+	for _, test := range []struct {
+		answer    string
+		overwrite bool
+	}{
+		{answer: "y\n", overwrite: true},
+		{answer: "YES\n", overwrite: true},
+		{answer: "\n"},
+		{answer: "n\n"},
+		{answer: "cancel\n"},
+	} {
+		t.Run(strings.TrimSpace(test.answer), func(t *testing.T) {
+			var output bytes.Buffer
+			overwrite, err := askPluginOverwrite(strings.NewReader(test.answer), &output, "inspect")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if overwrite != test.overwrite {
+				t.Fatalf("overwrite = %t, want %t", overwrite, test.overwrite)
+			}
+			if output.String() != "Plugin inspect is already installed. Overwrite? [y/N]: " {
+				t.Fatalf("prompt = %q", output.String())
+			}
+		})
+	}
+}
+
+func TestAskPluginOverwriteContextStopsWhenCancelledWithoutInput(t *testing.T) {
+	input, inputWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer inputWriter.Close()
+	promptReader, promptWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer promptReader.Close()
+	defer promptWriter.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		overwrite bool
+		err       error
+	}
+	done := make(chan result, 1)
+	go func() {
+		overwrite, err := askPluginOverwriteContext(ctx, input, promptWriter, "inspect")
+		done <- result{overwrite: overwrite, err: err}
+	}()
+
+	prompt, err := bufio.NewReader(promptReader).ReadString(':')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt != "Plugin inspect is already installed. Overwrite? [y/N]:" {
+		t.Fatalf("prompt = %q", prompt)
+	}
+	cancel()
+
+	select {
+	case got := <-done:
+		if got.overwrite {
+			t.Fatal("cancelled confirmation allowed overwrite")
+		}
+		if !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled confirmation remained blocked waiting for input")
+	}
+}
+
+func TestPluginsDuplicateInstallRequiresTerminalAndPreservesExistingPlugin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	firstDirectory := t.TempDir()
+	secondDirectory := t.TempDir()
+	firstSource := filepath.Join(firstDirectory, "inspect.py")
+	secondSource := filepath.Join(secondDirectory, "inspect.py")
+	const original = "#!/usr/bin/env python3\nprint('original')\n"
+	if err := os.WriteFile(firstSource, []byte(original), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondSource, []byte("#!/usr/bin/env python3\nprint('replacement')\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	inputPath := filepath.Join(t.TempDir(), "confirmation")
+	if err := os.WriteFile(inputPath, []byte("yes\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Input: input, Output: &output, Error: &errorOutput, Version: "test-version"}
+	if code := app.Run([]string{"plugins", "--install", firstSource}); code != 0 {
+		t.Fatalf("first install exit code = %d: %s", code, errorOutput.String())
+	}
+	output.Reset()
+	if code := app.Run([]string{"plugins", "--install", secondSource}); code != 1 {
+		t.Fatalf("duplicate install exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errorOutput.String(), "overwrite confirmation requires an interactive terminal") {
+		t.Fatalf("duplicate install stderr = %q", errorOutput.String())
+	}
+	position, err := input.Seek(0, io.SeekCurrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if position != 0 {
+		t.Fatalf("non-terminal confirmation input was consumed: offset=%d", position)
+	}
+	destination := filepath.Join(home, ".conven", "plugins", "inspect.py")
+	data, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Fatalf("existing plugin changed after non-terminal install: %q", data)
 	}
 }
 
@@ -897,7 +1039,7 @@ func TestCompletions(t *testing.T) {
 					t.Fatalf("completion for %s is missing %s", shell, action)
 				}
 			}
-			for _, action := range []string{"--install", "--run"} {
+			for _, action := range []string{"--install", "--remove", "--run"} {
 				marker := action
 				if shell == "fish" {
 					marker = "-l " + strings.TrimPrefix(action, "--")
@@ -949,7 +1091,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--import)`,
 		`options="--edit --help"`,
 		`if [ "$subcommand" = "plugins" ]`,
-		`options="--install --list --run --help"`,
+		`options="--install --list --remove --run --help"`,
 		`compopt -o filenames 2>/dev/null`,
 	} {
 		if !strings.Contains(bash, expected) {
@@ -970,7 +1112,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`case $words[2] in`,
 		`'services:manage workspace services'`,
 		`'policy:edit, import, or rebuild the workspace policy manifest'`,
-		`'plugins:install, list, or run Conven plugins'`,
+		`'plugins:install, list, remove, or run Conven plugins'`,
 		`case $action in`,
 		`--list|--status)`,
 		`--registry)`,
@@ -988,6 +1130,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--reset[destructively reset the manifest to scanned facts]`,
 		`--import[import a local YAML file as the entire manifest]`,
 		`--install[install a Python plugin]`,
+		`--remove[remove an installed plugin]`,
 		`--run[run an installed plugin]`,
 	} {
 		if !strings.Contains(zsh, expected) {
@@ -1038,6 +1181,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_policy_import_without_source' -F`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l install`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l list`,
+		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l remove`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l run`,
 	} {
 		if !strings.Contains(fish, expected) {

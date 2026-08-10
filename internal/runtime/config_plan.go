@@ -19,6 +19,16 @@ type PlannedConfig struct {
 	Discovery string
 	Plan      materialize.Plan
 	Routes    []PlannedRoute
+	Isolation PlannedIsolation
+}
+
+type PlannedIsolation struct {
+	RegistrationMode  string
+	RegistrationGuard *materialize.Guard
+	ListenerGuard     materialize.Guard
+	ListenerPort      int
+	RuntimeConfigDir  bool
+	RuntimeConfigRef  string
 }
 
 type PlannedRoute struct {
@@ -120,9 +130,10 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 			},
 		},
 	}
+	server, hasServer := policy.Routing.Servers[service.Kind]
 	patches := make([]model.ConfigPatch, 0, len(policy.Config.Patches)+len(service.Config.Patches))
 	patches = append(patches, policy.Config.Patches...)
-	if server, found := policy.Routing.Servers[service.Kind]; found {
+	if hasServer {
 		patches = append(patches, server.Patches...)
 	}
 	patches = append(patches, service.Config.Patches...)
@@ -171,7 +182,84 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 		}
 		planned.Plan.Patches = append(planned.Plan.Patches, plannedPatch)
 	}
+	if hasServer {
+		isolation, guards, err := planServerIsolation(server, application, context)
+		if err != nil {
+			return nil, fmt.Errorf("plan %s local isolation: %w", name, err)
+		}
+		planned.Isolation = isolation
+		planned.Plan.Guards = append(planned.Plan.Guards, guards...)
+		runtimeGuards, err := planRuntimeConfigGuards(planned.Plan, context)
+		if err != nil {
+			return nil, fmt.Errorf("plan %s runtime config isolation: %w", name, err)
+		}
+		if len(runtimeGuards) > 0 {
+			planned.Isolation.RuntimeConfigDir = true
+			planned.Plan.Guards = append(planned.Plan.Guards, runtimeGuards...)
+		}
+	}
 	return planned, nil
+}
+
+func planRuntimeConfigGuards(plan materialize.Plan, context config.ExpandContext) ([]materialize.Guard, error) {
+	if filepath.Clean(plan.RuntimeBootstrap) != "config-local.yaml" {
+		return nil, nil
+	}
+	applicationPath := filepath.Join(plan.TargetDir, plan.Application)
+	patches := []model.ConfigPatch{
+		{File: plan.RuntimeBootstrap, Path: "localConfigEnable", Value: true},
+		{File: plan.RuntimeBootstrap, Path: "localConfigPath", Value: applicationPath},
+	}
+	guards := make([]materialize.Guard, 0, len(patches))
+	for _, patch := range patches {
+		planned, err := planConfigPatch(patch, plan.Application, context, "", 0)
+		if err != nil {
+			return nil, err
+		}
+		guards = append(guards, materialize.Guard{File: planned.File, Path: planned.Path, Value: planned.Value, AllowCreate: true})
+	}
+	return guards, nil
+}
+
+func planServerIsolation(server model.ServerRoute, application string, context config.ExpandContext) (PlannedIsolation, []materialize.Guard, error) {
+	if server.Isolation.Registration.Mode != "config" && server.Isolation.Registration.Mode != "not-applicable" {
+		return PlannedIsolation{}, nil, fmt.Errorf("registration mode must be config or not-applicable")
+	}
+	if strings.TrimSpace(server.Isolation.Listener.Path) == "" || server.Isolation.Listener.Value == nil {
+		return PlannedIsolation{}, nil, fmt.Errorf("listener path and value are required")
+	}
+	isolation := PlannedIsolation{
+		RegistrationMode: server.Isolation.Registration.Mode,
+		ListenerPort:     context.Manifest.Services[context.Service].Ports[server.Port],
+	}
+	guards := make([]materialize.Guard, 0, 2)
+	if server.Isolation.Registration.Mode == "config" {
+		patch := model.ConfigPatch{
+			File:  server.Isolation.Registration.File,
+			Path:  server.Isolation.Registration.Path,
+			Value: server.Isolation.Registration.DisabledValue,
+		}
+		planned, err := planConfigPatch(patch, application, context, "", 0)
+		if err != nil {
+			return PlannedIsolation{}, nil, fmt.Errorf("registration guard: %w", err)
+		}
+		guard := materialize.Guard{File: planned.File, Path: planned.Path, Value: planned.Value}
+		isolation.RegistrationGuard = &guard
+		guards = append(guards, guard)
+	}
+	listenerPatch := model.ConfigPatch{
+		File:  server.Isolation.Listener.File,
+		Path:  server.Isolation.Listener.Path,
+		Value: server.Isolation.Listener.Value,
+	}
+	plannedListener, err := planConfigPatch(listenerPatch, application, context, "", 0)
+	if err != nil {
+		return PlannedIsolation{}, nil, fmt.Errorf("listener guard: %w", err)
+	}
+	listener := materialize.Guard{File: plannedListener.File, Path: plannedListener.Path, Value: plannedListener.Value}
+	isolation.ListenerGuard = listener
+	guards = append(guards, listener)
+	return isolation, guards, nil
 }
 
 func inspectPolicyConfigSource(sourceDirectory string, required ...string) error {

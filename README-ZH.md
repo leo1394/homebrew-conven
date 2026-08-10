@@ -24,16 +24,24 @@ Conven 本身使用 Go 编写，但被启动的服务不限语言。每个服务
   binding 改为本地地址；对未选中的依赖注入 `remoteEnv`，或保留远程发现配置。
 - 可从业务仓库或 Apollo 读取配置，在只读源码之外生成
   `.conven/runtime/current/configs/<service>`，再按 policy 叠加服务端口和依赖路由。
+- 要求每个被选中且 `services.<name>.kind` 非空的服务解析到 policy-backed 本地隔离
+  契约：在最终运行时 YAML 中验证服务注册已关闭或确实不适用，并把监听地址强制
+  限制为 loopback IP。
 - 可通过 `ktctl connect` 建立“本机访问集群”的连接。
 - 记录进程信息和每个服务的日志，支持后续查看和停止；健康检查只在启动阶段执行，
   不作为持续状态保存。
-- 不提供 `ktctl exchange`、Mesh 或 Preview。集群流量不会反向路由到本地服务。
-- 不自动推断业务依赖，也不把本地服务安全地注册到远程注册中心；这些行为必须
-  在 manifest 中显式配置。
+- 不提供 `ktctl exchange`、Mesh 或 Preview；Conven 自身不会创建或配置从集群流量
+  反向进入本地服务的 route。
+- 不自动推断业务依赖，也不会把本地服务注册到远程注册中心。对于声明 kind 的本地
+  服务，可信 adapter 必须从最终运行时配置证明注册已关闭，或证明该 server kind
+  不存在注册行为，否则 fail-closed 拒绝启动。
 - 健康检查只能证明本地进程或端点可用。业务全链路仍需项目自己的 smoke test。
 
-推荐在本地启动时通过 `localEnv` 关闭服务注册，避免其他开发环境流量进入个人
-进程；未启动的依赖则通过 `remoteEnv` 保留远程发现配置。
+仅使用 runner 的集成只适用于省略 `kind` 或 `kind` 为空的服务；这类服务仍可通过
+`localEnv` 传递项目自己的注册关闭开关，但业务程序必须实际读取它。一旦服务显式
+声明或被扫描出非空 `kind`，仅有 `localEnv` 就不够，必须使用下文一等、可验证的
+policy-backed 隔离契约。未启动的依赖仍可通过 `remoteEnv` 或保留的 YAML route 使用
+远程发现。
 
 ## 环境要求
 
@@ -254,7 +262,7 @@ profile 一起提交在中央 manifest 中。各来源的边界如下：
 | service name/path | 一级子 Git 仓库 | 可限制已审阅的服务清单 | 非标准布局、重命名或缺失服务 |
 | `kind`、`discovery` | AST 唯一可证的 HTTP/RPC kind、analyzer、binding 候选 | 可解析已知项目约定 | 模糊 kind；binding 候选对应哪个真实依赖 |
 | runner | 标准 Go root 或 `go/` module 的 workdir/build/run | 可应用已审阅的项目 runner | 特殊 argv、prepare、artifact、`runWorkdir` |
-| policy/driver/config/routing | 不生成 | 可编码已审阅的框架和路由默认值 | bootstrap 字段、注册关闭和路由语义 |
+| policy/driver/config/routing | 不生成 | 可编码已审阅的框架和路由默认值 | bootstrap 字段、注册 guard、loopback listener 和路由语义 |
 | environment/connection | 不生成 | 可输出不含凭据的连接骨架 | cluster、namespace、context、网络入口和认证 |
 | ports | 不生成 | 可应用已审阅的项目端口表 | 实际监听端口与本机冲突 |
 | dependencies | 只产生 binding 名候选，不生成依赖图 | 可映射已审阅的项目依赖 | 完整业务依赖、target service/port、哪些保留远程发现 |
@@ -413,6 +421,7 @@ conven policy --import <yaml-file> [--edit]
 conven policy --reset
 conven plugins --install <python-file>
 conven plugins --list
+conven plugins --remove <name>
 conven plugins --run <name> [plugin args...]
 conven doctor [flags]
 conven services --list
@@ -549,11 +558,15 @@ Conven 保留随版本嵌入通用插件的能力：`conven init` 会安装缺�
 ```bash
 conven plugins --install ./generate-apollo-consul.py
 conven plugins --list
+conven plugins --remove generate-apollo-consul
 ```
 
 安装时按源文件 basename 复制到 `~/.conven/plugins`，并把安装副本设为仅当前用户可执行
 的 `0700`。源文件必须是普通、非符号链接、带 Python 3 shebang 的 `.py` 文件。目标已
-存在时绝不覆盖；需要升级时，应先审阅并显式删除旧文件，再重新安装。
+存在时会在交互终端显示 `Overwrite? [y/N]`；只有 `y` 或 `yes` 会原子替换旧文件，直接
+回车、`n`、`no`、`cancel` 或其他输入都会取消并保持旧文件不变。如果 stdin 或 stderr
+不是 TTY，重复安装会直接失败，不读取管道输入，也不修改现有插件。
+`plugins --remove NAME` 会删除一个明确命名的普通插件，不再进行第二次确认。
 
 在已初始化 workspace 的任意子目录中，可使用不带 `.py` 后缀的文件名运行插件。
 插件名后的全部参数都会原样透传，但 `--workspace` 是 Conven 保留参数：
@@ -573,8 +586,9 @@ Apollo/Consul generator 可以在当前 workspace 中写出
 再执行 `conven policy --import <file> --edit`。
 
 用户可以把自己的可执行 `*.py` 文件放入 `~/.conven/plugins`。Conven 只列出和运行
-普通、可执行、非符号链接的文件，并拒绝可能越出插件目录的名称。重复执行
-`conven init` 只补齐缺失的通用内置插件，所有已存在的插件文件都会保留。
+普通、可执行、非符号链接的文件，并拒绝可能越出插件目录的名称。删除操作同样使用
+规范化名称并只接受真实普通文件。重复执行 `conven init` 只补齐缺失的通用内置插件，
+所有已存在的插件文件都会保留。
 
 ## Workspace 边界与 Manifest 查找
 
@@ -656,12 +670,12 @@ shell 字符串，因此 `&&`、管道和重定向不会被 shell 隐式解释�
 | `policies.<name>.drivers` | framework、配置来源、服务发现和 materializer 的选择 |
 | `policies.<name>.config` | 配置源目录、application/bootstrap、Apollo 重试及公共 YAML patches |
 | `policies.<name>.process` | policy 统一追加的进程环境变量和 argv |
-| `policies.<name>.routing` | 按 service kind 修补监听端口，并定义本地/远程依赖 YAML 路由 |
+| `policies.<name>.routing` | 按 service kind 声明 server 隔离，并定义本地/远程依赖 YAML 路由 |
 | `environments.<name>.env` | 当前环境下所有本地服务共享的环境变量 |
 | `environments.<name>.registry` | 注册中心类型的说明字段，v1 不会自动解释 |
-| `environments.<name>.connection` | `none`、`ktctl` 或 `command` 连接配置 |
-| `environments.<name>.connection.command` | `ktctl` executable 的可选 fallback，或 `command` driver 必填的 executable |
-| `environments.<name>.connection.sudo` | 可选；通过 `sudo` 启停连接进程 |
+| `environments.<name>.connection` | `none` 或内置 `ktctl` connection；`command` 仅保留为可解析的底层模型，service plan 会拒绝 |
+| `environments.<name>.connection.command` | `ktctl` executable 的可选 fallback；也保留为已拒绝的底层 `command` driver 模型字段 |
+| `environments.<name>.connection.sudo` | 可选；通过 `sudo` 启停受 Conven 管理的 `ktctl` connection |
 | `services.<name>.path` | 相对 workspace 或绝对的服务目录 |
 | `services.<name>.kind` / `discovery` | 服务类型，以及 analyzer 与静态提取的 binding 候选 |
 | `runner.workdir` | 相对服务目录或绝对的 prepare/build 工作目录 |
@@ -703,9 +717,84 @@ Policy 定义、service 选择和环境声明始终位于同一 manifest。使�
 应用依赖路由。`services --registry` 不覆盖人工填写的非空 manifest 字段；service patch
 也可以覆盖公共/server 默认值，而最后的 dependency route 专门保证本次本地/远程选择。
 
+### 本地隔离契约
+
+被选中服务的 `services.<name>.kind` 只要非空，就必须解析到显式指定或继承的 policy，
+由 `yaml-overlay` 配置计划提供匹配的 `routing.servers.<kind>` 隔离契约。仓库扫描可能
+自动写入 `kind`，但不会生成项目 policy；因此在 policy 经人工审阅并补齐之前，
+`doctor`、start dry-run、start 和 restart 都会 fail closed。只有省略 `kind` 或 `kind`
+为空的服务，才能作为没有 policy-backed 隔离的 runner-only 集成。
+
+当前内置的可信隔离语义只覆盖 `go-zero + consul + yaml-overlay` 的 `rpc` 和 `http`
+service。其他 framework/discovery 组合即使能被 YAML schema 解析，也会因没有可信 adapter
+而在 plan 阶段拒绝；扩展它们需要先在 Conven 中实现并审阅对应的隔离语义。
+
+每个 `policies.<name>.routing.servers.<kind>` 都必须显式声明 registration 和 listener
+两部分隔离。例如：
+
+```yaml
+policies:
+  retail:
+    routing:
+      servers:
+        rpc:
+          port: rpc
+          isolation:
+            registration:
+              mode: config
+              # file 默认使用 policy application YAML。
+              path: discovType
+              disabledValue: ""
+            listener:
+              path: listenOn
+              value: "127.0.0.1:${port.rpc}"
+        http:
+          port: http
+          isolation:
+            registration:
+              mode: not-applicable
+            listener:
+              path: host
+              value: "127.0.0.1"
+```
+
+已有 policy 如果只通过普通 `patches` 设置 `listenOn`、`host` 或注册字段，必须补充
+对应的 `isolation` 声明。迁移审阅期间可以暂时保留旧 patch，但最终值以 isolation guard
+为准，通常应删除重复的安全 patch。
+
+`registration.mode: config` 必须提供 `path` 和标量 `disabledValue`；可选的 `file`
+默认指向 policy application YAML。只有该 server kind 确实不存在服务注册行为时，
+才能使用 `registration.mode: not-applicable`，且此模式禁止再填写 `file`、`path` 或
+`disabledValue`。RPC 服务必须使用 `config`，从最终运行时 YAML 验证注册已关闭；当前
+可信 adapter 的 HTTP 服务必须使用 `not-applicable`。
+对当前 go-zero Consul adapter，`config` 进一步被严格限定为 policy application YAML
+根节点的 `discovType: ""`；其他 file、path 或 value 不能作为“注册已关闭”的证明。
+
+当前 adapter 将 listener guard 固定到 policy application YAML：RPC 必须使用
+`listenOn`，值为 loopback IP 加声明端口；HTTP 必须使用 `host`，值为不带端口的
+loopback IP。其他 file/path、`localhost` 等 hostname 和 `0.0.0.0` 等 wildcard listener
+都会被拒绝。
+
+隔离 guard 最后应用，优先级高于普通 policy、server、service 和 dependency patch，
+因此后续普通 patch 不能重新开启注册或恢复 wildcard listener。Manifest 声明的
+registration/listener guard 路径在 guard 前必须已经存在，避免拼错字段却生成虚假的
+隔离证明；guard 文件路径中的中间 symlink 也会被拒绝。唯一例外是 Conven 内部生成的
+`config-local.yaml` bootstrap selector guard，它可以在运行时副本中创建已知的两个字段。
+Conven 会在服务启动前复核最终物化文件。当前 adapter 只接受“executable 加且仅加一个
+`-f`”的 argv 形态，且 `-f` 必须指向 `${configDir}`。目录模式还要求最终
+`PROFILE_ACTIVE=local`、`config.runtimeBootstrap` 解析为 `config-local.yaml`，并强制
+guard `localConfigEnable: true` 和指向已验证 runtime application 的 `localConfigPath`，
+防止 prepare/build 把进程重定向回源码或远程 Apollo 配置。验证后的 registration、
+loopback listener 和 Conven inbound route 契约会写入
+服务日志。
+
+Conven 能验证 argv，但不能反编译任意业务二进制来证明参数语义；可信 adapter 仍必须
+审阅服务入口确实解析并使用 `-f`（Go 入口通常需要调用 `flag.Parse()`）。
+
 Materializer 只把 policy `config.sourceDir` 的内容复制到 `configs/<service>`，并不自动
-构造脚本式的完整 `go/ + resources/` 运行目录。Policy 可通过
-`-f ${configDir}` 使用物化后的 application/bootstrap；如未声明
+构造脚本式的完整 `go/ + resources/` 运行目录。当前可信 adapter 要求 policy 在受 guard
+保护的 `config-local.yaml` bootstrap 契约下使用 `-f ${configDir}`；隔离契约启用后，
+必须且只能有一个这样的 `-f` 引用。如未声明
 `runner.runWorkdir`，进程 cwd 仍是源码 workdir，其他类似
 `../resources/...` 的相对路径仍会只读访问源码资源。若服务要求完整独立
 运行布局，应显式声明 `runner.runWorkdir` 及相应 prepare/layout 规则。
@@ -808,8 +897,44 @@ Conven 支持两种显式路由契约：
 覆盖。被选中的依赖必须至少具有
 一种本地路由契约，否则 Conven 在启动前拒绝含糊计划。
 
+计划输出中的 **Declared remote dependencies** 含义刻意保持狭窄：它只列出已在
+manifest 中声明、被当前本地服务依赖、但本次没有选择本地启动的 service。它不是
+Apollo 或最终 application YAML 中全部远程 endpoint 的清单；因此显示 `none` 并不
+表示所选服务不存在外部依赖。计划输出不会在该标签后追加
+`environments.<name>.registry`，因为这个字段只是说明信息，不能证明每项依赖实际使用
+哪种传输或发现机制。
+
+物化完成后，兼容的 `go-zero + consul + yaml-overlay` 服务还会经过独立的
+**External Consul dependency preflight**。Conven 扫描最终 application YAML 中仍启用
+的 Consul client binding；已声明为本地 route 却仍走 Consul 会直接失败，并且每个检测
+到的外部 service key 都必须在 Consul health 中至少存在一个 passing instance。HTTP/RPC
+server 根节点若仍出现活动的 Consul 注册会直接失败，而不是被当作外部 dependency；其
+正常禁用状态由隔离契约负责。
+
+该预检只识别已知的 go-zero YAML 结构：`discovType: consul` 以及同级的
+`consul.host`、`consul.port`、`consul.key`，并调用明文 HTTP Consul health endpoint。
+当前不支持 ACL token、HTTPS/TLS、mTLS 或其他认证方式，因此加固后的 Consul endpoint
+暂时不能使用这项预检。兼容的最终 application 会拒绝 YAML merge key、自定义或
+binary tag、非字符串 mapping key 和重复 key，避免利用不同 YAML parser 的歧义隐藏
+实际生效的 server registration 或 dependency 字段。受 guard 保护的 YAML 文件也使用
+相同的无歧义 mapping-key 规则。
+
+External Consul dependency preflight 通过后，本地隔离和 dependency 选择不会改写
+无关的运行行为。Conven 不会改写或关闭远程数据库、Kafka broker、未选择本地路由的
+RPC client 或后台 job，它们继续按照最终物化 application 和项目 policy 配置运行；但
+检测到的 Consul dependency 不可用时，预检本身仍会阻止服务启动。该预检只检查检测到
+的 Consul client，不是数据库、Kafka 或 job readiness 检查。
+
 `connection.driver: ktctl` 只解决本机到集群网络的可达性。它不代表集群服务可以
-访问本地进程，也不替代注册中心、配置中心或业务鉴权。
+访问本地进程：`ktctl connect` 不建立从集群流量反向进入本地进程的 route，因此本地
+注册必须保持关闭，listener 也必须限制为 loopback。它同样不替代注册中心、配置中心
+或业务鉴权。
+
+`connection.driver: command` 仍保留在底层配置模型中，使 manifest 可以被解析并明确
+表达边界，但它不是可用的本地服务编排连接。Conven 无法证明任意 command 不会建立
+remote-to-local 的反向入站 route，因此 `doctor`、start dry-run、`services --start` 和
+`services --restart` 都会在修改 connection 或 service 进程前 fail-closed 拒绝它。已有
+网络连接时使用 `none`；需要由 Conven 建立本机到集群的访问时使用内置 `ktctl` driver。
 
 ## ktctl executable 选择
 
@@ -828,11 +953,11 @@ conven config ktctl.path /absolute/path/to/ktctl
 conven config --global ktctl.path ktctl-custom
 ```
 
-该设置只作用于 `ktctl` driver。`command` driver 始终使用 manifest 中自己的
-`connection.command`，不受 `ktctl.path` 影响。启动前 Conven 会把 PATH 中的命令解析为
-实际 executable 路径，因此即使 sudo 使用受限的 `secure_path`，
-`connection.sudo: true` 也能找到该 ktctl。manifest command 如果是带路径分隔符的
-相对路径，会先从 workspace 根目录解析。
+该设置只作用于 `ktctl` driver。底层 `command` driver 模型仍保留自己的
+`connection.command` 解析规则且不受 `ktctl.path` 影响，但如上所述，service plan 会在
+启动前拒绝该 driver。对于 ktctl，Conven 会把 PATH 中的命令解析为实际 executable
+路径，因此即使 sudo 使用受限的 `secure_path`，`connection.sudo: true` 也能找到它。
+manifest command 如果是带路径分隔符的相对路径，会先从 workspace 根目录解析。
 
 ## kubeconfig 传入与优先级
 

@@ -76,6 +76,236 @@ func TestMaterializeRepositoryPatchesPrivatelyAndPreservesSource(t *testing.T) {
 	assertPrivateTree(t, target)
 }
 
+func TestMaterializeAppliesGuardsAfterPatchesAndVerifiesScalars(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	configRoot := filepath.Join(root, "configs")
+	target := filepath.Join(configRoot, "api")
+	writeTestSource(t, source, "http://unused.invalid")
+	if err := applyYAMLPatch(filepath.Join(source, "application.yaml"), "server.registrationEnabled", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan := testPlan(source, configRoot, target)
+	plan.Patches = []Patch{
+		{File: "application.yaml", Path: "rpc.partner.discovType", Value: "consul"},
+		{File: "application.yaml", Path: "server.registrationEnabled", Value: true},
+	}
+	plan.Guards = []Guard{
+		{File: "application.yaml", Path: "rpc.partner.discovType", Value: ""},
+		{File: "application.yaml", Path: "server.registrationEnabled", Value: false},
+	}
+	if err := Materialize(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	application := readYAMLMap(t, filepath.Join(target, "application.yaml"))
+	rpc := application["rpc"].(map[string]any)
+	partner := rpc["partner"].(map[string]any)
+	if partner["discovType"] != "" {
+		t.Fatalf("guarded discovery type = %#v, want empty string", partner["discovType"])
+	}
+	server := application["server"].(map[string]any)
+	if server["registrationEnabled"] != false {
+		t.Fatalf("guarded registrationEnabled = %#v, want false", server["registrationEnabled"])
+	}
+	if err := VerifyGuards(target, plan.Guards); err != nil {
+		t.Fatalf("verify published guards: %v", err)
+	}
+	if err := applyYAMLPatch(filepath.Join(target, "application.yaml"), "server.registrationEnabled", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyGuards(target, plan.Guards); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("VerifyGuards accepted a changed value: %v", err)
+	}
+}
+
+func TestVerifyGuardsRejectsPrepareCreatedIntermediateSymlink(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	configRoot := filepath.Join(root, "configs")
+	target := filepath.Join(configRoot, "api")
+	writeTestSource(t, source, "http://unused.invalid")
+	if err := os.WriteFile(filepath.Join(source, "nested", "application.yaml"), []byte("server:\n  registrationEnabled: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan := testPlan(source, configRoot, target)
+	plan.Guards = []Guard{{File: "nested/application.yaml", Path: "server.registrationEnabled", Value: false}}
+	if err := Materialize(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(root, "prepare-output")
+	if err := os.Mkdir(external, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(external, "application.yaml"), []byte("server:\n  registrationEnabled: false\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(target, "nested")
+	if err := os.Rename(nested, filepath.Join(root, "original-nested")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, nested); err != nil {
+		t.Fatal(err)
+	}
+	err := VerifyGuards(target, plan.Guards)
+	if err == nil || !strings.Contains(err.Error(), "must be a real directory") {
+		t.Fatalf("VerifyGuards accepted a prepare-created intermediate symlink: %v", err)
+	}
+}
+
+func TestMaterializeStrictGuardRequiresSourcePathBeforePatches(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	configRoot := filepath.Join(root, "configs")
+	target := filepath.Join(configRoot, "api")
+	writeTestSource(t, source, "http://unused.invalid")
+	if err := os.Mkdir(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "sentinel"), []byte("previous target"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan := testPlan(source, configRoot, target)
+	plan.Patches = []Patch{{File: "application.yaml", Path: "server.registration.enabled", Value: false}}
+	plan.Guards = []Guard{{File: "application.yaml", Path: "server.registration.enabled", Value: false}}
+	err := Materialize(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), `YAML guard path "server.registration.enabled" does not exist`) {
+		t.Fatalf("strict guard missing-path error = %v", err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(target, "sentinel"))
+	if readErr != nil || string(data) != "previous target" {
+		t.Fatalf("previous target changed after guard failure: data=%q err=%v", data, readErr)
+	}
+}
+
+func TestMaterializeGuardCanExplicitlyCreatePath(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	configRoot := filepath.Join(root, "configs")
+	target := filepath.Join(configRoot, "api")
+	writeTestSource(t, source, "http://unused.invalid")
+	if err := os.Mkdir(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan := testPlan(source, configRoot, target)
+	plan.Guards = []Guard{{
+		File:        "application.yaml",
+		Path:        "server.registration.enabled",
+		Value:       false,
+		AllowCreate: true,
+	}}
+	if err := Materialize(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	application := readYAMLMap(t, filepath.Join(target, "application.yaml"))
+	server := application["server"].(map[string]any)
+	registration := server["registration"].(map[string]any)
+	if registration["enabled"] != false {
+		t.Fatalf("created guard value = %#v, want false", registration["enabled"])
+	}
+}
+
+func TestMaterializeGuardRejectsAmbiguousMappingKeys(t *testing.T) {
+	tests := []struct {
+		name        string
+		application string
+		want        string
+	}{
+		{
+			name: "tagged duplicate",
+			application: "server:\n  registrationEnabled: true\n" +
+				"!unsafe server:\n  registrationEnabled: true\n",
+			want: "unsupported mapping key",
+		},
+		{
+			name: "merge key",
+			application: "defaults: &defaults\n  registrationEnabled: true\n" +
+				"server:\n  <<: *defaults\n",
+			want: "unsupported merge key",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			source := filepath.Join(root, "source")
+			configRoot := filepath.Join(root, "configs")
+			target := filepath.Join(configRoot, "api")
+			writeTestSource(t, source, "http://unused.invalid")
+			if err := os.WriteFile(filepath.Join(source, "application.yaml"), []byte(test.application), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(configRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+			plan := testPlan(source, configRoot, target)
+			plan.Guards = []Guard{{File: "application.yaml", Path: "server.registrationEnabled", Value: false}}
+			err := Materialize(context.Background(), plan)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("guard mapping error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestMaterializeRejectsNonScalarGuardValue(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	configRoot := filepath.Join(root, "configs")
+	target := filepath.Join(configRoot, "api")
+	writeTestSource(t, source, "http://unused.invalid")
+	if err := os.Mkdir(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan := testPlan(source, configRoot, target)
+	plan.Guards = []Guard{{
+		File:  "application.yaml",
+		Path:  "rpc.partner",
+		Value: map[string]any{"discovType": ""},
+	}}
+	err := Materialize(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "YAML guard value must be a non-null scalar") {
+		t.Fatalf("non-scalar guard error = %v", err)
+	}
+}
+
+func TestMaterializeConflictingScalarGuardsFailExactlyAndKeepTarget(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	configRoot := filepath.Join(root, "configs")
+	target := filepath.Join(configRoot, "api")
+	writeTestSource(t, source, "http://unused.invalid")
+	if err := os.Mkdir(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "sentinel"), []byte("previous target"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan := testPlan(source, configRoot, target)
+	plan.Guards = []Guard{
+		{File: "application.yaml", Path: "server.port", Value: false},
+		{File: "application.yaml", Path: "server.port", Value: "false"},
+	}
+	err := Materialize(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("conflicting guards error = %v", err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(target, "sentinel"))
+	if readErr != nil || string(data) != "previous target" {
+		t.Fatalf("previous target changed after exact guard failure: data=%q err=%v", data, readErr)
+	}
+}
+
 func TestMaterializeRepositoryPreservesApplicationWithoutBootstrap(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
