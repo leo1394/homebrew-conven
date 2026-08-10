@@ -1,0 +1,7 @@
+.DS_Store
+/.loom/
+/bin/
+/dist/
+/loom
+*.log
+coverage.out

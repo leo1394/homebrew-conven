@@ -1,0 +1,25 @@
+version: 1
+
+workspace:
+  name: interactive-test
+
+environments:
+  dev:
+    registry: test-registry
+
+services:
+  order-svc:
+    path: order-svc
+    runner:
+      run: [sh, -c, "while :; do sleep 1; done"]
+
+  user-svc:
+    path: user-svc
+    runner:
+      run: [sh, -c, "while :; do sleep 1; done"]
+    dependencies:
+      order-svc:
+        localEnv:
+          ORDER_ROUTE: local
+        remoteEnv:
+          ORDER_ROUTE: remote

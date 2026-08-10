@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./cmd/loom
+
+  homebrew:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Formula
+        run: |
+          ruby -c Formula/loom.rb
+          brew style Formula/loom.rb
+      - name: Install and test HEAD Formula from checkout
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: |
+          set -euo pipefail
+          tap="loom-ci/loom"
+          brew tap-new --no-git "$tap"
+          tap_dir="$(brew --repository "$tap")"
+          formula="$tap_dir/Formula/loom.rb"
+          cp Formula/loom.rb "$formula"
+          ruby -pi -e 'url = "file://" + ENV.fetch("GITHUB_WORKSPACE"); $_ = $_.sub(/^  head .*$/, "  head #{url.inspect}, using: :git")' "$formula"
+          grep -F "head \"file://$GITHUB_WORKSPACE\", using: :git" "$formula"
+          brew install --HEAD "$tap/loom"
+          brew test "$tap/loom"
+
+          loom_bin="$(brew --prefix "$tap/loom")/bin/loom"
+          completion_dir="$RUNNER_TEMP/loom-completions"
+          mkdir -p "$completion_dir"
+          "$loom_bin" __completion bash > "$completion_dir/loom.bash"
+          "$loom_bin" __completion zsh > "$completion_dir/_loom"
+          "$loom_bin" __completion fish > "$completion_dir/loom.fish"
+          grep -Fq "complete -F _loom loom" "$completion_dir/loom.bash"
+          grep -Fq "#compdef loom" "$completion_dir/_loom"
+          grep -Fq "complete -c loom" "$completion_dir/loom.fish"
+          bash_top="$(grep -m 1 -F 'compgen -W "' "$completion_dir/loom.bash" | sed -E 's/.*compgen -W "([^"]+)".*/\1/')"
+          for command in init services config policy doctor help version; do
+            case " $bash_top " in
+              *" $command "*) ;;
+              *) echo "missing bash top-level completion: $command" >&2; exit 1 ;;
+            esac
+            grep -Fq "        '$command:" "$completion_dir/_loom"
+            grep -Fq "complete -c loom -f -n '__fish_use_subcommand' -a $command " "$completion_dir/loom.fish"
+          done
+          for command in discover list status logs start restart stop; do
+            case " $bash_top " in
+              *" $command "*) echo "retained bash top-level completion: $command" >&2; exit 1 ;;
+            esac
+            ! grep -Fq "        '$command:" "$completion_dir/_loom"
+            ! grep -Fq "complete -c loom -f -n '__fish_use_subcommand' -a $command " "$completion_dir/loom.fish"
+          done
+          for action in list registry status logs start restart stop stop-all; do
+            grep -Fq -- "--$action" "$completion_dir/loom.bash"
+            grep -Fq -- "--$action" "$completion_dir/_loom"
+            grep -Fq -- "-l $action" "$completion_dir/loom.fish"
+          done
+          for action in edit import reset; do
+            grep -Fq -- "--$action" "$completion_dir/loom.bash"
+            grep -Fq -- "--$action" "$completion_dir/_loom"
+            grep -Fq -- "-l $action" "$completion_dir/loom.fish"
+          done
+          for shortcut in --dev --test; do
+            grep -Fq -- "$shortcut" "$completion_dir/loom.bash"
+            grep -Fq -- "$shortcut" "$completion_dir/_loom"
+          done
+          grep -Fq -- "-l dev" "$completion_dir/loom.fish"
+          grep -Fq -- "-l test" "$completion_dir/loom.fish"
+          grep -Fq -- "--tail" "$completion_dir/loom.bash"
+          grep -Fq -- "--tail" "$completion_dir/_loom"
+          grep -Fq -- "-l tail" "$completion_dir/loom.fish"
+          grep -Fq -- "--prune" "$completion_dir/loom.bash"
+          grep -Fq -- "--prune" "$completion_dir/_loom"
+          grep -Fq -- "-l prune" "$completion_dir/loom.fish"
+          ! grep -Fq -- "--follow" "$completion_dir/loom.bash" "$completion_dir/_loom"
+          ! grep -Fq -- "-l follow" "$completion_dir/loom.fish"
+          ! grep -Fq -- "--workspace" "$completion_dir/loom.bash" "$completion_dir/_loom"
+          ! grep -Fq -- "--config" "$completion_dir/loom.bash" "$completion_dir/_loom"
+          ! grep -Fq -- "-l workspace" "$completion_dir/loom.fish"
+          ! grep -Fq -- "-l config" "$completion_dir/loom.fish"
+          ! grep -Fq "looming" "$completion_dir/loom.bash" "$completion_dir/_loom" "$completion_dir/loom.fish"

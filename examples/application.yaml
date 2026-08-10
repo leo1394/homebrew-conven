@@ -1,0 +1,103 @@
+version: 1
+
+workspace:
+  name: local-services
+
+environments:
+  dev:
+    registry: nacos
+    env:
+      PROFILE_ACTIVE: dev
+      NACOS_ADDR: nacos-headless.default:8848
+    connection:
+      driver: ktctl
+      # 定制 ktctl 可执行文件：loom config ktctl.path /absolute/path/to/ktctl
+      # 也可用 KTCTL_KUBECONFIG，或执行 loom config ktctl.kubeconfig /secure/dev-kubeconfig
+      # sudo: true
+      kubeconfigEnv: LOOM_KUBECONFIG
+      context: dev-cluster
+      namespace: dev
+      timeout: 30s
+      readiness:
+        - name: nacos
+          address: nacos-headless.default:8848
+
+services:
+  user-svc:
+    path: services/user-svc
+    runner:
+      workdir: .
+      # runWorkdir 默认等于 workdir；若使用下列独立目录，prepare 必须创建它。
+      # runWorkdir: "${runDir}/configs/${service}/runtime"
+      prepare: [go, mod, download]
+      build: [go, build, -o, "${artifact}", ./cmd/server]
+      run: ["${artifact}"]
+    ports:
+      http: 18080
+    env:
+      HTTP_ADDR: 127.0.0.1:18080
+    localEnv:
+      SERVICE_REGISTRATION_ENABLED: "false"
+    health:
+      type: http
+      url: "http://127.0.0.1:${port.http}/health"
+      timeout: 30s
+    dependencies:
+      order-svc:
+        localEnv:
+          ORDER_SVC_ADDR: "127.0.0.1:${services.order-svc.ports.http}"
+          ORDER_SVC_DISCOVERY_ENABLED: "false"
+        remoteEnv:
+          ORDER_SVC_NAME: order-svc
+          ORDER_SVC_DISCOVERY_ENABLED: "true"
+      payment-svc:
+        localEnv:
+          PAYMENT_SVC_ADDR: "127.0.0.1:${services.payment-svc.ports.tcp}"
+          PAYMENT_SVC_DISCOVERY_ENABLED: "false"
+        remoteEnv:
+          PAYMENT_SVC_NAME: payment-svc
+          PAYMENT_SVC_DISCOVERY_ENABLED: "true"
+
+  order-svc:
+    path: services/order-svc
+    runner:
+      workdir: .
+      artifact: "${serviceDir}/build/libs/order-svc.jar"
+      prepare: [./gradlew, dependencies]
+      build: [./gradlew, bootJar]
+      run: [java, -jar, "${artifact}"]
+    ports:
+      http: 18081
+    env:
+      SERVER_PORT: "18081"
+    localEnv:
+      SERVICE_REGISTRATION_ENABLED: "false"
+    health:
+      type: http
+      url: "http://127.0.0.1:${port.http}/actuator/health"
+      timeout: 60s
+    dependencies:
+      payment-svc:
+        localEnv:
+          PAYMENT_SVC_ADDR: "127.0.0.1:${services.payment-svc.ports.tcp}"
+          PAYMENT_SVC_DISCOVERY_ENABLED: "false"
+        remoteEnv:
+          PAYMENT_SVC_NAME: payment-svc
+          PAYMENT_SVC_DISCOVERY_ENABLED: "true"
+
+  payment-svc:
+    path: services/payment-svc
+    runner:
+      workdir: .
+      build: [go, build, -o, "${artifact}", ./cmd/server]
+      run: ["${artifact}"]
+    ports:
+      tcp: 18082
+    env:
+      LISTEN_ADDR: 127.0.0.1:18082
+    localEnv:
+      SERVICE_REGISTRATION_ENABLED: "false"
+    health:
+      type: tcp
+      address: "127.0.0.1:${port.tcp}"
+      timeout: 30s
