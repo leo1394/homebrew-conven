@@ -1,8 +1,8 @@
 class Conven < Formula
   desc "Run a focused set of local microservices with remote dependencies"
   homepage "https://github.com/leo1394/homebrew-conven"
-  url "https://github.com/leo1394/homebrew-conven/archive/refs/tags/v0.2.2.tar.gz"
-  sha256 "baccaff0cf372cc4fdeb4651971c90d06c1dace99e9ea7a9970332e93049b021"
+  url "https://github.com/leo1394/homebrew-conven/archive/refs/tags/v0.2.3.tar.gz"
+  sha256 "d3851afa62201116c6dd9bc2a36860ae4b5862d01464783a14735297352f02fb"
   license "MIT"
   head "https://github.com/leo1394/homebrew-conven.git"
 
