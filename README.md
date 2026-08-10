@@ -1018,6 +1018,34 @@ contain only additional arguments. An enabled connection requires at least one
 TCP `readiness` endpoint. If all endpoints are already reachable, Conven reuses
 the existing network path instead of starting another connection process.
 
+After the ktctl process is launched, `connection.timeout` is Conven's outer
+budget for ktctl initialization and all readiness probes; interactive sudo
+authorization is not counted. A first connection may need to create a shadow
+pod and pull its image, establish multiple port forwards, install routes and
+DNS, and then reach every declared endpoint. Do not give that outer budget the
+same 60 seconds as ktctl's default pod-creation timeout. A practical starting
+point is:
+
+```yaml
+connection:
+  driver: ktctl
+  args:
+    - --podCreationTimeout
+    - "120"
+    - --portForwardTimeout
+    - "30"
+  timeout: 240s
+```
+
+If the connection exits early or times out, Conven reports a pre-cleanup
+snapshot of each readiness endpoint. For the built-in ktctl driver it also
+prints the last lines of `connection.log` after removing terminal control
+characters. These lines are not secret-redacted and may contain cluster names,
+addresses, Pod names, or other internal topology.
+Conven does not automatically retry a failed ktctl Pod-creation request: an EOF
+after `POST /pods` is ambiguous and the server may already have created the
+resource. Inspect the diagnostics and cluster state before running start again.
+
 Connections started by Conven use a current-user global lock, persistent records,
 and workspace leases. When multiple workspaces reuse one managed ktctl
 connection, releasing one workspace does not interrupt the others. Conven stops

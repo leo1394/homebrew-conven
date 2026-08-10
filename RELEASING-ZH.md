@@ -268,8 +268,9 @@ git diff -- Formula/conven.rb
 
 ### 稳定 Formula 门禁
 
-当前 CI 只验证 HEAD Formula 路径，不会安装稳定 URL。执行 `--apply` 后应立即在一次性
-Homebrew 测试机上执行以下稳定 Formula 门禁；手动提交独立完成结果前也必须执行：
+当前 CI 会从 checkout 同时安装并测试稳定 URL 和 HEAD Formula。执行 `--apply` 后应立即
+在一次性 Homebrew 测试机上额外执行以下更严格的稳定 Formula 门禁；手动提交独立完成
+结果前也必须执行。该门禁增加严格 audit 和显式源码构建：
 
 ```bash
 CONVEN_TEST_TAP="conven-release/conven"

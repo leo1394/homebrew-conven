@@ -176,7 +176,7 @@ func printVerifiedIsolation(output io.Writer, service PlannedService) {
 	if service.Config.Isolation.RegistrationMode == "config" {
 		registration = "disabled via " + guardLocation(*service.Config.Isolation.RegistrationGuard)
 	}
-	listener := service.Config.Isolation.ListenerGuard.Value.(string)
+	listener := effectiveListener(service.Config)
 	fmt.Fprintf(output, "%s %s: registration %s; listener loopback %s; runtime config %s\n", style.Success("✓ Local isolation"), style.Identifier(service.Name), registration, style.Identifier(listener), runtimeConfigDescription(service.Config))
 }
 
@@ -188,8 +188,16 @@ func plannedIsolationDescription(config *PlannedConfig) string {
 	if config.Isolation.RegistrationMode == "config" {
 		registration = "disabled via " + guardLocation(*config.Isolation.RegistrationGuard)
 	}
-	listener := config.Isolation.ListenerGuard.Value.(string)
+	listener := effectiveListener(config)
 	return "registration=" + registration + "; listener=loopback(" + listener + "); runtime-config=" + runtimeConfigDescription(config)
+}
+
+func effectiveListener(config *PlannedConfig) string {
+	listener := config.Isolation.ListenerGuard.Value.(string)
+	if config.Isolation.ListenerGuard.Path == "host" && config.Isolation.ListenerPort > 0 {
+		return net.JoinHostPort(listener, strconv.Itoa(config.Isolation.ListenerPort))
+	}
+	return listener
 }
 
 func appendIsolationEvidence(service PlannedService, connection ConnectionConfig) error {
@@ -204,7 +212,7 @@ func appendIsolationEvidence(service PlannedService, connection ConnectionConfig
 	if service.Config.Isolation.RegistrationMode == "config" {
 		registration = "disabled(" + guardLocation(*service.Config.Isolation.RegistrationGuard) + ")"
 	}
-	listener := service.Config.Isolation.ListenerGuard.Value.(string)
+	listener := effectiveListener(service.Config)
 	_, writeErr := fmt.Fprintf(file, "[conven] local isolation verified: registration=%s, listener=loopback(%s), runtime-config=%s, remote-inbound=%s\n", registration, listener, runtimeConfigDescription(service.Config), inboundRoutingDescription(connection))
 	closeErr := file.Close()
 	return errors.Join(writeErr, closeErr)

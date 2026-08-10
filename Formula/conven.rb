@@ -16,7 +16,7 @@ class Conven < Formula
   test do
     ENV["HOME"] = testpath.to_s
     if build.head?
-      assert_equal "conven 0.2.2\n", shell_output("#{bin}/conven --version")
+      assert_equal "conven 0.2.3\n", shell_output("#{bin}/conven --version")
     else
       expected_version = "conven #{version}\n"
       actual_version = shell_output("#{bin}/conven --version")
@@ -42,7 +42,7 @@ class Conven < Formula
       assert_path_exists plugin
       assert_predicate plugin, :executable?
       assert_includes shell_output("#{bin}/conven plugins --list").lines, "formula-plugin\n"
-      manifest.write("#{manifest.read}\n# preserve this line\n")
+      manifest.write("\n# preserve this line\n", mode: "a")
       expected_manifest = manifest.read
       system bin/"conven", "init"
       assert_equal expected_manifest, manifest.read

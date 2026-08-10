@@ -298,10 +298,11 @@ release.
 
 ### Stable Formula gate
 
-Current CI verifies the HEAD Formula path but does not install the stable URL.
-Immediately after `--apply` or before manually committing a standalone
-finalization, run the following stable Formula gate on a disposable Homebrew
-test machine:
+Current CI installs and tests both the stable URL and the HEAD Formula path from
+the checkout. Immediately after `--apply` or before manually committing a
+standalone finalization, also run the following stricter stable Formula gate on
+a disposable Homebrew test machine; it adds a strict audit and an explicit
+source build:
 
 ```bash
 CONVEN_TEST_TAP="conven-release/conven"

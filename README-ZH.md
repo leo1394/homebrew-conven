@@ -864,6 +864,28 @@ workspace 运行时模板和注入的环境变量具有以下固定含义：
 参数，不要再写 `connect`。启用连接时必须配置至少一个 TCP `readiness` 端点；若
 端点已经可达，Conven 会复用现有网络，不再启动新的连接进程。
 
+ktctl 进程启动后，`connection.timeout` 是 Conven 为 ktctl 初始化和全部 readiness
+探测设置的外层总预算；交互式 sudo 授权不计入其中。首次连接可能需要创建 shadow pod
+并拉取其镜像、建立多次端口转发、安装路由和 DNS，最后再连通所有声明的端点。外层预算
+不应与 ktctl 默认的 60 秒 pod 创建超时相同。建议从以下配置开始：
+
+```yaml
+connection:
+  driver: ktctl
+  args:
+    - --podCreationTimeout
+    - "120"
+    - --portForwardTimeout
+    - "30"
+  timeout: 240s
+```
+
+连接提前退出或超时后，Conven 会输出清理连接前每个 readiness endpoint 的状态快照。
+对于内置 ktctl driver，还会输出去除终端控制字符后的 `connection.log` 尾部；这些内容
+不会进行凭据脱敏，可能包含集群名称、地址、Pod 名称或其他内部拓扑。Conven 不会自动
+重试失败的 ktctl Pod 创建请求：`POST /pods` 返回 EOF 时无法确认服务端是否已经创建
+资源，应先检查诊断信息和集群状态，再重新执行 start。
+
 Conven 对自己启动的连接使用当前用户范围的全局锁、持久连接记录和 workspace 租约。
 多个 workspace 复用同一个 ktctl 连接时，释放其中一个 workspace 不会中断其他租约；
 最后一个租约释放后才会停止连接。若端点由 Conven 之外的网络或进程提供，Conven 只复用

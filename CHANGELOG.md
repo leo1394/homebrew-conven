@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3 - 2026-08-11
+
+- 改进 ktctl connection 失败诊断：观察实际启动命令的退出状态，并在提前退出或
+  readiness 超时时输出清理前的 endpoint 状态和去除控制字符后的 ktctl 日志尾部；
+  日志不做凭据脱敏且只对内置 ktctl 自动输出。短超时会给出 120 秒 pod 创建、30 秒
+  端口转发和 240 秒总预算建议。`POST /pods` EOF 结果不明确，继续 fail-closed，
+  不自动重试。
+- HTTP 服务的本地隔离输出现在将分离的 `host` 和 `port` 合并为完整 loopback
+  监听地址；仅修正计划、启动校验和日志展示，不改变配置物化及隔离规则。
+- 修复 macOS 回滚测试的时序竞态，并兼容新版 Homebrew 对 Formula 测试文件覆写的
+  保护，恢复 stable/HEAD Formula 测试。
+
 ## 0.2.2 - 2026-08-11
 
 - `conven plugins --install` 遇到同名插件时只在交互终端询问是否覆盖；仅 `y/yes`

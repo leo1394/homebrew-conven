@@ -314,6 +314,207 @@ func TestConnectionStateDirectoryRejectsSymlinkComponents(t *testing.T) {
 	}
 }
 
+func TestEnsureConnectionExitReportsStatusLogAndEndpoints(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+	directory := t.TempDir()
+	logPath := filepath.Join(directory, "connection.log")
+	ktctl := filepath.Join(directory, "ktctl")
+	if err := os.WriteFile(ktctl, []byte("#!/bin/sh\nprintf '\\033[31mPost /api/v1/namespaces/default/pods: EOF\\033[0m\\n'\nsleep 0.5\nexit 7\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	startedAt := time.Now()
+
+	process, err := EnsureConnection(context.Background(), ConnectionConfig{
+		Driver:     "ktctl",
+		Command:    ktctl,
+		Timeout:   3 * time.Second,
+		Readiness: []ConnectionEndpoint{{Name: "cluster-api", Address: address}},
+	}, logPath, "exit-diagnostics-workspace", &output)
+	if err == nil {
+		t.Fatal("exited connection unexpectedly became ready")
+	}
+	if process != nil {
+		t.Fatalf("exited connection returned residual process: %#v", process)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= 2*time.Second {
+		t.Fatalf("exited connection was not reported promptly: %s", elapsed)
+	}
+	for _, expected := range []string{"exit status 7", logPath} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("exit error %q does not contain %q", err, expected)
+		}
+	}
+	for _, expected := range []string{"first-time shadow pod creation", "cluster-api", address, "secrets are not redacted", "Post /api/v1/namespaces/default/pods: EOF"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("connection diagnostics %q do not contain %q", output.String(), expected)
+		}
+	}
+	if strings.Contains(output.String(), "\x1b") {
+		t.Fatalf("connection diagnostics retained raw terminal escapes: %q", output.String())
+	}
+}
+
+func TestEnsureConnectionReportsElevatedTargetExit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	directory := t.TempDir()
+	fakeSudo := filepath.Join(directory, "sudo")
+	pidPath := filepath.Join(directory, "elevated.pid")
+	script := `#!/bin/sh
+if [ "$1" = "-v" ]; then
+  exit 0
+fi
+if [ "$1" = "-n" ] && [ "$2" = "-v" ]; then
+  exit 0
+fi
+if [ "$1" = "-n" ]; then
+  shift
+  echo 'Post /api/v1/namespaces/default/pods: EOF'
+  "$1" >/dev/null 2>&1 &
+  child=$!
+  echo "$child" > "$CONVEN_TEST_ELEVATED_PID"
+  sleep 0.5
+  kill "$child" 2>/dev/null || true
+  wait "$child" 2>/dev/null || true
+  exit 7
+fi
+exit 1
+`
+	if err := os.WriteFile(fakeSudo, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CONVEN_TEST_ELEVATED_PID", pidPath)
+	yesPath, err := exec.LookPath("yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+	var output bytes.Buffer
+	process, err := EnsureConnection(context.Background(), ConnectionConfig{
+		Driver:     "ktctl",
+		Command:    yesPath,
+		Sudo:       true,
+		Timeout:    3 * time.Second,
+		Readiness:  []ConnectionEndpoint{{Name: "cluster-api", Address: address}},
+	}, filepath.Join(directory, "connection.log"), "elevated-exit-workspace", &output)
+	if err == nil || !strings.Contains(err.Error(), "exit status 7") {
+		t.Fatalf("elevated connection process=%#v error=%v, want exit status 7", process, err)
+	}
+	if process != nil {
+		t.Fatalf("elevated connection returned residual process: %#v", process)
+	}
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ProcessAlive(pid) {
+		t.Fatalf("elevated connection target %d remains active", pid)
+	}
+	if !strings.Contains(output.String(), "Post /api/v1/namespaces/default/pods: EOF") {
+		t.Fatalf("elevated connection diagnostics = %q", output.String())
+	}
+}
+
+func TestConnectionProcessStateTreatsZombieAsExited(t *testing.T) {
+	for _, test := range []struct {
+		state string
+		alive bool
+	}{
+		{state: "S+", alive: true},
+		{state: "R", alive: true},
+		{state: "Z"},
+		{state: "Z+"},
+		{state: ""},
+	} {
+		if actual := connectionProcessStateAlive(test.state); actual != test.alive {
+			t.Fatalf("process state %q alive = %t, want %t", test.state, actual, test.alive)
+		}
+	}
+}
+
+func TestEnsureConnectionCancellationWinsOverConcurrentExit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+	directory := t.TempDir()
+	startedPath := filepath.Join(directory, "started")
+	exitPath := filepath.Join(directory, "exit")
+	ktctl := filepath.Join(directory, "ktctl")
+	if err := os.WriteFile(ktctl, []byte("#!/bin/sh\necho 'connection detail should stay in the private log'\n: > \"$CONVEN_TEST_CONNECTION_STARTED\"\nwhile [ ! -e \"$CONVEN_TEST_CONNECTION_EXIT\" ]; do sleep 0.01; done\nexit 7\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CONVEN_TEST_CONNECTION_STARTED", startedPath)
+	t.Setenv("CONVEN_TEST_CONNECTION_EXIT", exitPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var output bytes.Buffer
+	type result struct {
+		process *ConnectionProcess
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		process, err := EnsureConnection(ctx, ConnectionConfig{
+			Driver:     "ktctl",
+			Command:    ktctl,
+			Timeout:    5 * time.Second,
+			Readiness:  []ConnectionEndpoint{{Name: "cancel-target", Address: address}},
+		}, filepath.Join(directory, "connection.log"), "cancel-workspace", &output)
+		done <- result{process: process, err: err}
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(startedPath); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("connection process did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := os.WriteFile(exitPath, []byte("exit\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.process != nil {
+			t.Fatalf("cancelled connection returned residual process: %#v", got.process)
+		}
+		if !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("cancelled connection error = %v, want context.Canceled", got.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled connection remained blocked")
+	}
+	if strings.Contains(output.String(), "Readiness cancel-target (") || strings.Contains(output.String(), "connection detail should stay") {
+		t.Fatalf("cancelled connection emitted post-cancel diagnostics: %q", output.String())
+	}
+}
+
 func TestEnsureConnectionTimeoutStopsOwnedProcessGroup(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -324,19 +525,20 @@ func TestEnsureConnectionTimeoutStopsOwnedProcessGroup(t *testing.T) {
 	listener.Close()
 	directory := t.TempDir()
 	pidPath := filepath.Join(directory, "connection.pid")
+	logPath := filepath.Join(directory, "connection.log")
+	ktctl := filepath.Join(directory, "ktctl")
+	if err := os.WriteFile(ktctl, []byte("#!/bin/sh\necho $$ > \"$CONVEN_TEST_CONNECTION_PID\"\necho 'ERR Exit: Post /api/v1/namespaces/default/pods: EOF'\ntrap '' INT TERM\nwhile :; do sleep 1; done\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CONVEN_TEST_CONNECTION_PID", pidPath)
+	var output bytes.Buffer
 
 	process, err := EnsureConnection(context.Background(), ConnectionConfig{
-		Driver:  "command",
-		Command: "sh",
-		Args: []string{
-			"-c",
-			"echo $$ > \"$1\"; trap '' INT TERM; while :; do sleep 1; done",
-			"sh",
-			pidPath,
-		},
-		Timeout:   100 * time.Millisecond,
-		Readiness: []ConnectionEndpoint{{Name: "closed", Address: address}},
-	}, filepath.Join(directory, "connection.log"), "test-workspace", io.Discard)
+		Driver:     "ktctl",
+		Command:    ktctl,
+		Timeout:   750 * time.Millisecond,
+		Readiness: []ConnectionEndpoint{{Name: "closed-endpoint", Address: address}},
+	}, logPath, "test-workspace", &output)
 	if err == nil {
 		t.Fatal("unreachable connection unexpectedly became ready")
 	}
@@ -353,6 +555,27 @@ func TestEnsureConnectionTimeoutStopsOwnedProcessGroup(t *testing.T) {
 	}
 	if ProcessGroupAlive(pid) {
 		t.Fatalf("connection process group %d is still active", pid)
+	}
+	for _, expected := range []string{"closed-endpoint", address, "ERR Exit: Post /api/v1/namespaces/default/pods: EOF"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("timeout diagnostics %q do not contain %q", output.String(), expected)
+		}
+	}
+	if !strings.Contains(err.Error(), logPath) {
+		t.Fatalf("timeout error %q does not contain log path %q", err, logPath)
+	}
+	stateDirectory, err := connectionStateDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(stateDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".json" {
+			t.Fatalf("failed connection retained registry record %q", entry.Name())
+		}
 	}
 }
 

@@ -31,11 +31,10 @@ func TestPrintPlanUsesPlainStageAndDetailStructure(t *testing.T) {
 					Framework: "go-zero",
 					Discovery: "consul",
 					Isolation: PlannedIsolation{
-						RegistrationMode:  "config",
-						RegistrationGuard: &materialize.Guard{File: "application.yaml", Path: "discovType", Value: ""},
-						ListenerGuard:     materialize.Guard{File: "application.yaml", Path: "listenOn", Value: "127.0.0.1:18080"},
-						ListenerPort:      18080,
-						RuntimeConfigDir:  true,
+						RegistrationMode: "not-applicable",
+						ListenerGuard:    materialize.Guard{File: "application.yaml", Path: "host", Value: "127.0.0.1"},
+						ListenerPort:     18080,
+						RuntimeConfigDir: true,
 					},
 					Plan: materialize.Plan{
 						SourceDriver:     materialize.SourceApollo,
@@ -66,7 +65,7 @@ func TestPrintPlanUsesPlainStageAndDetailStructure(t *testing.T) {
 		"==> Config api\n" +
 		"  - Drivers: policy=retail, framework=go-zero, source=apollo, discovery=consul, materializer=yaml-overlay\n" +
 		"  - Output: /workspace/.conven/runtime/current/configs/api\n" +
-		"  - Local isolation: registration=disabled via application.yaml:discovType; listener=loopback(127.0.0.1:18080); runtime-config=guarded-bootstrap(config-local.yaml->application.yaml)\n" +
+		"  - Local isolation: registration=not-applicable; listener=loopback(127.0.0.1:18080); runtime-config=guarded-bootstrap(config-local.yaml->application.yaml)\n" +
 		"  - Local route: partner via partnerRpc (replace)\n" +
 		"✓ Dry run complete; no connection, config fetch/materialization, build, process, or state changes were made.\n"
 	if output.String() != want {
@@ -74,6 +73,24 @@ func TestPrintPlanUsesPlainStageAndDetailStructure(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "\x1b[") {
 		t.Fatalf("non-terminal output contains ANSI: %q", output.String())
+	}
+}
+
+func TestPlannedIsolationDescriptionKeepsRPCListenerAddress(t *testing.T) {
+	registration := materialize.Guard{File: "application.yaml", Path: "discovType", Value: ""}
+	config := &PlannedConfig{
+		Isolation: PlannedIsolation{
+			RegistrationMode:  "config",
+			RegistrationGuard: &registration,
+			ListenerGuard:     materialize.Guard{File: "application.yaml", Path: "listenOn", Value: "127.0.0.1:18081"},
+			ListenerPort:      18081,
+			RuntimeConfigDir:  true,
+		},
+		Plan: materialize.Plan{Application: "application.yaml", RuntimeBootstrap: "config-local.yaml"},
+	}
+	want := "registration=disabled via application.yaml:discovType; listener=loopback(127.0.0.1:18081); runtime-config=guarded-bootstrap(config-local.yaml->application.yaml)"
+	if got := plannedIsolationDescription(config); got != want {
+		t.Fatalf("isolation description = %q, want %q", got, want)
 	}
 }
 

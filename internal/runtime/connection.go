@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -39,6 +40,20 @@ type ConnectionConfig struct {
 	Readiness  []ConnectionEndpoint
 }
 
+type connectionEndpointDiagnostic struct {
+	Name      string
+	Address   string
+	Reachable bool
+	Detail    string
+}
+
+type connectionDiagnostics struct {
+	Endpoints      []connectionEndpointDiagnostic
+	IncludeLogTail bool
+	LogLines       []string
+	LogError       error
+}
+
 type connectionRecord struct {
 	Version     int                  `json:"version"`
 	Fingerprint string               `json:"fingerprint"`
@@ -47,6 +62,9 @@ type connectionRecord struct {
 }
 
 const connectionLeaseGrace = 5 * time.Minute
+const connectionDiagnosticLogLines = 12
+const connectionDiagnosticProbeTimeout = 750 * time.Millisecond
+const connectionExitReapGrace = 500 * time.Millisecond
 
 func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath string, lease string, output io.Writer) (*ConnectionProcess, error) {
 	if config.Driver == "" || config.Driver == "none" {
@@ -166,38 +184,47 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 			return nil, fmt.Errorf("an unmanaged ktctl connect process is already running with pid %d; wait for it or stop it before Conven starts another", pids[0])
 		}
 	}
+	if config.Timeout <= 0 {
+		config.Timeout = 60 * time.Second
+	}
+	if config.Driver == "ktctl" && config.Timeout <= 60*time.Second {
+		fmt.Fprintln(output, style.Warning("Warning: ktctl connection timeout is 60s or less; first-time shadow pod creation may use the entire budget."))
+		fmt.Fprintln(output, style.Detail("Recommended: timeout: 240s with args [--podCreationTimeout, \"120\", --portForwardTimeout, \"30\"]."))
+	}
 	if config.Sudo {
 		if err := authorizeSudo(ctx, output); err != nil {
 			return nil, fmt.Errorf("sudo authorization failed: %w", err)
 		}
 	}
-	process, err := startConnection(ctx, config.Driver, argv, managedArgv, logPath, fingerprint, config.Sudo)
+	process, completed, err := startConnectionObserved(ctx, config.Driver, argv, managedArgv, logPath, fingerprint, config.Sudo)
 	if err != nil {
 		return nil, err
-	}
-	if config.Timeout <= 0 {
-		config.Timeout = 60 * time.Second
 	}
 	fmt.Fprintf(output, "%s %s\n", style.Stage("Waiting for connection readiness"), style.Identifier(config.Driver))
 	waitContext, cancel := context.WithTimeout(ctx, config.Timeout)
 	defer cancel()
+	var lastEndpointDiagnostics []connectionEndpointDiagnostic
 	for {
 		if err := waitContext.Err(); err != nil {
-			stopErr := stopConnection(process, false)
-			if stopErr != nil {
-				return process, errors.Join(fmt.Errorf("%s connection readiness: %w", config.Driver, err), stopErr)
-			}
-			return nil, fmt.Errorf("%s connection readiness: %w", config.Driver, err)
+			failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, err, logPath)
+			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 		}
-		if !ProcessAlive(process.PID) {
-			stopErr := stopConnection(process, false)
-			failure := fmt.Errorf("%s connection exited before endpoints became reachable; log: %s", config.Driver, logPath)
-			if stopErr != nil {
-				return process, errors.Join(failure, stopErr)
-			}
-			return nil, failure
+		if exitErr, exited := connectionCommandExit(completed); exited {
+			failure := fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, exitErr, logPath)
+			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 		}
-		if endpointsReady(waitContext, config.Readiness) {
+		if !connectionProcessAlive(process.PID) {
+			exitErr := waitForConnectionCommandExit(waitContext, completed, connectionExitReapGrace)
+			if contextErr := waitContext.Err(); contextErr != nil {
+				failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath)
+				return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+			}
+			failure := fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, exitErr, logPath)
+			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+		}
+		var ready bool
+		lastEndpointDiagnostics, ready = probeConnectionEndpoints(waitContext, config.Readiness)
+		if ready {
 			process.Managed = true
 			record := &connectionRecord{
 				Version:      1,
@@ -219,8 +246,123 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 		select {
 		case <-waitContext.Done():
 			timer.Stop()
+		case exitErr := <-completed:
+			timer.Stop()
+			if contextErr := waitContext.Err(); contextErr != nil {
+				failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath)
+				return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+			}
+			failure := fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, normalizeConnectionExit(exitErr), logPath)
+			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 		case <-timer.C:
 		}
+	}
+}
+
+func connectionCommandExit(completed <-chan error) (error, bool) {
+	select {
+	case err := <-completed:
+		return normalizeConnectionExit(err), true
+	default:
+		return nil, false
+	}
+}
+
+func waitForConnectionCommandExit(ctx context.Context, completed <-chan error, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-completed:
+		return normalizeConnectionExit(err)
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return errors.New("process is no longer running")
+	}
+}
+
+func normalizeConnectionExit(err error) error {
+	if err == nil {
+		return errors.New("exit status 0")
+	}
+	return err
+}
+
+func connectionProcessAlive(pid int) bool {
+	if !ProcessAlive(pid) {
+		return false
+	}
+	command := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=")
+	command.Env = CommandEnvironment(map[string]string{"LC_ALL": "C"})
+	output, err := command.Output()
+	if err != nil {
+		return ProcessAlive(pid)
+	}
+	return connectionProcessStateAlive(string(output))
+}
+
+func connectionProcessStateAlive(state string) bool {
+	fields := strings.Fields(state)
+	return len(fields) > 0 && !strings.HasPrefix(fields[0], "Z")
+}
+
+func failConnectionAttempt(ctx context.Context, process *ConnectionProcess, config ConnectionConfig, logPath string, output io.Writer, failure error, endpoints []connectionEndpointDiagnostic) (*ConnectionProcess, error) {
+	diagnostics := captureConnectionDiagnostics(ctx, config, logPath, endpoints)
+	stopErr := stopConnection(process, false)
+	printConnectionDiagnostics(config, logPath, output, diagnostics)
+	if stopErr != nil {
+		return process, errors.Join(failure, stopErr)
+	}
+	return nil, failure
+}
+
+func captureConnectionDiagnostics(ctx context.Context, config ConnectionConfig, logPath string, endpoints []connectionEndpointDiagnostic) connectionDiagnostics {
+	diagnostics := connectionDiagnostics{Endpoints: append([]connectionEndpointDiagnostic(nil), endpoints...)}
+	if ctx.Err() != nil {
+		diagnostics.Endpoints = nil
+		return diagnostics
+	}
+	if len(diagnostics.Endpoints) == 0 {
+		probeContext, cancel := context.WithTimeout(ctx, connectionDiagnosticProbeTimeout)
+		diagnostics.Endpoints, _ = probeConnectionEndpoints(probeContext, config.Readiness)
+		cancel()
+	}
+	if config.Driver != "ktctl" {
+		return diagnostics
+	}
+	diagnostics.IncludeLogTail = true
+	diagnostics.LogLines, diagnostics.LogError = readLastLines(logPath, connectionDiagnosticLogLines)
+	return diagnostics
+}
+
+func printConnectionDiagnostics(config ConnectionConfig, logPath string, output io.Writer, diagnostics connectionDiagnostics) {
+	style := terminal.New(output)
+	fmt.Fprintf(output, "%s %s; diagnostics:\n", style.Failure("✗ Connection failed:"), style.Identifier(config.Driver))
+	for _, endpoint := range diagnostics.Endpoints {
+		name := sanitizeDashboardText(endpoint.Name)
+		address := sanitizeDashboardText(endpoint.Address)
+		if endpoint.Reachable {
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("Readiness %s (%s): reachable", style.Identifier(name), address)))
+			continue
+		}
+		detail := strings.TrimSpace(sanitizeDashboardText(endpoint.Detail))
+		fmt.Fprintln(output, style.Detail(fmt.Sprintf("Readiness %s (%s): unreachable: %s", style.Identifier(name), address, detail)))
+	}
+	if config.Driver != "ktctl" || !diagnostics.IncludeLogTail {
+		fmt.Fprintln(output, style.Detail("Connection log: "+logPath))
+		return
+	}
+	if diagnostics.LogError != nil {
+		fmt.Fprintln(output, style.Detail(fmt.Sprintf("Connection log: %s (unavailable: %s)", logPath, sanitizeDashboardText(diagnostics.LogError.Error()))))
+		return
+	}
+	fmt.Fprintln(output, style.Detail("Connection log tail (control characters removed; secrets are not redacted): "+logPath))
+	for _, line := range diagnostics.LogLines {
+		line = strings.TrimSpace(sanitizeDashboardText(line))
+		if line == "" {
+			continue
+		}
+		fmt.Fprintf(output, "[%s] %s\n", style.Identifier("connection/"+config.Driver), line)
 	}
 }
 
@@ -277,9 +419,14 @@ func buildConnectionCommands(config ConnectionConfig) (managed []string, launch 
 }
 
 func startConnection(ctx context.Context, driver string, launchArgv []string, managedArgv []string, logPath string, fingerprint string, elevated bool) (*ConnectionProcess, error) {
+	process, _, err := startConnectionObserved(ctx, driver, launchArgv, managedArgv, logPath, fingerprint, elevated)
+	return process, err
+}
+
+func startConnectionObserved(ctx context.Context, driver string, launchArgv []string, managedArgv []string, logPath string, fingerprint string, elevated bool) (*ConnectionProcess, <-chan error, error) {
 	logFile, err := openFreshLog(logPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	command := exec.Command(launchArgv[0], launchArgv[1:]...)
 	command.Stdin = nil
@@ -288,7 +435,7 @@ func startConnection(ctx context.Context, driver string, launchArgv []string, ma
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
 		logFile.Close()
-		return nil, fmt.Errorf("start %s connection: %w", driver, err)
+		return nil, nil, fmt.Errorf("start %s connection: %w", driver, err)
 	}
 	launchPID := command.Process.Pid
 	pid := launchPID
@@ -302,7 +449,7 @@ func startConnection(ctx context.Context, driver string, launchArgv []string, ma
 			_ = command.Process.Kill()
 			_ = command.Wait()
 			logFile.Close()
-			return nil, errors.Join(fmt.Errorf("identify elevated %s connection target: %w", driver, err), cleanupErr)
+			return nil, nil, errors.Join(fmt.Errorf("identify elevated %s connection target: %w", driver, err), cleanupErr)
 		}
 	}
 	pgid, err := syscall.Getpgid(pid)
@@ -310,7 +457,7 @@ func startConnection(ctx context.Context, driver string, launchArgv []string, ma
 		syscall.Kill(launchPID, syscall.SIGTERM)
 		_ = command.Wait()
 		logFile.Close()
-		return nil, fmt.Errorf("read %s connection process group: %w", driver, err)
+		return nil, nil, fmt.Errorf("read %s connection process group: %w", driver, err)
 	}
 	identity, err := processIdentity(pid)
 	if err != nil {
@@ -322,10 +469,11 @@ func startConnection(ctx context.Context, driver string, launchArgv []string, ma
 		_ = command.Process.Kill()
 		_ = command.Wait()
 		logFile.Close()
-		return nil, fmt.Errorf("read %s connection process identity: %w", driver, err)
+		return nil, nil, fmt.Errorf("read %s connection process identity: %w", driver, err)
 	}
+	completed := make(chan error, 1)
 	go func() {
-		_ = command.Wait()
+		completed <- command.Wait()
 	}()
 	logFile.Close()
 	return &ConnectionProcess{
@@ -340,7 +488,7 @@ func startConnection(ctx context.Context, driver string, launchArgv []string, ma
 		Managed:     false,
 		Elevated:    elevated,
 		Fingerprint: fingerprint,
-	}, nil
+	}, completed, nil
 }
 
 type processTreeEntry struct {
@@ -526,15 +674,36 @@ func runningConnectionCommandPIDs(expectedExecutable string) ([]int, error) {
 }
 
 func endpointsReady(ctx context.Context, endpoints []ConnectionEndpoint) bool {
-	for _, endpoint := range endpoints {
-		dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-		connection, err := dialer.DialContext(ctx, "tcp", endpoint.Address)
-		if err != nil {
-			return false
-		}
-		connection.Close()
+	_, ready := probeConnectionEndpoints(ctx, endpoints)
+	return ready
+}
+
+func probeConnectionEndpoints(ctx context.Context, endpoints []ConnectionEndpoint) ([]connectionEndpointDiagnostic, bool) {
+	diagnostics := make([]connectionEndpointDiagnostic, len(endpoints))
+	var wait sync.WaitGroup
+	for index, endpoint := range endpoints {
+		wait.Add(1)
+		go func(index int, endpoint ConnectionEndpoint) {
+			defer wait.Done()
+			diagnostic := connectionEndpointDiagnostic{Name: endpoint.Name, Address: endpoint.Address}
+			dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
+			connection, err := dialer.DialContext(ctx, "tcp", endpoint.Address)
+			if err != nil {
+				diagnostic.Detail = err.Error()
+				diagnostics[index] = diagnostic
+				return
+			}
+			connection.Close()
+			diagnostic.Reachable = true
+			diagnostics[index] = diagnostic
+		}(index, endpoint)
 	}
-	return true
+	wait.Wait()
+	ready := true
+	for _, diagnostic := range diagnostics {
+		ready = ready && diagnostic.Reachable
+	}
+	return diagnostics, ready
 }
 
 func connectionFingerprint(config ConnectionConfig) string {

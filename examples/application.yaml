@@ -17,7 +17,12 @@ environments:
       kubeconfigEnv: CONVEN_KUBECONFIG
       context: dev-cluster
       namespace: dev
-      timeout: 30s
+      args:
+        - --podCreationTimeout
+        - "120"
+        - --portForwardTimeout
+        - "30"
+      timeout: 240s
       readiness:
         - name: nacos
           address: nacos-headless.default:8848

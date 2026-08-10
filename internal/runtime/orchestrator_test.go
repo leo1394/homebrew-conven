@@ -821,17 +821,46 @@ func TestStartPreservesStateWhenRollbackCannotVerifyOrphanGroup(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	leaderPIDPath := filepath.Join(workspaceRoot, "api", "leader.pid")
+	releasePath := filepath.Join(workspaceRoot, "api", "release")
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{
 		Version:   1,
 		Workspace: model.Workspace{Name: "orphan-rollback"},
 		Services: map[string]model.Service{
 			"api": {
 				Path:   "api",
-				Runner: model.Runner{Run: []string{"sh", "-c", "trap '' HUP; sleep 600 & sleep 0.2"}},
+				Runner: model.Runner{Run: []string{"sh", "-c", `trap '' HUP
+sleep 600 &
+printf '%s\n' "$$" > "$1"
+while [ ! -f "$2" ]; do sleep 0.01; done`, "sh", leaderPIDPath, releasePath}},
+				Health: model.Health{Type: "command", Command: []string{"sh", "-c", `while [ ! -s "$1" ]; do sleep 0.01; done
+: > "$2"
+while kill -0 "$(cat "$1")" 2>/dev/null; do sleep 0.01; done
+exit 1`, "sh", leaderPIDPath, releasePath}, Timeout: "2s"},
 			},
 		},
 	})
-	_, err := Start(context.Background(), workspace, StartOptions{
+	var returnedSession *Session
+	t.Cleanup(func() {
+		sessions := []*Session{returnedSession}
+		if savedSession, err := workspace.Store.Load(); err == nil {
+			sessions = append(sessions, savedSession)
+		}
+		stoppedGroups := make(map[int]bool)
+		for _, session := range sessions {
+			if session == nil {
+				continue
+			}
+			for _, process := range session.Services {
+				if process.PGID <= 0 || stoppedGroups[process.PGID] {
+					continue
+				}
+				_ = ForceStopProcessGroup(process, time.Second)
+				stoppedGroups[process.PGID] = true
+			}
+		}
+	})
+	returnedSession, err := Start(context.Background(), workspace, StartOptions{
 		Common:   CommonOptions{Environment: "dev"},
 		Services: []string{"api"},
 		Output:   &strings.Builder{},
