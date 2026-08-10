@@ -1,6 +1,8 @@
 class Loom < Formula
   desc "Run a focused set of local microservices with remote dependencies"
   homepage "https://github.com/leo1394/homebrew-loom"
+  url "https://github.com/leo1394/homebrew-loom/archive/refs/tags/v0.1.0.tar.gz"
+  sha256 "16f53e4a519539f2b889fbd24fd27d5e8b5d61600ffd9e805ce7c84dcc7497cd"
   license "MIT"
   head "https://github.com/leo1394/homebrew-loom.git"
 
