@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -50,10 +51,22 @@ func RunForeground(ctx context.Context, argv []string, directory string, environ
 	if err != nil {
 		return err
 	}
-	defer logFile.Close()
-	writers := []io.Writer{logFile}
+	runErr := runForeground(ctx, argv, directory, environment, output, logFile, logPath)
+	if err := logFile.Close(); err != nil {
+		closeErr := fmt.Errorf("close command log %s: %w", logPath, err)
+		if runErr != nil {
+			return errors.Join(runErr, closeErr)
+		}
+		return closeErr
+	}
+	return runErr
+}
+
+func runForeground(ctx context.Context, argv []string, directory string, environment []string, output io.Writer, logOutput io.Writer, logPath string) error {
+	logWriter := &commandOutputWriter{output: logOutput}
+	writers := []io.Writer{logWriter}
 	if output != nil {
-		writers = append(writers, output)
+		writers = append(writers, &commandOutputWriter{output: output})
 	}
 	command := exec.Command(argv[0], argv[1:]...)
 	command.Dir = directory
@@ -62,12 +75,47 @@ func RunForeground(ctx context.Context, argv []string, directory string, environ
 	command.Stderr = command.Stdout
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
-		return fmt.Errorf("%s failed: %w", strings.Join(argv, " "), err)
+		return fmt.Errorf("%s failed (log: %s): %w", strings.Join(argv, " "), logPath, err)
 	}
-	if err := waitCommandContext(ctx, command, syscall.SIGTERM, 2*time.Second); err != nil {
-		return fmt.Errorf("%s failed: %w", strings.Join(argv, " "), err)
+	waitErr := waitCommandContext(ctx, command, syscall.SIGTERM, 2*time.Second)
+	if logErr := logWriter.Err(); logErr != nil {
+		failure := fmt.Errorf("%s failed because Loom could not write log %s: %w", strings.Join(argv, " "), logPath, logErr)
+		if waitErr != nil {
+			return errors.Join(failure, fmt.Errorf("child process result: %w", waitErr))
+		}
+		return failure
+	}
+	if waitErr != nil {
+		return fmt.Errorf("%s failed (log: %s): %w", strings.Join(argv, " "), logPath, waitErr)
 	}
 	return nil
+}
+
+type commandOutputWriter struct {
+	output io.Writer
+	mu     sync.Mutex
+	err    error
+}
+
+func (writer *commandOutputWriter) Write(data []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	if writer.err == nil {
+		written, err := writer.output.Write(data)
+		if err == nil && written != len(data) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			writer.err = err
+		}
+	}
+	return len(data), nil
+}
+
+func (writer *commandOutputWriter) Err() error {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.err
 }
 
 func StartService(name string, argv []string, directory string, environment []string, logPath string) (ServiceProcess, error) {
@@ -276,6 +324,11 @@ func waitForManagedExit(pid int, pgid int, timeout time.Duration) bool {
 }
 
 func waitCommandContext(ctx context.Context, command *exec.Cmd, signal syscall.Signal, timeout time.Duration) error {
+	pid := command.Process.Pid
+	pgid := 0
+	if currentPGID, err := syscall.Getpgid(pid); err == nil && currentPGID > 0 {
+		pgid = currentPGID
+	}
 	finished := make(chan error, 1)
 	go func() {
 		finished <- command.Wait()
@@ -286,23 +339,26 @@ func waitCommandContext(ctx context.Context, command *exec.Cmd, signal syscall.S
 	case <-ctx.Done():
 	}
 
-	target := command.Process.Pid
-	if pgid, err := syscall.Getpgid(command.Process.Pid); err == nil && pgid > 0 {
+	target := pid
+	if pgid > 0 {
 		target = -pgid
 	}
 	if err := syscall.Kill(target, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return errors.Join(ctx.Err(), err)
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-finished:
-		return ctx.Err()
-	case <-timer.C:
-		if err := syscall.Kill(target, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-			return errors.Join(ctx.Err(), err)
-		}
+	if waitForManagedExit(pid, pgid, timeout) {
 		<-finished
 		return ctx.Err()
 	}
+	if err := syscall.Kill(target, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return errors.Join(ctx.Err(), err)
+	}
+	<-finished
+	if !waitForManagedExit(pid, pgid, 2*time.Second) {
+		if pgid > 0 {
+			return errors.Join(ctx.Err(), fmt.Errorf("process group %d is still active", pgid))
+		}
+		return errors.Join(ctx.Err(), fmt.Errorf("process %d is still active", pid))
+	}
+	return ctx.Err()
 }

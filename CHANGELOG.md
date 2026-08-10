@@ -1,8 +1,13 @@
 # Changelog
 
+## 0.1.1 - 2026-08-07
+
+- 增加磁盘空间检测
+- 日志增加高亮显示
+
 ## 0.1.0 - 2026-08-07
 
-- 破坏性变更：将服务操作统一收敛到 `loom services`，动作参数必须是其后的第一个
+- 将服务操作统一收敛到 `loom services`，动作参数必须是其后的第一个
   参数，并且必须且只能指定 `--list`、`--registry`、`--status`、`--logs`、`--start`、
   `--restart`、`--stop`、`--stop-all` 之一。旧的 `loom looming` 以及顶层 `list`、
   `discover`、`status`、`logs`、`start`、`restart`、`stop` 命令不再接受。

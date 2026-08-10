@@ -14,14 +14,23 @@
 - Homebrew 会从稳定 URL 中的 tag 推断版本，不要重复声明 `version`。
 - 已发布 tag 不得移动、删除或重建；错误必须通过新的 patch 版本修复。
 
-当前 Formula 只支持 HEAD。首次稳定发布需要在 tag 存在后添加 `url` 和 `sha256`；
-后续发布则把这两个值替换为新的 tag 归档。
+首次稳定发布需要在 tag 存在后添加 `url` 和 `sha256`；后续发布则把这两个值替换为
+新的 tag 归档。
 
 Formula 和 Go 源码位于同一个仓库，因此不能把最终 SHA 写入被该 SHA 校验的源码
 commit。Loom 使用两个 commit 完成发布：
 
 1. 源码发布 commit，由不可变 tag 引用。
 2. Formula commit，指向该 tag 并写入公开归档的 SHA-256。
+
+正常发布流程包含两个脚本动作：
+
+1. 执行 `--prepare`，审阅修改，然后把准备好的源码提交并推送到 `master`。
+2. 执行 `--apply`。它会创建并推送源码 tag，完成 Formula，使用
+   `update formula for vX.Y.Z` 提交，然后推送 `origin/master`。
+
+`--finalize-formula` 是独立的手动及故障恢复动作。它只修改 Formula，绝不会暂存、
+提交或推送。
 
 ## 前置条件
 
@@ -59,7 +68,6 @@ git push -u origin master
 ```bash
 LOOM_RELEASE_VERSION=0.1.1
 LOOM_RELEASE_TAG="v$LOOM_RELEASE_VERSION"
-LOOM_RELEASE_BRANCH="release/$LOOM_RELEASE_TAG"
 LOOM_ARCHIVE_URL="https://github.com/leo1394/homebrew-loom/archive/refs/tags/$LOOM_RELEASE_TAG.tar.gz"
 LOOM_ARCHIVE_PATH="/tmp/homebrew-loom-$LOOM_RELEASE_VERSION.tar.gz"
 LOOM_FORMULA="leo1394/loom/loom"
@@ -85,16 +93,6 @@ git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG"
 
 两条 tag 查询命令都必须没有输出。
 
-确认 release branch 不存在，再从已同步的 `master` 创建：
-
-```bash
-git branch --list "$LOOM_RELEASE_BRANCH"
-git ls-remote --heads origin "refs/heads/$LOOM_RELEASE_BRANCH"
-git switch -c "$LOOM_RELEASE_BRANCH"
-```
-
-前两条命令都必须没有输出。
-
 ## 1. 准备版本
 
 更新以下位置：
@@ -110,6 +108,19 @@ git switch -c "$LOOM_RELEASE_BRANCH"
 
 此时不要添加新版本的稳定归档 URL 或 SHA；只有发布 tag 后才能确定这些值。
 
+更新 `CHANGELOG.md` 和本次发布涉及的文档后，从仓库根目录执行准备动作。子 shell 不会
+改变当前工作目录：
+
+```bash
+(
+  cd ..
+  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --prepare
+)
+```
+
+该动作更新 `cmd/loom/main.go`、`VERSION.txt` 和 Formula 版本断言，然后执行发布检查；
+不会提交、创建 tag 或推送。
+
 检查所有版本位置：
 
 ```bash
@@ -119,7 +130,8 @@ rg -n "$LOOM_RELEASE_VERSION|version =|assert_equal \"loom " \
 
 ## 2. 本地检查
 
-在仓库根目录执行：
+`--prepare` 会执行下列 Go 和 Formula 检查。保留完整命令，便于诊断，以及执行通用发布
+脚本未包含的仓库专用 example 检查：
 
 ```bash
 go mod tidy -diff
@@ -147,7 +159,7 @@ loom 0.1.1
 
 不能只依赖自动检查，还要人工审阅 diff，确认其中没有凭据、运行状态、日志或无关文件。
 
-## 3. 提交并发布源码 tag
+## 3. 提交并推送准备好的源码
 
 暂存必须的发布文件，以及本次确实发生变化的文档：
 
@@ -161,78 +173,100 @@ git commit -m "Release loom $LOOM_RELEASE_VERSION"
 没有变化的文档不要加入 `git add`。首次发布时，如果已审阅的基线就是准确的发布
 源码，可跳过该 commit。
 
-记录准确的源码 SHA，推送 release branch，并等待该 branch workflow 通过：
+记录准确的源码 SHA，推送 `master`，并验证远程分支包含该准确 commit：
 
 ```bash
 LOOM_SOURCE_COMMIT=$(git rev-parse HEAD)
-git push -u origin "$LOOM_RELEASE_BRANCH"
-git fetch origin "$LOOM_RELEASE_BRANCH"
-test "$LOOM_SOURCE_COMMIT" = "$(git rev-parse "origin/$LOOM_RELEASE_BRANCH")"
+git push origin master
+git fetch origin master
+test "$LOOM_SOURCE_COMMIT" = "$(git rev-parse origin/master)"
 ```
 
-`$LOOM_SOURCE_COMMIT` 的 CI 通过前不得创建不可变 tag。
+等待 `$LOOM_SOURCE_COMMIT` 的 CI 通过后再执行 `--apply`。此后不要修改工作树。apply
+预检要求本地 `master` 干净、与 `origin/master` 同步，并且本地和远程都不存在发布
+tag。
 
-为该准确 commit 创建 annotated tag 并检查内容：
+## 4. 发布源码 tag 和稳定 Formula
+
+从干净的仓库根目录执行 apply 动作：
 
 ```bash
-git tag -a "$LOOM_RELEASE_TAG" "$LOOM_SOURCE_COMMIT" -m "loom $LOOM_RELEASE_VERSION"
-git show --stat "$LOOM_RELEASE_TAG"
+(
+  cd ..
+  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --apply
+)
 ```
 
-先推送 tag，使 GitHub 生成对应归档：
+对于 Go 源码发布，`--apply` 会执行完整发布顺序：
 
-```bash
-git push origin "$LOOM_RELEASE_TAG"
-```
-
-tag 一旦推送就不得移动。等待 tag workflow 通过后再发布 Formula。瞬时 CI 故障可
-重新运行 job；源码修正必须发布新的 patch 版本，不能重建 tag。
-
-## 4. 发布稳定 Formula
-
-下载公开的 tag 归档并计算校验和：
-
-```bash
-curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
-  "$LOOM_ARCHIVE_URL" -o "$LOOM_ARCHIVE_PATH"
-LOOM_ARCHIVE_SHA=$(LC_ALL=C shasum -a 256 "$LOOM_ARCHIVE_PATH" | awk '{print $1}')
-printf '%s\n' "$LOOM_ARCHIVE_SHA"
-```
-
-在 `Formula/loom.rb` 中添加或更新。以 `0.1.1` 为例：
-
-```ruby
-url "https://github.com/leo1394/homebrew-loom/archive/refs/tags/v0.1.1.tar.gz"
-sha256 "<64-character SHA-256>"
-head "https://github.com/leo1394/homebrew-loom.git", branch: "master"
-```
+1. 再次运行发布检查，并验证干净且同步的 `master`。
+2. 在 `$LOOM_SOURCE_COMMIT` 上创建 annotated `vX.Y.Z` tag 并推送。
+3. 下载 GitHub 公开 tag 归档，验证顶层 `VERSION.txt` 并计算 SHA-256。
+4. 更新稳定 Formula URL 和校验和，然后执行 Ruby 语法、`brew style` 和 Git 空白检查。
+5. 验证只有 `Formula/loom.rb` 发生修改，将其暂存，并使用准确消息
+   `update formula for vX.Y.Z` 提交。
+6. 推送 `origin/master`，并验证远程指向 Formula commit。
 
 保留已有 Go 构建和补全生成逻辑。不要复制 `homebrew-gits` 的单文件安装方式，也不要
 把可选工具 `ktctl` 或 `sudo` 设为 Formula 强依赖。
 
-对比 Formula 与已下载归档的 SHA：
+验证两个 commit 的结果：
 
 ```bash
-FORMULA_SHA=$(ruby -ne 'puts $1 if $_ =~ /^\s*sha256 "([0-9a-f]{64})"/' Formula/loom.rb)
-test "$FORMULA_SHA" = "$LOOM_ARCHIVE_SHA"
-ruby -c Formula/loom.rb
-brew style Formula/loom.rb
-git diff --check
+LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
+test "$(git rev-parse "$LOOM_RELEASE_TAG^{commit}")" = "$LOOM_SOURCE_COMMIT"
+test "$(git log -1 --pretty=%s)" = "update formula for $LOOM_RELEASE_TAG"
+test "$(git rev-parse HEAD^)" = "$LOOM_SOURCE_COMMIT"
+LOOM_REMOTE_TAG_COMMIT=$(git ls-remote --tags origin \
+  "refs/tags/$LOOM_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }')
+test "$LOOM_REMOTE_TAG_COMMIT" = "$LOOM_SOURCE_COMMIT"
+git fetch origin master
+test "$LOOM_FORMULA_COMMIT" = "$(git rev-parse origin/master)"
+git status --short
+```
+
+最后一个命令必须没有输出。已经发布的 tag 绝不能移动、删除或重建；源码修正必须发布
+新的 patch 版本。
+
+### 独立 Formula 完成及故障恢复
+
+`--apply` 无法让 tag 发布与之后的 Formula commit 成为原子操作，因为 GitHub 必须先
+生成带 tag 的归档。如果执行失败，采取后续动作前先检查 tag、分支和工作树：
+
+```bash
+git tag --list "$LOOM_RELEASE_TAG"
+git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG" \
+  "refs/tags/$LOOM_RELEASE_TAG^{}"
+git status --short
+```
+
+- 如果本地和远程都没有 tag，修复预检问题后重新执行 `--apply`。
+- 如果已验证的源码 tag 只存在于本地，先推送这个准确 tag，再执行
+  `--finalize-formula`。
+- 如果远程 tag 已存在但 Formula commit 不存在，保持 tag 不变，在干净且与
+  `origin/master` 同步的 `master` 上执行 `--finalize-formula`。
+- 如果本地已有 Formula commit 但推送失败，在不强制推送的前提下处理远程分支变化，
+  然后执行 `git push origin master`。
+
+独立动作会复用归档验证和 Formula 更新逻辑，但特意不暂存、不提交也不推送：
+
+```bash
+(
+  cd ..
+  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --finalize-formula
+)
 git diff -- Formula/loom.rb
 ```
 
-单独提交 Formula，再推送 release branch：
+审阅 diff，并执行下方稳定 Formula 门禁，然后再手动完成故障恢复。
 
-```bash
-git add Formula/loom.rb
-git commit -m "Update loom formula for $LOOM_RELEASE_VERSION"
-LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
-git push origin "$LOOM_RELEASE_BRANCH"
-```
+如果失败的 Formula 完成过程已经修改 `Formula/loom.rb`，先检查并只处理该文件。不要
+移动 tag，也不要强制推送改写后的发布。
 
-等待 `$LOOM_FORMULA_COMMIT` 的 release-branch workflow 通过。当前 CI 只验证 HEAD
-Formula 路径，不会安装稳定 URL，因此必须在一次性 Homebrew 测试机上执行以下稳定
-Formula 门禁：
+### 稳定 Formula 门禁
+
+当前 CI 只验证 HEAD Formula 路径，不会安装稳定 URL。执行 `--apply` 后应立即在一次性
+Homebrew 测试机上执行以下稳定 Formula 门禁；手动提交独立完成结果前也必须执行：
 
 ```bash
 LOOM_TEST_TAP="loom-release/loom"
@@ -254,11 +288,16 @@ brew uninstall --formula "$LOOM_TEST_FORMULA"
 brew untap "$LOOM_TEST_TAP"
 ```
 
-从 `$LOOM_RELEASE_BRANCH` 向 `master` 创建 pull request，等待检查通过，并使用 merge
-commit 合并；仓库策略允许时，也可直接 fast-forward。不要 squash 或 rebase：
-带 tag 的源码 commit 和 Formula commit 都必须保留为 `master` 的祖先。
+独立完成 Formula 时，只有该门禁通过后，才手动提交并推送已审阅的 Formula：
 
-合并后同步本地并检查祖先关系：
+```bash
+git add Formula/loom.rb
+git commit -m "update formula for $LOOM_RELEASE_TAG"
+LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
+git push origin master
+```
+
+等待 tag 和最终 `master` workflow 通过，然后同步本地并检查祖先关系：
 
 ```bash
 git switch master
@@ -270,7 +309,7 @@ git status --short
 
 ## 5. 验证公开产物
 
-推送分支后再次下载归档，并与 Formula 比较：
+`--apply` 后重新下载归档，并与 Formula 比较：
 
 ```bash
 curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
@@ -612,8 +651,8 @@ brew test "$LOOM_FORMULA"
 
 ## 8. 完成发布
 
-- 确认 release branch 上的 source commit、tag、Formula commit，以及最终
-  `origin/master` 的 CI 都通过。
+- 确认准备好的源码 commit、tag、Formula commit，以及最终 `origin/master` 的 CI
+  都通过。
 - 在 release notes 中记录 tag、源码归档 URL 和 SHA-256。
 - 确认中英文 README 的安装说明已经描述新发布的稳定 Formula。
 - 保持 tag 不可变；任何修复都发布新的 patch 版本。

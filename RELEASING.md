@@ -18,9 +18,8 @@ Go source build and Homebrew Formula.
 - Never move, delete, or recreate a published tag. Fix a bad release with a new
   patch version.
 
-The current Formula is HEAD-only. The first stable release adds `url` and
-`sha256` after its tag exists. Later releases replace those two values with the
-new tag archive.
+The first stable release adds `url` and `sha256` after its tag exists. Later
+releases replace those two values with the new tag archive.
 
 Because the Formula lives in the same repository as the Go source, its final
 SHA cannot be written into the source commit being hashed. Loom therefore uses
@@ -28,6 +27,16 @@ two commits:
 
 1. A source release commit, referenced by the immutable tag.
 2. A Formula commit that points to that tag and contains its published SHA-256.
+
+The normal release flow has two script actions:
+
+1. Run `--prepare`, review its changes, then commit and push the prepared source
+   to `master`.
+2. Run `--apply`. It creates and pushes the source tag, finalizes the Formula,
+   commits it as `update formula for vX.Y.Z`, and pushes `origin/master`.
+
+`--finalize-formula` is a standalone manual and recovery action. It updates the
+Formula but never stages, commits, or pushes it.
 
 ## Prerequisites
 
@@ -70,7 +79,6 @@ variables throughout the procedure. The value below is an example:
 ```bash
 LOOM_RELEASE_VERSION=0.1.1
 LOOM_RELEASE_TAG="v$LOOM_RELEASE_VERSION"
-LOOM_RELEASE_BRANCH="release/$LOOM_RELEASE_TAG"
 LOOM_ARCHIVE_URL="https://github.com/leo1394/homebrew-loom/archive/refs/tags/$LOOM_RELEASE_TAG.tar.gz"
 LOOM_ARCHIVE_PATH="/tmp/homebrew-loom-$LOOM_RELEASE_VERSION.tar.gz"
 LOOM_FORMULA="leo1394/loom/loom"
@@ -97,17 +105,6 @@ git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG"
 
 Both tag lookup commands must print nothing.
 
-Confirm that the release branch does not already exist, then create it from the
-synchronized `master`:
-
-```bash
-git branch --list "$LOOM_RELEASE_BRANCH"
-git ls-remote --heads origin "refs/heads/$LOOM_RELEASE_BRANCH"
-git switch -c "$LOOM_RELEASE_BRANCH"
-```
-
-The first two commands must print nothing.
-
 ## 1. Prepare the version
 
 Update these locations:
@@ -124,6 +121,20 @@ Update these locations:
 Do not add the new stable archive URL or SHA yet. They can be known only after
 the tag is published.
 
+After updating `CHANGELOG.md` and any release-specific documentation, run the
+preparation action from the repository root. The subshell keeps the current
+working directory unchanged:
+
+```bash
+(
+  cd ..
+  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --prepare
+)
+```
+
+The action updates `cmd/loom/main.go`, `VERSION.txt`, and the Formula version
+assertion, then runs the release checks. It does not commit, tag, or push.
+
 Check every version occurrence:
 
 ```bash
@@ -133,7 +144,9 @@ rg -n "$LOOM_RELEASE_VERSION|version =|assert_equal \"loom " \
 
 ## 2. Run local checks
 
-Run all checks from the repository root:
+`--prepare` runs the Go and Formula checks below. Keep the full list available
+for diagnosis and for the repository-specific example checks that are not part
+of the generic publisher:
 
 ```bash
 go mod tidy -diff
@@ -163,7 +176,7 @@ Review the diff rather than relying only on automated checks. In particular,
 confirm that no credentials, runtime state, logs, or unrelated files are
 included.
 
-## 3. Commit and publish the source tag
+## 3. Commit and push the prepared source
 
 Stage the required release files and any documentation changed for this
 release:
@@ -178,83 +191,113 @@ git commit -m "Release loom $LOOM_RELEASE_VERSION"
 Omit unchanged documentation files from `git add`. For the first release, skip
 the commit when the already-reviewed baseline is the exact release source.
 
-Record the exact source SHA, push the release branch, and wait for that branch
-workflow to pass:
+Record the exact source SHA, push `master`, and verify that the remote branch
+contains that exact commit:
 
 ```bash
 LOOM_SOURCE_COMMIT=$(git rev-parse HEAD)
-git push -u origin "$LOOM_RELEASE_BRANCH"
-git fetch origin "$LOOM_RELEASE_BRANCH"
-test "$LOOM_SOURCE_COMMIT" = "$(git rev-parse "origin/$LOOM_RELEASE_BRANCH")"
+git push origin master
+git fetch origin master
+test "$LOOM_SOURCE_COMMIT" = "$(git rev-parse origin/master)"
 ```
 
-Do not create the immutable tag until CI has passed for
-`$LOOM_SOURCE_COMMIT`.
+Wait for CI on `$LOOM_SOURCE_COMMIT` to pass before running `--apply`. Do not
+change the working tree after this point. The apply preflight requires a clean
+local `master`, synchronized `origin/master`, and no local or remote release
+tag.
 
-Create an annotated tag on that exact commit and inspect it:
+## 4. Publish the source tag and stable Formula
+
+Run the apply action from the clean repository root:
 
 ```bash
-git tag -a "$LOOM_RELEASE_TAG" "$LOOM_SOURCE_COMMIT" -m "loom $LOOM_RELEASE_VERSION"
-git show --stat "$LOOM_RELEASE_TAG"
+(
+  cd ..
+  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --apply
+)
 ```
 
-Push the tag first so GitHub can materialize its archive:
+For a Go-source release, `--apply` performs the complete publication sequence:
 
-```bash
-git push origin "$LOOM_RELEASE_TAG"
-```
-
-Do not move this tag after it is pushed. Wait for the tag workflow to pass
-before publishing the Formula. A transient CI job may be rerun, but a source
-correction requires a new patch release rather than recreating the tag.
-
-## 4. Publish the stable Formula
-
-Download the exact public tag archive and calculate its checksum:
-
-```bash
-curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
-  "$LOOM_ARCHIVE_URL" -o "$LOOM_ARCHIVE_PATH"
-LOOM_ARCHIVE_SHA=$(LC_ALL=C shasum -a 256 "$LOOM_ARCHIVE_PATH" | awk '{print $1}')
-printf '%s\n' "$LOOM_ARCHIVE_SHA"
-```
-
-Add or update these stanzas in `Formula/loom.rb`. For example, release `0.1.1`
-uses:
-
-```ruby
-url "https://github.com/leo1394/homebrew-loom/archive/refs/tags/v0.1.1.tar.gz"
-sha256 "<64-character SHA-256>"
-head "https://github.com/leo1394/homebrew-loom.git", branch: "master"
-```
+1. Repeats the release checks and verifies the clean, synchronized `master`.
+2. Creates an annotated `vX.Y.Z` tag on `$LOOM_SOURCE_COMMIT` and pushes it.
+3. Downloads the public GitHub tag archive, verifies its top-level
+   `VERSION.txt`, and calculates its SHA-256.
+4. Updates the stable Formula URL and checksum, then runs Ruby syntax,
+   `brew style`, and Git whitespace checks.
+5. Verifies that only `Formula/loom.rb` changed, stages it, and commits it with
+   the exact message `update formula for vX.Y.Z`.
+6. Pushes `origin/master` and verifies that the remote points to the Formula
+   commit.
 
 Keep the existing Go build and completion generation. Do not copy the
 single-file installation used by `homebrew-gits`, and do not make optional
 tools such as `ktctl` or `sudo` hard Formula dependencies.
 
-Verify the Formula checksum against the downloaded archive:
+Verify the two-commit result:
 
 ```bash
-FORMULA_SHA=$(ruby -ne 'puts $1 if $_ =~ /^\s*sha256 "([0-9a-f]{64})"/' Formula/loom.rb)
-test "$FORMULA_SHA" = "$LOOM_ARCHIVE_SHA"
-ruby -c Formula/loom.rb
-brew style Formula/loom.rb
-git diff --check
+LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
+test "$(git rev-parse "$LOOM_RELEASE_TAG^{commit}")" = "$LOOM_SOURCE_COMMIT"
+test "$(git log -1 --pretty=%s)" = "update formula for $LOOM_RELEASE_TAG"
+test "$(git rev-parse HEAD^)" = "$LOOM_SOURCE_COMMIT"
+LOOM_REMOTE_TAG_COMMIT=$(git ls-remote --tags origin \
+  "refs/tags/$LOOM_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }')
+test "$LOOM_REMOTE_TAG_COMMIT" = "$LOOM_SOURCE_COMMIT"
+git fetch origin master
+test "$LOOM_FORMULA_COMMIT" = "$(git rev-parse origin/master)"
+git status --short
+```
+
+The final command must print nothing. Never move, delete, or recreate the
+published tag. A source correction requires a new patch release.
+
+### Standalone Formula finalization and failure recovery
+
+`--apply` cannot make the tag publication and later Formula commit atomic,
+because GitHub must first materialize the tagged archive. If it fails, inspect
+the tag, branch, and working tree before taking another action:
+
+```bash
+git tag --list "$LOOM_RELEASE_TAG"
+git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG" \
+  "refs/tags/$LOOM_RELEASE_TAG^{}"
+git status --short
+```
+
+- If no local or remote tag exists, correct the preflight failure and rerun
+  `--apply`.
+- If the verified source tag exists locally but not remotely, push that exact
+  tag, then use `--finalize-formula`.
+- If the remote tag exists but no Formula commit exists, keep the tag immutable
+  and use `--finalize-formula` from a clean `master` synchronized with
+  `origin/master`.
+- If the Formula commit exists locally but its push failed, resolve any remote
+  branch movement without force-pushing, then run `git push origin master`.
+
+The standalone action reuses the archive validation and Formula update logic,
+but deliberately does not stage, commit, or push:
+
+```bash
+(
+  cd ..
+  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --finalize-formula
+)
 git diff -- Formula/loom.rb
 ```
 
-Commit the Formula separately and push the release branch:
+Review the diff and run the stable Formula gate below before manually completing
+the recovery.
 
-```bash
-git add Formula/loom.rb
-git commit -m "Update loom formula for $LOOM_RELEASE_VERSION"
-LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
-git push origin "$LOOM_RELEASE_BRANCH"
-```
+If a failed finalization already left `Formula/loom.rb` modified, inspect and
+resolve that exact file first. Do not move the tag or force-push a rewritten
+release.
 
-Wait for the release-branch workflow to pass for `$LOOM_FORMULA_COMMIT`.
-Current CI verifies the HEAD Formula path but does not install the stable URL,
-so the following stable Formula gate is mandatory on a disposable Homebrew
+### Stable Formula gate
+
+Current CI verifies the HEAD Formula path but does not install the stable URL.
+Immediately after `--apply` or before manually committing a standalone
+finalization, run the following stable Formula gate on a disposable Homebrew
 test machine:
 
 ```bash
@@ -278,12 +321,18 @@ brew uninstall --formula "$LOOM_TEST_FORMULA"
 brew untap "$LOOM_TEST_TAP"
 ```
 
-Open a pull request from `$LOOM_RELEASE_BRANCH` to `master`, require its checks
-to pass, and merge with a merge commit. A direct fast-forward is also safe when
-repository policy permits it. Do not squash or rebase: both the tagged source
-commit and Formula commit must remain ancestors of `master`.
+For standalone finalization, only after this gate passes, commit and push the
+reviewed Formula explicitly:
 
-After merging, synchronize locally and verify the ancestry:
+```bash
+git add Formula/loom.rb
+git commit -m "update formula for $LOOM_RELEASE_TAG"
+LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
+git push origin master
+```
+
+Wait for the tag and final `master` workflows to pass. Then synchronize locally
+and verify the ancestry:
 
 ```bash
 git switch master
@@ -295,7 +344,7 @@ git status --short
 
 ## 5. Verify the published artifact
 
-Download the archive again after the branch push and compare it with the
+Download the archive again after `--apply` and compare it with the
 Formula:
 
 ```bash
@@ -700,8 +749,8 @@ brew test "$LOOM_FORMULA"
 
 ## 8. Complete the release
 
-- Confirm CI passes for the source commit on the release branch, the tag, the
-  Formula commit, and the final `origin/master`.
+- Confirm CI passes for the prepared source commit, the tag, the Formula commit,
+  and the final `origin/master`.
 - Record the tag, source archive URL, and SHA-256 in the release notes.
 - Confirm the English and Chinese README installation instructions describe the
   newly available stable Formula.

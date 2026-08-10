@@ -9,6 +9,7 @@ import (
 	"github.com/leo1394/homebrew-loom/examples"
 	"github.com/leo1394/homebrew-loom/internal/config"
 	loomruntime "github.com/leo1394/homebrew-loom/internal/runtime"
+	"github.com/leo1394/homebrew-loom/internal/terminal"
 )
 
 func (app App) runInit(arguments []string) int {
@@ -24,18 +25,19 @@ func (app App) runInit(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
+	style := terminal.New(app.Output)
 	if result.Created {
-		fmt.Fprintf(app.Output, "Initialized Loom workspace in %s\n", result.Path)
+		fmt.Fprintf(app.Output, "%s %s\n", style.Label("Initialized Loom workspace in"), style.Identifier(result.Path))
 		if len(result.Discovered) > 0 {
-			fmt.Fprintf(app.Output, "Discovered supported services: %s\n", strings.Join(result.Discovered, ", "))
+			fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Discovered supported services"), style.Identifiers(result.Discovered, ", "))
 		} else if result.UsedExample {
-			fmt.Fprintln(app.Output, "No supported child repositories were detected; wrote the embedded example manifest.")
+			fmt.Fprintln(app.Output, style.Warning("No supported child repositories were detected; wrote the embedded example manifest."))
 		}
 		if len(result.Skipped) > 0 {
-			fmt.Fprintf(app.Output, "Skipped by the built-in repository analyzers: %s\n", strings.Join(result.Skipped, ", "))
+			fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Skipped by the built-in repository analyzers"), style.Identifiers(result.Skipped, ", "))
 		}
 	} else {
-		fmt.Fprintf(app.Output, "Reinitialized existing Loom workspace in %s; manifest was not overwritten.\n", result.Path)
+		fmt.Fprintf(app.Output, "%s %s; manifest was not overwritten.\n", style.Label("Reinitialized existing Loom workspace in"), style.Identifier(result.Path))
 	}
 	return 0
 }
@@ -63,25 +65,26 @@ func (app App) runDiscover(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
+	style := terminal.New(app.Output)
 	if len(result.Discovered) == 0 {
-		fmt.Fprintln(app.Output, "Discovered supported services: none")
+		fmt.Fprintf(app.Output, "%s: none\n", style.Label("Discovered supported services"))
 	} else {
-		fmt.Fprintf(app.Output, "Discovered supported services: %s\n", strings.Join(result.Discovered, ", "))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Discovered supported services"), style.Identifiers(result.Discovered, ", "))
 	}
 	if len(result.Added) > 0 {
-		fmt.Fprintf(app.Output, "Added services: %s\n", strings.Join(result.Added, ", "))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Added services"), style.Identifiers(result.Added, ", "))
 	}
 	if len(result.Updated) > 0 {
-		fmt.Fprintf(app.Output, "Backfilled discovered facts: %s\n", strings.Join(result.Updated, ", "))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Backfilled discovered facts"), style.Identifiers(result.Updated, ", "))
 	}
 	if len(result.Missing) > 0 {
-		fmt.Fprintf(app.Output, "Missing repositories kept in manifest: %s (use loom services --registry --prune to remove)\n", strings.Join(result.Missing, ", "))
+		fmt.Fprintf(app.Output, "%s: %s (use loom services --registry --prune to remove)\n", style.Warning("Missing repositories kept in manifest"), style.Identifiers(result.Missing, ", "))
 	}
 	if len(result.Pruned) > 0 {
-		fmt.Fprintf(app.Output, "Pruned services: %s\n", strings.Join(result.Pruned, ", "))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Pruned services"), style.Identifiers(result.Pruned, ", "))
 	}
 	if len(result.Skipped) > 0 {
-		fmt.Fprintf(app.Output, "Skipped by the built-in repository analyzers: %s\n", strings.Join(result.Skipped, ", "))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Skipped by the built-in repository analyzers"), style.Identifiers(result.Skipped, ", "))
 	}
 	if len(result.Added) == 0 && len(result.Updated) == 0 && len(result.Pruned) == 0 {
 		if len(result.Missing) > 0 {
@@ -90,7 +93,7 @@ func (app App) runDiscover(arguments []string) int {
 			fmt.Fprintln(app.Output, "Manifest already matches discovered repositories.")
 		}
 	} else {
-		fmt.Fprintf(app.Output, "Updated Loom manifest: %s\n", manifestPath)
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Updated Loom manifest"), style.Identifier(manifestPath))
 	}
 	return 0
 }

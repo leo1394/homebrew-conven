@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/leo1394/homebrew-loom/internal/materialize"
+	"github.com/leo1394/homebrew-loom/internal/terminal"
 )
 
 type StartOptions struct {
@@ -29,6 +30,7 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	if output == nil {
 		output = io.Discard
 	}
+	style := terminal.New(output)
 	if options.DryRun {
 		plan, err := BuildPlan(workspace, options.Common, options.Services)
 		if err != nil {
@@ -83,6 +85,11 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	if err := validatePlanCommands(workspace, plan); err != nil {
 		return nil, err
 	}
+	if servicesNeedBuildDiskSpace(plan, plan.Order, options.SkipBuild) {
+		if err := checkBuildDiskSpaceAndWarn(output, workspace.Root); err != nil {
+			return nil, err
+		}
+	}
 	if existing != nil {
 		if existing.Connection != nil {
 			if err := releaseConnection(context.Background(), existing.Connection, workspace.Store.Root, false, output); err != nil {
@@ -129,7 +136,7 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	planFingerprints := make(map[string]string, len(plan.Order))
 	for _, group := range plan.Groups {
 		if len(group) > 1 {
-			fmt.Fprintf(output, "Starting dependency cycle together: %s\n", strings.Join(group, ", "))
+			fmt.Fprintf(output, "%s: %s\n", style.Label("Starting dependency cycle together"), style.Identifiers(group, ", "))
 		}
 		for _, name := range group {
 			if err := ctx.Err(); err != nil {
@@ -151,23 +158,29 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("create %s runtime config directory: %w", name, err))
 			}
 			if service.Config != nil {
-				fmt.Fprintf(output, "Materializing %s config with %s/%s...\n", name, service.Config.Plan.SourceDriver, service.Config.Plan.Driver)
+				fmt.Fprintf(output, "%s %s config with %s/%s...\n", style.Label("Materializing"), style.Identifier(name), style.Identifier(string(service.Config.Plan.SourceDriver)), style.Identifier(string(service.Config.Plan.Driver)))
 				if err := materialize.Materialize(ctx, service.Config.Plan); err != nil {
 					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("materialize %s config: %w", name, err))
 				}
 			}
 			if len(service.Prepare) > 0 {
-				fmt.Fprintf(output, "Preparing %s...\n", name)
+				fmt.Fprintf(output, "%s %s...\n", style.Label("Preparing"), style.Identifier(name))
+				if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
+					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("prepare %s: %w", name, err))
+				}
 				prepareLog := filepath.Join(plan.RunDir, "logs", name+"-prepare.log")
 				if err := RunForeground(ctx, service.Prepare, service.Workdir, service.Environment, output, prepareLog); err != nil {
-					return nil, failStartup(workspace, session, connection, output, err)
+					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("prepare %s: %w", name, err))
 				}
 			}
 			if !options.SkipBuild && len(service.Build) > 0 {
-				fmt.Fprintf(output, "Building %s...\n", name)
+				fmt.Fprintf(output, "%s %s...\n", style.Label("Building"), style.Identifier(name))
+				if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
+					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("build %s: %w", name, err))
+				}
 				buildLog := filepath.Join(plan.RunDir, "logs", name+"-build.log")
 				if err := RunForeground(ctx, service.Build, service.Workdir, service.Environment, output, buildLog); err != nil {
-					return nil, failStartup(workspace, session, connection, output, err)
+					return nil, failStartup(workspace, session, connection, output, fmt.Errorf("build %s: %w", name, err))
 				}
 			}
 			if err := ctx.Err(); err != nil {
@@ -176,7 +189,7 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 			if err := inspectRunWorkdir(service); err != nil {
 				return nil, failStartup(workspace, session, connection, output, err)
 			}
-			fmt.Fprintf(output, "Starting %s...\n", name)
+			fmt.Fprintf(output, "%s %s...\n", style.Label("Starting"), style.Identifier(name))
 			process, err := StartService(name, service.Run, service.RunWorkdir, service.Environment, service.LogPath)
 			if err != nil {
 				return nil, failStartup(workspace, session, connection, output, err)
@@ -193,11 +206,11 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 				service := plan.Services[name]
 				process := started[name]
 				if err := WaitHealthy(ctx, process, service.Health); err != nil {
-					fmt.Fprintf(output, "Last %s log lines:\n", name)
+					fmt.Fprintf(output, "%s %s log lines:\n", style.Label("Last"), style.Identifier(name))
 					ShowLogs(context.Background(), session, []string{name}, false, output)
 					return nil, failStartup(workspace, session, connection, output, err)
 				}
-				fmt.Fprintf(output, "%s is healthy.\n", name)
+				fmt.Fprintf(output, "%s %s\n", style.Identifier(name), style.Success("is healthy."))
 			}
 		}
 		if err := ctx.Err(); err != nil {
@@ -225,7 +238,7 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	if err := workspace.Store.Save(session); err != nil {
 		return nil, failStartup(workspace, session, connection, output, err)
 	}
-	fmt.Fprintln(output, "Local services are ready. Use `loom services --logs --tail` to observe them.")
+	fmt.Fprintln(output, style.Success("Local services are ready. Use `loom services --logs --tail` to observe them."))
 	return session, nil
 }
 
@@ -236,6 +249,28 @@ func validateSkipBuild(plan *Plan) error {
 			continue
 		}
 		return fmt.Errorf("--skip-build cannot reuse %s artifact %s because Loom resets the current runtime directory for a fresh start; set services.%s.runner.artifact to an absolute persistent path or omit --skip-build", name, service.Artifact, name)
+	}
+	return nil
+}
+
+func servicesNeedBuildDiskSpace(plan *Plan, names []string, skipBuild bool) bool {
+	for _, name := range names {
+		service := plan.Services[name]
+		if len(service.Prepare) > 0 || (!skipBuild && len(service.Build) > 0) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkBuildDiskSpaceAndWarn(output io.Writer, path string) error {
+	available, err := checkBuildDiskSpace(path)
+	if err != nil {
+		return err
+	}
+	if warning := buildDiskSpaceWarning(path, available); warning != "" {
+		style := terminal.New(output)
+		fmt.Fprintln(output, style.Warning("Warning: "+warning))
 	}
 	return nil
 }
@@ -384,19 +419,20 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 }
 
 func Status(ctx context.Context, workspace *WorkspaceData, output io.Writer) error {
-	fmt.Fprintf(output, "Runtime: %s\n", workspace.Store.Root)
-	fmt.Fprintf(output, "Current: %s\n", workspace.Store.CurrentDir)
+	style := terminal.New(output)
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Runtime"), style.Identifier(workspace.Store.Root))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Current"), style.Identifier(workspace.Store.CurrentDir))
 	session, err := workspace.Store.Load()
 	if err != nil {
 		return err
 	}
 	if session == nil {
-		fmt.Fprintln(output, "No loom session found.")
+		fmt.Fprintln(output, style.Warning("No loom session found."))
 		_, err := printSharedConnectionStatus(ctx, output)
 		return err
 	}
-	fmt.Fprintf(output, "Workspace: %s\n", session.Workspace)
-	fmt.Fprintf(output, "Environment: %s\n", session.Environment)
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Workspace"), style.Identifier(session.Workspace))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Environment"), style.Identifier(session.Environment))
 	for _, process := range session.Services {
 		state := "stopped"
 		if ProcessAlive(process.PID) && VerifyProcess(process) == nil {
@@ -404,7 +440,7 @@ func Status(ctx context.Context, workspace *WorkspaceData, output io.Writer) err
 		} else if ProcessGroupAlive(process.PGID) {
 			state = "unverified"
 		}
-		fmt.Fprintf(output, "%-28s %-10s pid=%d pgid=%d log=%s\n", process.Name, state, process.PID, process.PGID, process.LogPath)
+		fmt.Fprintf(output, "%s %s pid=%d pgid=%d log=%s\n", style.Identifier(fmt.Sprintf("%-28s", process.Name)), styledProcessState(style, state, 10), process.PID, process.PGID, process.LogPath)
 	}
 	if session.Connection != nil {
 		state := "reused"
@@ -428,15 +464,33 @@ func Status(ctx context.Context, workspace *WorkspaceData, output io.Writer) err
 			}
 		}
 		if session.Connection.PID > 0 {
-			fmt.Fprintf(output, "connection/%-17s %-10s pid=%d pgid=%d log=%s\n", session.Connection.Driver, state, session.Connection.PID, session.Connection.PGID, session.Connection.LogPath)
+			fmt.Fprintf(output, "%s %s pid=%d pgid=%d log=%s\n", style.Identifier(fmt.Sprintf("connection/%-17s", session.Connection.Driver)), styledProcessState(style, state, 10), session.Connection.PID, session.Connection.PGID, session.Connection.LogPath)
 		} else {
-			fmt.Fprintf(output, "connection/%-17s %s\n", session.Connection.Driver, state)
+			fmt.Fprintf(output, "%s %s\n", style.Identifier(fmt.Sprintf("connection/%-17s", session.Connection.Driver)), styledProcessState(style, state, 0))
 		}
 	}
 	return nil
 }
 
+func styledProcessState(style terminal.Style, state string, width int) string {
+	display := state
+	if width > 0 {
+		display = fmt.Sprintf("%-*s", width, state)
+	}
+	switch state {
+	case "running", "reused", "shared":
+		return style.Success(display)
+	case "stopped":
+		return style.Failure(display)
+	case "unverified":
+		return style.Warning(display)
+	default:
+		return style.Identifier(display)
+	}
+}
+
 func Doctor(workspace *WorkspaceData, options CommonOptions, output io.Writer) error {
+	style := terminal.New(output)
 	names := make([]string, 0, len(workspace.Manifest.Services))
 	for name := range workspace.Manifest.Services {
 		names = append(names, name)
@@ -455,14 +509,19 @@ func Doctor(workspace *WorkspaceData, options CommonOptions, output io.Writer) e
 	if err := validatePlanCommands(workspace, plan); err != nil {
 		return err
 	}
-	fmt.Fprintf(output, "Runtime: %s\n", workspace.Store.Root)
-	fmt.Fprintf(output, "Current: %s\n", workspace.Store.CurrentDir)
-	fmt.Fprintf(output, "Workspace: %s\n", workspace.Root)
-	fmt.Fprintf(output, "Manifest: %s\n", workspace.ConfigPath)
-	fmt.Fprintf(output, "Environment: %s\n", plan.EnvironmentName)
-	fmt.Fprintf(output, "Services: %d\n", len(plan.Services))
-	fmt.Fprintf(output, "Connection: %s\n", displayConnection(plan.Connection))
-	fmt.Fprintln(output, "Doctor checks passed.")
+	if servicesNeedBuildDiskSpace(plan, plan.Order, false) {
+		if err := checkBuildDiskSpaceAndWarn(output, workspace.Root); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Runtime"), style.Identifier(workspace.Store.Root))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Current"), style.Identifier(workspace.Store.CurrentDir))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Workspace"), style.Identifier(workspace.Root))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Manifest"), style.Identifier(workspace.ConfigPath))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Environment"), style.Identifier(plan.EnvironmentName))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Services"), style.Identifier(fmt.Sprintf("%d", len(plan.Services))))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Connection"), style.Identifier(displayConnection(plan.Connection)))
+	fmt.Fprintln(output, style.Success("Doctor checks passed."))
 	return nil
 }
 
@@ -504,6 +563,7 @@ func validatePlanCommands(workspace *WorkspaceData, plan *Plan) error {
 }
 
 func ListServices(workspace *WorkspaceData, output io.Writer) {
+	style := terminal.New(output)
 	names := make([]string, 0, len(workspace.Manifest.Services))
 	for name := range workspace.Manifest.Services {
 		names = append(names, name)
@@ -511,44 +571,51 @@ func ListServices(workspace *WorkspaceData, output io.Writer) {
 	sort.Strings(names)
 	for _, name := range names {
 		service := workspace.Manifest.Services[name]
-		fmt.Fprintf(output, "%-28s %s\n", name, service.Path)
+		fmt.Fprintf(output, "%s %s\n", style.Identifier(fmt.Sprintf("%-28s", name)), service.Path)
 	}
 }
 
 func printPlan(output io.Writer, plan *Plan, dryRun bool) {
-	fmt.Fprintf(output, "Workspace: %s\n", plan.Workspace.Root)
-	fmt.Fprintf(output, "Runtime: %s\n", plan.Workspace.Store.Root)
-	fmt.Fprintf(output, "Current: %s\n", plan.RunDir)
-	fmt.Fprintf(output, "Environment: %s\n", plan.EnvironmentName)
-	fmt.Fprintf(output, "Looming local services: %s\n", strings.Join(plan.Selected, ", "))
+	style := terminal.New(output)
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Workspace"), style.Identifier(plan.Workspace.Root))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Runtime"), style.Identifier(plan.Workspace.Store.Root))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Current"), style.Identifier(plan.RunDir))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Environment"), style.Identifier(plan.EnvironmentName))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Looming local services"), style.Identifiers(plan.Selected, ", "))
 	registry := plan.Environment.Registry
 	if registry == "" {
 		registry = "configured registry"
 	}
 	if len(plan.Remote) > 0 {
-		fmt.Fprintf(output, "Remote via %s: %s\n", registry, strings.Join(plan.Remote, ", "))
+		fmt.Fprintf(output, "%s %s: %s\n", style.Label("Remote via"), style.Identifier(registry), style.Identifiers(plan.Remote, ", "))
 	} else {
-		fmt.Fprintln(output, "Remote dependencies: none")
+		fmt.Fprintf(output, "%s: none\n", style.Label("Remote dependencies"))
 	}
 	groups := make([]string, 0, len(plan.Groups))
 	for _, group := range plan.Groups {
-		groups = append(groups, strings.Join(group, " + "))
+		groups = append(groups, style.Identifiers(group, " + "))
 	}
-	fmt.Fprintf(output, "Start groups: %s\n", strings.Join(groups, " -> "))
-	fmt.Fprintf(output, "Connection: %s\n", displayConnection(plan.Connection))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Start groups"), strings.Join(groups, " -> "))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Connection"), style.Identifier(displayConnection(plan.Connection)))
 	for _, name := range plan.Order {
 		service := plan.Services[name]
 		if service.Config == nil {
 			continue
 		}
-		fmt.Fprintf(output, "Config %s: policy=%s framework=%s source=%s discovery=%s materializer=%s -> %s\n",
-			name,
-			service.Config.Policy,
-			service.Config.Framework,
-			service.Config.Plan.SourceDriver,
-			service.Config.Discovery,
-			service.Config.Plan.Driver,
-			service.Config.Plan.TargetDir,
+		fmt.Fprintf(output, "%s %s: %s=%s %s=%s %s=%s %s=%s %s=%s -> %s\n",
+			style.Label("Config"),
+			style.Identifier(name),
+			style.Label("policy"),
+			style.Identifier(service.Config.Policy),
+			style.Label("framework"),
+			style.Identifier(service.Config.Framework),
+			style.Label("source"),
+			style.Identifier(string(service.Config.Plan.SourceDriver)),
+			style.Label("discovery"),
+			style.Identifier(service.Config.Discovery),
+			style.Label("materializer"),
+			style.Identifier(string(service.Config.Plan.Driver)),
+			style.Identifier(service.Config.Plan.TargetDir),
 		)
 		for _, route := range service.Config.Routes {
 			location := "remote"
@@ -559,11 +626,11 @@ func printPlan(output io.Writer, plan *Plan, dryRun bool) {
 			if mode == "" {
 				mode = "unconfigured"
 			}
-			fmt.Fprintf(output, "  %s -> %s: %s (%s %s)\n", name, route.Dependency, route.Binding, location, mode)
+			fmt.Fprintf(output, "  %s -> %s: %s (%s %s)\n", style.Identifier(name), style.Identifier(route.Dependency), style.Identifier(route.Binding), style.Identifier(location), style.Identifier(mode))
 		}
 	}
 	if dryRun {
-		fmt.Fprintln(output, "Dry run: no connection, config fetch/materialization, build, process, or state changes were made.")
+		fmt.Fprintln(output, style.Label("Dry run: no connection, config fetch/materialization, build, process, or state changes were made."))
 	}
 }
 
@@ -600,15 +667,16 @@ func failStartup(workspace *WorkspaceData, session *Session, connection *Connect
 }
 
 func rollbackSession(workspace *WorkspaceData, session *Session, connection *ConnectionProcess, output io.Writer) error {
+	style := terminal.New(output)
 	if len(session.Services) > 0 {
-		fmt.Fprintln(output, "Startup failed; stopping services started by this command.")
+		fmt.Fprintln(output, style.Failure("Startup failed; stopping services started by this command."))
 	}
 	failedNames := make(map[string]bool)
 	problems := make([]error, 0)
 	for index := len(session.Services) - 1; index >= 0; index-- {
 		process := session.Services[index]
 		if err := StopProcess(process, 3*time.Second); err != nil {
-			fmt.Fprintf(output, "Rollback warning for %s: %v\n", process.Name, err)
+			fmt.Fprintf(output, "%s %s: %v\n", style.Warning("Rollback warning for"), style.Identifier(process.Name), err)
 			failedNames[process.Name] = true
 			problems = append(problems, fmt.Errorf("stop %s: %w", process.Name, err))
 		}
@@ -621,7 +689,7 @@ func rollbackSession(workspace *WorkspaceData, session *Session, connection *Con
 	}
 	session.Services = remaining
 	if err := releaseConnection(context.Background(), connection, workspace.Store.Root, false, output); err != nil {
-		fmt.Fprintf(output, "Rollback warning for connection: %v\n", err)
+		fmt.Fprintf(output, "%s: %v\n", style.Warning("Rollback warning for connection"), err)
 		session.Connection = connection
 		problems = append(problems, fmt.Errorf("stop connection: %w", err))
 	} else {
@@ -651,7 +719,8 @@ func validateKubeconfig(path string) error {
 func printKubeconfigPermissionWarning(output io.Writer, path string) {
 	info, err := os.Stat(path)
 	if err == nil && info.Mode().Perm()&0077 != 0 {
-		fmt.Fprintf(output, "Warning: kubeconfig permissions are %o; consider chmod 600 %s\n", info.Mode().Perm(), path)
+		style := terminal.New(output)
+		fmt.Fprintln(output, style.Warning(fmt.Sprintf("Warning: kubeconfig permissions are %o; consider chmod 600 %s", info.Mode().Perm(), path)))
 	}
 }
 

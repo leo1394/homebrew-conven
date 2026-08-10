@@ -3,10 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -73,7 +75,7 @@ func TestRunForegroundCancellationStopsProcessGroup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- RunForeground(ctx, []string{"sh", "-c", "echo $$ > \"$1\"; trap '' TERM; sleep 600 & wait", "sh", pidPath}, directory, CommandEnvironment(), nil, filepath.Join(directory, "foreground.log"))
+		done <- RunForeground(ctx, []string{"sh", "-c", "trap '' TERM; sleep 600 & echo $$ > \"$1\"; wait", "sh", pidPath}, directory, CommandEnvironment(), nil, filepath.Join(directory, "foreground.log"))
 	}()
 
 	var data []byte
@@ -100,10 +102,72 @@ func TestRunForegroundCancellationStopsProcessGroup(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v, want context cancellation", err)
 		}
-	case <-time.After(4 * time.Second):
+	case <-time.After(6 * time.Second):
 		t.Fatal("foreground cancellation did not return")
 	}
 	if ProcessGroupAlive(pid) {
 		t.Fatalf("cancelled foreground process group %d is still active", pid)
 	}
+}
+
+func TestRunForegroundDoesNotFailWhenDisplayOutputCloses(t *testing.T) {
+	directory := t.TempDir()
+	markerPath := filepath.Join(directory, "complete")
+	logPath := filepath.Join(directory, "foreground.log")
+	err := RunForeground(
+		context.Background(),
+		[]string{"sh", "-c", `set -e; dd if=/dev/zero bs=4096 count=256; printf complete > "$1"`, "sh", markerPath},
+		directory,
+		CommandEnvironment(),
+		failingCommandOutput{},
+		logPath,
+	)
+	if err != nil {
+		t.Fatalf("display output failure stopped foreground command: %v", err)
+	}
+	if data, err := os.ReadFile(markerPath); err != nil || string(data) != "complete" {
+		t.Fatalf("foreground command did not complete: data=%q err=%v", data, err)
+	}
+	if info, err := os.Stat(logPath); err != nil || info.Size() == 0 {
+		t.Fatalf("foreground log was not retained: info=%v err=%v", info, err)
+	}
+}
+
+func TestRunForegroundReportsLogWriteFailureInsteadOfBrokenPipe(t *testing.T) {
+	directory := t.TempDir()
+	markerPath := filepath.Join(directory, "complete")
+	logPath := filepath.Join(directory, "foreground.log")
+	err := runForeground(
+		context.Background(),
+		[]string{"sh", "-c", `set -e; dd if=/dev/zero bs=4096 count=256; printf complete > "$1"`, "sh", markerPath},
+		directory,
+		CommandEnvironment(),
+		io.Discard,
+		failingLogOutput{},
+		logPath,
+	)
+	if !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("error = %v, want no-space log failure", err)
+	}
+	if !strings.Contains(err.Error(), logPath) || !strings.Contains(err.Error(), "no space left") {
+		t.Fatalf("error does not identify the failed log: %v", err)
+	}
+	if strings.Contains(err.Error(), "broken pipe") {
+		t.Fatalf("log write failure was masked as a broken pipe: %v", err)
+	}
+	if data, err := os.ReadFile(markerPath); err != nil || string(data) != "complete" {
+		t.Fatalf("foreground command did not complete after log failure: data=%q err=%v", data, err)
+	}
+}
+
+type failingCommandOutput struct{}
+
+func (failingCommandOutput) Write([]byte) (int, error) {
+	return 0, syscall.EPIPE
+}
+
+type failingLogOutput struct{}
+
+func (failingLogOutput) Write([]byte) (int, error) {
+	return 0, syscall.ENOSPC
 }

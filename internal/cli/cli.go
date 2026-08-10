@@ -12,6 +12,7 @@ import (
 	"github.com/leo1394/homebrew-loom/internal/config"
 	loomruntime "github.com/leo1394/homebrew-loom/internal/runtime"
 	"github.com/leo1394/homebrew-loom/internal/selector"
+	"github.com/leo1394/homebrew-loom/internal/terminal"
 )
 
 type App struct {
@@ -59,7 +60,8 @@ func (app App) Run(arguments []string) int {
 	case "__completion":
 		return app.runCompletion(arguments[1:])
 	default:
-		fmt.Fprintf(app.Error, "loom: unknown command %q\n", arguments[0])
+		style := terminal.New(app.Error)
+		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("loom: unknown command %q", arguments[0])))
 		app.printUsage(app.Error)
 		return 2
 	}
@@ -93,7 +95,8 @@ func (app App) runServices(arguments []string) int {
 	case "--stop-all":
 		return app.runStop(append([]string{"--all"}, remaining...))
 	default:
-		fmt.Fprintf(app.Error, "loom: unknown services action %q\n", action)
+		style := terminal.New(app.Error)
+		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("loom: unknown services action %q", action)))
 		app.printServicesUsage(app.Error)
 		return 2
 	}
@@ -463,7 +466,8 @@ func (common commonFlags) options(cwd string) loomruntime.CommonOptions {
 
 func (app App) fail(err error) int {
 	message := strings.TrimSpace(err.Error())
-	fmt.Fprintf(app.Error, "loom: %s\n", message)
+	style := terminal.New(app.Error)
+	fmt.Fprintln(app.Error, style.Failure("loom: "+message))
 	return 1
 }
 

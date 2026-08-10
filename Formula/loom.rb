@@ -14,7 +14,7 @@ class Loom < Formula
   end
 
   test do
-    assert_equal "loom 0.1.0\n", shell_output("#{bin}/loom --version")
+    assert_equal "loom 0.1.1\n", shell_output("#{bin}/loom --version")
     assert_predicate bin/"loom", :executable?
 
     manifest = testpath/".loom/loom.yaml"

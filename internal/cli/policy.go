@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/leo1394/homebrew-loom/internal/config"
+	"github.com/leo1394/homebrew-loom/internal/terminal"
 )
 
 func (app App) runPolicy(arguments []string) int {
@@ -31,7 +32,8 @@ func (app App) runPolicy(arguments []string) int {
 	case "--reset":
 		return app.runPolicyReset(remaining)
 	default:
-		fmt.Fprintf(app.Error, "loom: unknown policy action %q\n", action)
+		style := terminal.New(app.Error)
+		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("loom: unknown policy action %q", action)))
 		app.printPolicyUsage(app.Error)
 		return 2
 	}
@@ -124,20 +126,21 @@ func (app App) runPolicyReset(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
+	style := terminal.New(app.Output)
 	if len(result.Discovered) > 0 {
-		fmt.Fprintf(app.Output, "Discovered supported services: %s\n", strings.Join(result.Discovered, ", "))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Discovered supported services"), style.Identifiers(result.Discovered, ", "))
 	}
 	if len(result.Skipped) > 0 {
-		fmt.Fprintf(app.Output, "Skipped by the built-in repository analyzers: %s\n", strings.Join(result.Skipped, ", "))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Skipped by the built-in repository analyzers"), style.Identifiers(result.Skipped, ", "))
 	}
 	if !result.Changed {
 		fmt.Fprintf(app.Output, "Loom policy manifest already matches the scan baseline: %s\n", result.Path)
 		return 0
 	}
 	if result.Created {
-		fmt.Fprintf(app.Output, "Created Loom policy manifest from scan baseline: %s\n", result.Path)
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Created Loom policy manifest from scan baseline"), style.Identifier(result.Path))
 	} else {
-		fmt.Fprintf(app.Output, "Reset Loom policy manifest to scan baseline: %s\n", result.Path)
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Reset Loom policy manifest to scan baseline"), style.Identifier(result.Path))
 	}
 	if result.BackupPath != "" {
 		fmt.Fprintf(app.Output, "Pre-reset manifest backup: %s\n", result.BackupPath)

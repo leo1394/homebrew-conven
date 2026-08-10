@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/leo1394/homebrew-loom/internal/terminal"
 )
 
 const logTailLines = 80
@@ -27,6 +29,7 @@ type logEntry struct {
 }
 
 func ShowLogs(ctx context.Context, session *Session, names []string, tail bool, output io.Writer) error {
+	style := terminal.New(output)
 	logs, err := selectLogs(session, names)
 	if err != nil {
 		return err
@@ -44,13 +47,13 @@ func ShowLogs(ctx context.Context, session *Session, names []string, tail bool, 
 				return err
 			}
 			for _, line := range lines {
-				fmt.Fprintf(output, "[%s] %s\n", log.Name, line)
+				fmt.Fprintf(output, "[%s] %s\n", style.Identifier(log.Name), line)
 			}
 		}
 		return nil
 	}
 	return streamLogs(ctx, logs, func(entry logEntry) error {
-		_, err := fmt.Fprintf(output, "[%s] %s\n", entry.Name, entry.Line)
+		_, err := fmt.Fprintf(output, "[%s] %s\n", style.Identifier(entry.Name), entry.Line)
 		return err
 	})
 }
