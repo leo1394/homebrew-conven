@@ -396,7 +396,7 @@ services:
 	}
 
 	_, err = DiscoverWorkspace(manifestPath, workspace, true)
-	if err == nil || !strings.Contains(err.Error(), "validate updated loom manifest") {
+	if err == nil || !strings.Contains(err.Error(), "validate updated Conven manifest") {
 		t.Fatalf("error = %v", err)
 	}
 	after, readErr := os.ReadFile(manifestPath)

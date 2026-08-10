@@ -17,7 +17,7 @@ func LoadSettings(path string) (map[string]string, error) {
 		if os.IsNotExist(err) {
 			return map[string]string{}, nil
 		}
-		return nil, fmt.Errorf("open loom config %q: %w", path, err)
+		return nil, fmt.Errorf("open conven config %q: %w", path, err)
 	}
 	defer file.Close()
 
@@ -27,18 +27,18 @@ func LoadSettings(path string) (map[string]string, error) {
 		if err == io.EOF {
 			return values, nil
 		}
-		return nil, fmt.Errorf("decode loom config %q: %w", path, err)
+		return nil, fmt.Errorf("decode conven config %q: %w", path, err)
 	}
 	var extra interface{}
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err != nil {
-			return nil, fmt.Errorf("decode loom config %q: %w", path, err)
+			return nil, fmt.Errorf("decode conven config %q: %w", path, err)
 		}
-		return nil, fmt.Errorf("loom config %q contains multiple YAML documents", path)
+		return nil, fmt.Errorf("conven config %q contains multiple YAML documents", path)
 	}
 	for key, value := range values {
 		if err := validateSetting(key, value); err != nil {
-			return nil, fmt.Errorf("validate loom config %q: %w", path, err)
+			return nil, fmt.Errorf("validate conven config %q: %w", path, err)
 		}
 	}
 	return values, nil
@@ -171,31 +171,31 @@ func validateSettingKey(key string) error {
 func saveSettings(path string, values map[string]string) error {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0700); err != nil {
-		return fmt.Errorf("create loom config directory %q: %w", directory, err)
+		return fmt.Errorf("create conven config directory %q: %w", directory, err)
 	}
 	data, err := yaml.Marshal(values)
 	if err != nil {
-		return fmt.Errorf("encode loom config %q: %w", path, err)
+		return fmt.Errorf("encode conven config %q: %w", path, err)
 	}
 	temporary, err := os.CreateTemp(directory, ".config-*")
 	if err != nil {
-		return fmt.Errorf("create temporary loom config: %w", err)
+		return fmt.Errorf("create temporary conven config: %w", err)
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
 	if err := temporary.Chmod(0600); err != nil {
 		temporary.Close()
-		return fmt.Errorf("protect temporary loom config: %w", err)
+		return fmt.Errorf("protect temporary conven config: %w", err)
 	}
 	if _, err := temporary.Write(data); err != nil {
 		temporary.Close()
-		return fmt.Errorf("write temporary loom config: %w", err)
+		return fmt.Errorf("write temporary conven config: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary loom config: %w", err)
+		return fmt.Errorf("close temporary conven config: %w", err)
 	}
 	if err := os.Rename(temporaryName, path); err != nil {
-		return fmt.Errorf("publish loom config %q: %w", path, err)
+		return fmt.Errorf("publish conven config %q: %w", path, err)
 	}
 	return nil
 }

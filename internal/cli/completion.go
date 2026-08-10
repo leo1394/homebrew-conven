@@ -5,7 +5,7 @@ import "fmt"
 func Completion(shell string) (string, error) {
 	switch shell {
 	case "bash":
-		return `_loom() {
+		return `_conven() {
     local cur subcommand action options i source_set
     cur="${COMP_WORDS[COMP_CWORD]}"
     if [ "$COMP_CWORD" -eq 1 ]; then
@@ -100,22 +100,22 @@ func Completion(shell string) (string, error) {
     esac
     COMPREPLY=( $(compgen -W "$options" -- "$cur") )
 }
-complete -F _loom loom
+complete -F _conven conven
 `, nil
 	case "zsh":
-		return `#compdef loom
+		return `#compdef conven
 
-_loom() {
+_conven() {
     local -a commands
     local action
     commands=(
-        'init:initialize a Loom workspace'
+        'init:initialize a Conven workspace'
         'services:manage workspace services'
-        'config:read or write Loom configuration'
+        'config:read or write Conven configuration'
         'policy:edit, import, or rebuild the workspace policy manifest'
         'doctor:validate workspace and connection configuration'
-        'help:show loom usage'
-        'version:show loom version'
+        'help:show conven usage'
+        'version:show conven version'
     )
     if (( CURRENT == 2 )); then
         _describe 'command' commands
@@ -193,7 +193,7 @@ _loom() {
                             '--stop-all[stop all services and release the workspace connection]' \
                             '--help[show command help]'
                     else
-                        _message 'unknown loom services action'
+                        _message 'unknown conven services action'
                     fi
                     ;;
             esac
@@ -236,7 +236,7 @@ _loom() {
                             '--reset[destructively reset the manifest to scanned facts]' \
                             '--help[show command help]'
                     else
-                        _message 'unknown loom policy action'
+                        _message 'unknown conven policy action'
                     fi
                     ;;
             esac
@@ -254,109 +254,109 @@ _loom() {
         help|version)
             ;;
         *)
-            _message 'unknown loom command'
+            _message 'unknown conven command'
             ;;
     esac
 }
 
-compdef _loom loom
+compdef _conven conven
 `, nil
 	case "fish":
-		return `function __loom_using_subcommand
+		return `function __conven_using_subcommand
     set -l tokens (commandline -opc)
     test (count $tokens) -ge 2; or return 1
     contains -- $tokens[2] $argv
 end
 
-function __loom_services_action
+function __conven_services_action
     set -l tokens (commandline -opc)
     test (count $tokens) -ge 3; or return 1
     test "$tokens[2]" = services; or return 1
     test "$tokens[3]" = "$argv[1]"
 end
 
-function __loom_services_without_action
+function __conven_services_without_action
     set -l tokens (commandline -opc)
     test (count $tokens) -eq 2; or return 1
     test "$tokens[2]" = services; or return 1
 end
 
-function __loom_policy_without_action
+function __conven_policy_without_action
     set -l tokens (commandline -opc)
     test (count $tokens) -eq 2; or return 1
     test "$tokens[2]" = policy; or return 1
 end
 
-function __loom_policy_action
+function __conven_policy_action
     set -l tokens (commandline -opc)
     test (count $tokens) -ge 3; or return 1
     test "$tokens[2]" = policy; or return 1
     test "$tokens[3]" = "$argv[1]"
 end
 
-function __loom_policy_action_without_edit
+function __conven_policy_action_without_edit
     set -l tokens (commandline -opc)
-    __loom_policy_action "$argv[1]"; or return 1
+    __conven_policy_action "$argv[1]"; or return 1
     not contains -- --edit $tokens[4..-1]
 end
 
-function __loom_policy_import_without_source
+function __conven_policy_import_without_source
     set -l tokens (commandline -opc)
-    __loom_policy_action --import; or return 1
+    __conven_policy_action --import; or return 1
     for token in $tokens[4..-1]
         string match -q -- '-*' "$token"; or return 1
     end
     return 0
 end
 
-complete -c loom -f -n '__fish_use_subcommand' -a init -d 'Initialize a Loom workspace'
-complete -c loom -f -n '__fish_use_subcommand' -a services -d 'Manage workspace services'
-complete -c loom -f -n '__fish_use_subcommand' -a config -d 'Read or write Loom configuration'
-complete -c loom -f -n '__fish_use_subcommand' -a policy -d 'Edit, import, or rebuild the workspace policy manifest'
-complete -c loom -f -n '__fish_use_subcommand' -a doctor -d 'Validate workspace configuration'
-complete -c loom -f -n '__fish_use_subcommand' -a help -d 'Show loom usage'
-complete -c loom -f -n '__fish_use_subcommand' -a version -d 'Show loom version'
-complete -c loom -n '__loom_using_subcommand init services config policy doctor' -s h -l help -d 'Show command help'
-complete -c loom -n '__loom_using_subcommand config' -l global -d 'Use the current user global config'
-complete -c loom -n '__loom_using_subcommand config' -l list -d 'List configuration values'
-complete -c loom -n '__loom_using_subcommand config' -l unset -d 'Remove one configuration value'
-complete -c loom -n '__loom_using_subcommand policy; and __loom_policy_without_action' -l edit -d 'Edit a validated temporary manifest copy'
-complete -c loom -n '__loom_using_subcommand policy; and __loom_policy_without_action' -l import -d 'Import a local YAML file as the entire manifest'
-complete -c loom -n '__loom_using_subcommand policy; and __loom_policy_without_action' -l reset -d 'Destructively reset the manifest to scanned facts'
-complete -c loom -n '__loom_policy_action_without_edit --import' -l edit -d 'Edit the private import draft before publication'
-complete -c loom -n '__loom_policy_import_without_source' -F
-complete -c loom -n '__loom_using_subcommand doctor' -l env -r -d 'Environment profile'
-complete -c loom -n '__loom_using_subcommand doctor' -l dev -d 'Use the dev environment profile'
-complete -c loom -n '__loom_using_subcommand doctor' -l test -d 'Use the test environment profile'
-complete -c loom -n '__loom_using_subcommand doctor' -l kubeconfig -r -d 'Kubeconfig path'
-complete -c loom -n '__loom_using_subcommand doctor' -l context -r -d 'Kubeconfig context'
-complete -c loom -n '__loom_using_subcommand doctor' -l namespace -r -d 'Kubernetes namespace'
-complete -c loom -n '__loom_using_subcommand services; and __loom_services_without_action' -l list -d 'List services declared by the workspace'
-complete -c loom -n '__loom_using_subcommand services; and __loom_services_without_action' -l registry -d 'Update services from child repositories'
-complete -c loom -n '__loom_using_subcommand services; and __loom_services_without_action' -l status -d 'Show current local service state'
-complete -c loom -n '__loom_using_subcommand services; and __loom_services_without_action' -l logs -d 'Show or tail current session logs'
-complete -c loom -n '__loom_using_subcommand services; and __loom_services_without_action' -l start -d 'Select and start local services'
-complete -c loom -n '__loom_using_subcommand services; and __loom_services_without_action' -l restart -d 'Restart changed local services'
-complete -c loom -n '__loom_using_subcommand services; and __loom_services_without_action' -l stop -d 'Stop selected local services'
-complete -c loom -n '__loom_using_subcommand services; and __loom_services_without_action' -l stop-all -d 'Stop all services and release the workspace connection'
-complete -c loom -n '__loom_services_action --registry' -l prune -d 'Remove missing direct-child repository services'
-complete -c loom -n '__loom_services_action --logs' -l tail -d 'Tail aggregated logs'
-complete -c loom -n '__loom_services_action --start' -l env -r -d 'Environment profile'
-complete -c loom -n '__loom_services_action --start' -l dev -d 'Use the dev environment profile'
-complete -c loom -n '__loom_services_action --start' -l test -d 'Use the test environment profile'
-complete -c loom -n '__loom_services_action --start' -l kubeconfig -r -d 'Kubeconfig path'
-complete -c loom -n '__loom_services_action --start' -l context -r -d 'Kubeconfig context'
-complete -c loom -n '__loom_services_action --start' -l namespace -r -d 'Kubernetes namespace'
-complete -c loom -n '__loom_services_action --start' -l tail -d 'Tail aggregated logs'
-complete -c loom -n '__loom_services_action --start' -l dry-run -d 'Show the startup plan'
-complete -c loom -n '__loom_services_action --start' -l skip-build -d 'Skip build when artifacts are reusable'
-complete -c loom -n '__loom_services_action --start' -l skip-verify -d 'Skip health checks'
-complete -c loom -n '__loom_services_action --restart' -l tail -d 'Tail aggregated logs'
-complete -c loom -n '__loom_services_action --restart' -l skip-build -d 'Skip build when artifacts are reusable'
-complete -c loom -n '__loom_services_action --restart' -l skip-verify -d 'Skip health checks'
-complete -c loom -n '__loom_services_action --stop' -l all -d 'Stop every service and release the workspace connection'
-complete -c loom -n '__loom_services_action --stop' -l force -d 'Bypass identity checks and recover saved process groups'
-complete -c loom -n '__loom_services_action --stop-all' -l force -d 'Bypass identity checks and recover saved process groups'
+complete -c conven -f -n '__fish_use_subcommand' -a init -d 'Initialize a Conven workspace'
+complete -c conven -f -n '__fish_use_subcommand' -a services -d 'Manage workspace services'
+complete -c conven -f -n '__fish_use_subcommand' -a config -d 'Read or write Conven configuration'
+complete -c conven -f -n '__fish_use_subcommand' -a policy -d 'Edit, import, or rebuild the workspace policy manifest'
+complete -c conven -f -n '__fish_use_subcommand' -a doctor -d 'Validate workspace configuration'
+complete -c conven -f -n '__fish_use_subcommand' -a help -d 'Show conven usage'
+complete -c conven -f -n '__fish_use_subcommand' -a version -d 'Show conven version'
+complete -c conven -n '__conven_using_subcommand init services config policy doctor' -s h -l help -d 'Show command help'
+complete -c conven -n '__conven_using_subcommand config' -l global -d 'Use the current user global config'
+complete -c conven -n '__conven_using_subcommand config' -l list -d 'List configuration values'
+complete -c conven -n '__conven_using_subcommand config' -l unset -d 'Remove one configuration value'
+complete -c conven -n '__conven_using_subcommand policy; and __conven_policy_without_action' -l edit -d 'Edit a validated temporary manifest copy'
+complete -c conven -n '__conven_using_subcommand policy; and __conven_policy_without_action' -l import -d 'Import a local YAML file as the entire manifest'
+complete -c conven -n '__conven_using_subcommand policy; and __conven_policy_without_action' -l reset -d 'Destructively reset the manifest to scanned facts'
+complete -c conven -n '__conven_policy_action_without_edit --import' -l edit -d 'Edit the private import draft before publication'
+complete -c conven -n '__conven_policy_import_without_source' -F
+complete -c conven -n '__conven_using_subcommand doctor' -l env -r -d 'Environment profile'
+complete -c conven -n '__conven_using_subcommand doctor' -l dev -d 'Use the dev environment profile'
+complete -c conven -n '__conven_using_subcommand doctor' -l test -d 'Use the test environment profile'
+complete -c conven -n '__conven_using_subcommand doctor' -l kubeconfig -r -d 'Kubeconfig path'
+complete -c conven -n '__conven_using_subcommand doctor' -l context -r -d 'Kubeconfig context'
+complete -c conven -n '__conven_using_subcommand doctor' -l namespace -r -d 'Kubernetes namespace'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l list -d 'List services declared by the workspace'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l registry -d 'Update services from child repositories'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l status -d 'Show current local service state'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l logs -d 'Show or tail current session logs'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l start -d 'Select and start local services'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l restart -d 'Restart changed local services'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l stop -d 'Stop selected local services'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l stop-all -d 'Stop all services and release the workspace connection'
+complete -c conven -n '__conven_services_action --registry' -l prune -d 'Remove missing direct-child repository services'
+complete -c conven -n '__conven_services_action --logs' -l tail -d 'Tail aggregated logs'
+complete -c conven -n '__conven_services_action --start' -l env -r -d 'Environment profile'
+complete -c conven -n '__conven_services_action --start' -l dev -d 'Use the dev environment profile'
+complete -c conven -n '__conven_services_action --start' -l test -d 'Use the test environment profile'
+complete -c conven -n '__conven_services_action --start' -l kubeconfig -r -d 'Kubeconfig path'
+complete -c conven -n '__conven_services_action --start' -l context -r -d 'Kubeconfig context'
+complete -c conven -n '__conven_services_action --start' -l namespace -r -d 'Kubernetes namespace'
+complete -c conven -n '__conven_services_action --start' -l tail -d 'Tail aggregated logs'
+complete -c conven -n '__conven_services_action --start' -l dry-run -d 'Show the startup plan'
+complete -c conven -n '__conven_services_action --start' -l skip-build -d 'Skip build when artifacts are reusable'
+complete -c conven -n '__conven_services_action --start' -l skip-verify -d 'Skip health checks'
+complete -c conven -n '__conven_services_action --restart' -l tail -d 'Tail aggregated logs'
+complete -c conven -n '__conven_services_action --restart' -l skip-build -d 'Skip build when artifacts are reusable'
+complete -c conven -n '__conven_services_action --restart' -l skip-verify -d 'Skip health checks'
+complete -c conven -n '__conven_services_action --stop' -l all -d 'Stop every service and release the workspace connection'
+complete -c conven -n '__conven_services_action --stop' -l force -d 'Bypass identity checks and recover saved process groups'
+complete -c conven -n '__conven_services_action --stop-all' -l force -d 'Bypass identity checks and recover saved process groups'
 `, nil
 	default:
 		return "", fmt.Errorf("unsupported completion shell %q", shell)

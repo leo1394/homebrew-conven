@@ -50,7 +50,7 @@ func TestResolvePathDoesNotUseLoomWorkspaceEnvironmentOutsideWorkspace(t *testin
 	t.Setenv("LOOM_WORKSPACE", workspace)
 
 	_, _, err := ResolvePath(cwd)
-	if err == nil || !strings.Contains(err.Error(), "not a loom workspace") {
+	if err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 		t.Fatalf("error = %v, want cwd workspace error", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestResolvePathRejectsRootManifestWithoutDotLoom(t *testing.T) {
 	mustWriteFile(t, filepath.Join(root, "loom.yaml"))
 
 	_, _, err := ResolvePath(root)
-	if err == nil || !strings.Contains(err.Error(), "not a loom workspace") {
+	if err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 		t.Fatalf("error = %v, want workspace boundary error", err)
 	}
 }
@@ -131,7 +131,7 @@ func TestGlobalConfigDirectoryIsNotWorkspaceBoundary(t *testing.T) {
 	mustMkdirAll(t, cwd)
 
 	_, _, err := ResolvePath(cwd)
-	if err == nil || !strings.Contains(err.Error(), "not a loom workspace") {
+	if err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 		t.Fatalf("ResolvePath error = %v, want outside-workspace error", err)
 	}
 	if strings.Contains(err.Error(), "does not contain loom.yaml") {
@@ -139,7 +139,7 @@ func TestGlobalConfigDirectoryIsNotWorkspaceBoundary(t *testing.T) {
 	}
 
 	_, err = FindWorkspace(cwd)
-	if err == nil || !strings.Contains(err.Error(), "not a loom workspace") {
+	if err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 		t.Fatalf("FindWorkspace error = %v, want outside-workspace error", err)
 	}
 }
@@ -152,10 +152,10 @@ func TestHomeDirectoryIsReservedForGlobalSettings(t *testing.T) {
 	mustWriteFile(t, filepath.Join(home, ".loom", "loom.yaml"))
 	mustMkdirAll(t, cwd)
 
-	if _, _, err := ResolvePath(cwd); err == nil || !strings.Contains(err.Error(), "not a loom workspace") {
+	if _, _, err := ResolvePath(cwd); err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 		t.Fatalf("ResolvePath error = %v, want outside-workspace error", err)
 	}
-	if _, err := FindWorkspace(cwd); err == nil || !strings.Contains(err.Error(), "not a loom workspace") {
+	if _, err := FindWorkspace(cwd); err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 		t.Fatalf("FindWorkspace error = %v, want outside-workspace error", err)
 	}
 }
@@ -186,10 +186,10 @@ func TestHomeDirectoryAliasesAreReservedForGlobalSettings(t *testing.T) {
 			mustWriteFile(t, filepath.Join(realHome, ".loom", "config"))
 			mustWriteFile(t, filepath.Join(realHome, ".loom", "loom.yaml"))
 
-			if _, _, err := ResolvePath(cwd); err == nil || !strings.Contains(err.Error(), "not a loom workspace") {
+			if _, _, err := ResolvePath(cwd); err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 				t.Fatalf("ResolvePath error = %v, want outside-workspace error", err)
 			}
-			if _, err := FindWorkspace(cwd); err == nil || !strings.Contains(err.Error(), "not a loom workspace") {
+			if _, err := FindWorkspace(cwd); err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 				t.Fatalf("FindWorkspace error = %v, want outside-workspace error", err)
 			}
 		})

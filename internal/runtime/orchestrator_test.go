@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 func TestStartStartsOnlySelectedAndRoutesDependencies(t *testing.T) {
@@ -335,7 +335,7 @@ func TestStartStaticValidationFailurePreservesCurrent(t *testing.T) {
 		Version:   1,
 		Workspace: model.Workspace{Name: "invalid-command-preserves-current"},
 		Services: map[string]model.Service{
-			"api": {Path: "api", Runner: model.Runner{Run: []string{"loom-command-that-does-not-exist"}}},
+			"api": {Path: "api", Runner: model.Runner{Run: []string{"conven-command-that-does-not-exist"}}},
 		},
 	})
 	if err := workspace.Store.ResetCurrent(); err != nil {
@@ -538,7 +538,7 @@ func TestDoctorAllowsPrepareCreatedRunWorkdirAndChecksHealthCommand(t *testing.T
 
 	manifestService := workspace.Manifest.Services["api"]
 	manifestService.Runner.Run = []string{"sh", "-c", "exit 0"}
-	manifestService.Health.Command = []string{"loom-health-command-that-does-not-exist"}
+	manifestService.Health.Command = []string{"conven-health-command-that-does-not-exist"}
 	workspace.Manifest.Services["api"] = manifestService
 	err := Doctor(workspace, CommonOptions{Environment: "dev"}, &output)
 	if err == nil || !strings.Contains(err.Error(), "health command") {
@@ -1062,7 +1062,7 @@ func TestStopAllLeavesExternalConnectionRunning(t *testing.T) {
 	if session != nil {
 		t.Fatalf("stop all retained external connection session: %#v", session)
 	}
-	if !strings.Contains(output.String(), "Leaving external ktctl connection running; Loom does not own it.") {
+	if !strings.Contains(output.String(), "Leaving external ktctl connection running; Conven does not own it.") {
 		t.Fatalf("external connection retention was not reported: %s", output.String())
 	}
 }
@@ -1161,8 +1161,8 @@ func TestStatusWithoutSessionShowsSharedConnectionRecoveryIdentifiers(t *testing
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"No loom session found.",
-		"Shared connection records in this Loom state root:",
+		"No Conven session found.",
+		"Shared connection records in this Conven state root:",
 		"fingerprint=status-preview",
 		"pid=99999931 pgid=99999921",
 		"effective-leases=0",

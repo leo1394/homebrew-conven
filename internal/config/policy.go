@@ -57,7 +57,7 @@ func EditWorkspacePolicy(cwd string, edit func(string) error) (PolicyEditResult,
 	source, sourceInfo, err := readManifestForUpdate(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return result, fmt.Errorf("loom manifest %q is missing; run \"loom policy --reset\" or import a complete manifest with \"loom policy --import\"", path)
+			return result, fmt.Errorf("Conven manifest %q is missing; run \"conven policy --reset\" or import a complete manifest with \"conven policy --import\"", path)
 		}
 		return result, err
 	}
@@ -110,12 +110,12 @@ func EditWorkspacePolicy(cwd string, edit func(string) error) (PolicyEditResult,
 		}
 		removeDraft = false
 		result.DraftPath = draftPath
-		return result, fmt.Errorf("policy editor failed: %w; edited draft was not published by Loom and is kept at %q", editErr, draftPath)
+		return result, fmt.Errorf("policy editor failed: %w; edited draft was not published by Conven and is kept at %q", editErr, draftPath)
 	}
 	if _, err := decodeManifest(candidate, draftPath); err != nil {
 		removeDraft = false
 		result.DraftPath = draftPath
-		return result, fmt.Errorf("edited policy manifest is invalid: %w; edited draft was not published by Loom and is kept at %q", err, draftPath)
+		return result, fmt.Errorf("edited policy manifest is invalid: %w; edited draft was not published by Conven and is kept at %q", err, draftPath)
 	}
 	if bytes.Equal(candidate, source) {
 		if err := verifyManifestSnapshot(path, source, sourceInfo, "policy edit"); err != nil {
@@ -126,7 +126,7 @@ func EditWorkspacePolicy(cwd string, edit func(string) error) (PolicyEditResult,
 	if err := publishManifestUpdate(path, candidate, source, sourceInfo, "policy edit"); err != nil {
 		removeDraft = false
 		result.DraftPath = draftPath
-		return result, fmt.Errorf("%w; edited draft was not published by Loom and is kept at %q", err, draftPath)
+		return result, fmt.Errorf("%w; edited draft was not published by Conven and is kept at %q", err, draftPath)
 	}
 	result.Changed = true
 	return result, nil
@@ -160,7 +160,7 @@ func ImportWorkspacePolicy(cwd string, importPath string, edit func(string) erro
 		return result, fmt.Errorf("policy import %q is the current workspace manifest; choose a separate source file", sourcePath)
 	}
 	if statErr != nil && !os.IsNotExist(statErr) {
-		return result, fmt.Errorf("inspect current loom manifest %q before policy import: %w", manifestPath, statErr)
+		return result, fmt.Errorf("inspect current Conven manifest %q before policy import: %w", manifestPath, statErr)
 	}
 	result, err = applyWorkspacePolicyCandidate(workspace, boundary, imported, edit, policyCandidateOptions{
 		validationName: fmt.Sprintf("policy import %q", sourcePath),
@@ -201,7 +201,7 @@ func applyWorkspacePolicyCandidate(workspace string, boundary string, input []by
 		}
 		removeDraft = false
 		result.DraftPath = draftPath
-		return fmt.Errorf("%w; edited draft was not published by Loom and is kept at %q", failure, draftPath)
+		return fmt.Errorf("%w; edited draft was not published by Conven and is kept at %q", failure, draftPath)
 	}
 
 	if edit != nil {
@@ -225,12 +225,12 @@ func applyWorkspacePolicyCandidate(workspace string, boundary string, input []by
 			}
 			removeDraft = false
 			result.DraftPath = draftPath
-			return result, fmt.Errorf("%s editor failed: %w; edited draft was not published by Loom and is kept at %q", options.candidateName, editErr, draftPath)
+			return result, fmt.Errorf("%s editor failed: %w; edited draft was not published by Conven and is kept at %q", options.candidateName, editErr, draftPath)
 		}
 		if _, err := decodeManifest(edited, draftPath); err != nil {
 			removeDraft = false
 			result.DraftPath = draftPath
-			return result, fmt.Errorf("edited %s is invalid: %w; edited draft was not published by Loom and is kept at %q", options.candidateName, err, draftPath)
+			return result, fmt.Errorf("edited %s is invalid: %w; edited draft was not published by Conven and is kept at %q", options.candidateName, err, draftPath)
 		}
 		candidate = edited
 	}
@@ -250,7 +250,7 @@ func applyWorkspacePolicyCandidate(workspace string, boundary string, input []by
 			return result, keepDraftOnError(err)
 		}
 		if !created {
-			return result, keepDraftOnError(fmt.Errorf("loom manifest %q was created during %s; retry the command", path, options.operation))
+			return result, keepDraftOnError(fmt.Errorf("Conven manifest %q was created during %s; retry the command", path, options.operation))
 		}
 		result.Changed = true
 		result.Created = true
@@ -259,7 +259,7 @@ func applyWorkspacePolicyCandidate(workspace string, boundary string, input []by
 
 	backup, err := savePolicySnapshot(boundary, options.backupPattern, source)
 	if err != nil {
-		return result, keepDraftOnError(fmt.Errorf("back up loom manifest before %s: %w", options.operation, err))
+		return result, keepDraftOnError(fmt.Errorf("back up Conven manifest before %s: %w", options.operation, err))
 	}
 	result.BackupPath = backup
 	if err := publishManifestUpdate(path, candidate, source, sourceInfo, options.operation); err != nil {
@@ -328,7 +328,7 @@ func ResetWorkspacePolicyFromScan(cwd string) (PolicyResetResult, error) {
 		return result, err
 	}
 	if _, err := decodeManifest(candidate, path); err != nil {
-		return result, fmt.Errorf("validate scan-reset loom manifest: %w", err)
+		return result, fmt.Errorf("validate scan-reset Conven manifest: %w", err)
 	}
 	if !missing && bytes.Equal(candidate, source) {
 		if err := verifyManifestSnapshot(path, source, sourceInfo, "policy reset"); err != nil {
@@ -345,7 +345,7 @@ func ResetWorkspacePolicyFromScan(cwd string) (PolicyResetResult, error) {
 			return result, err
 		}
 		if !created {
-			return result, fmt.Errorf("loom manifest %q was created during policy reset; retry the command", path)
+			return result, fmt.Errorf("Conven manifest %q was created during policy reset; retry the command", path)
 		}
 		result.Changed = true
 		result.Created = true
@@ -354,7 +354,7 @@ func ResetWorkspacePolicyFromScan(cwd string) (PolicyResetResult, error) {
 
 	backup, err := savePolicySnapshot(boundary, "loom.yaml-before-reset-*.bak", source)
 	if err != nil {
-		return result, fmt.Errorf("back up loom manifest before policy reset: %w", err)
+		return result, fmt.Errorf("back up Conven manifest before policy reset: %w", err)
 	}
 	result.BackupPath = backup
 	if err := publishManifestUpdate(path, candidate, source, sourceInfo, "policy reset"); err != nil {
@@ -372,10 +372,10 @@ func policyWorkspace(cwd string) (string, string, error) {
 	boundary := filepath.Join(workspace, ".loom")
 	info, err := os.Lstat(boundary)
 	if err != nil {
-		return "", "", fmt.Errorf("inspect loom workspace boundary %q: %w", boundary, err)
+		return "", "", fmt.Errorf("inspect Conven workspace boundary %q: %w", boundary, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return "", "", fmt.Errorf("loom workspace boundary %q must be a real directory, not a symbolic link", boundary)
+		return "", "", fmt.Errorf("Conven workspace boundary %q must be a real directory, not a symbolic link", boundary)
 	}
 	return workspace, boundary, nil
 }
@@ -386,7 +386,7 @@ func readPolicyManifest(path string) ([]byte, os.FileInfo, bool, error) {
 		return nil, nil, true, nil
 	}
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("inspect loom manifest %q: %w", path, err)
+		return nil, nil, false, fmt.Errorf("inspect Conven manifest %q: %w", path, err)
 	}
 	data, info, err := readManifestForUpdate(path)
 	if err != nil {
@@ -410,7 +410,7 @@ func savePolicySnapshot(boundary string, pattern string, data []byte) (string, e
 	}
 	file, err := os.CreateTemp(directory, pattern)
 	if err != nil {
-		return "", fmt.Errorf("create loom policy snapshot: %w", err)
+		return "", fmt.Errorf("create conven policy snapshot: %w", err)
 	}
 	path := file.Name()
 	remove := true
@@ -421,18 +421,18 @@ func savePolicySnapshot(boundary string, pattern string, data []byte) (string, e
 	}()
 	if err := file.Chmod(0600); err != nil {
 		file.Close()
-		return "", fmt.Errorf("protect loom policy snapshot: %w", err)
+		return "", fmt.Errorf("protect conven policy snapshot: %w", err)
 	}
 	if _, err := file.Write(data); err != nil {
 		file.Close()
-		return "", fmt.Errorf("write loom policy snapshot: %w", err)
+		return "", fmt.Errorf("write conven policy snapshot: %w", err)
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		return "", fmt.Errorf("sync loom policy snapshot: %w", err)
+		return "", fmt.Errorf("sync conven policy snapshot: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return "", fmt.Errorf("close loom policy snapshot: %w", err)
+		return "", fmt.Errorf("close conven policy snapshot: %w", err)
 	}
 	if err := syncDirectory(directory); err != nil {
 		return "", err
@@ -447,18 +447,18 @@ func ensurePolicyBackupDirectory(boundary string) (string, error) {
 	info, err := os.Lstat(directory)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return "", fmt.Errorf("loom policy backup directory %q must be a real directory, not a symbolic link", directory)
+			return "", fmt.Errorf("conven policy backup directory %q must be a real directory, not a symbolic link", directory)
 		}
 	} else if os.IsNotExist(err) {
 		if err := os.Mkdir(directory, 0700); err != nil {
-			return "", fmt.Errorf("create loom policy backup directory %q: %w", directory, err)
+			return "", fmt.Errorf("create conven policy backup directory %q: %w", directory, err)
 		}
 		created = true
 	} else {
-		return "", fmt.Errorf("inspect loom policy backup directory %q: %w", directory, err)
+		return "", fmt.Errorf("inspect conven policy backup directory %q: %w", directory, err)
 	}
 	if err := os.Chmod(directory, 0700); err != nil {
-		return "", fmt.Errorf("protect loom policy backup directory %q: %w", directory, err)
+		return "", fmt.Errorf("protect conven policy backup directory %q: %w", directory, err)
 	}
 	if created {
 		if err := syncDirectory(boundary); err != nil {

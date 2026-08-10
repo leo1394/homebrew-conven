@@ -1,4 +1,4 @@
-module github.com/leo1394/homebrew-loom
+module github.com/leo1394/homebrew-conven
 
 go 1.23.0
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 func TestResolveKubeconfigPriority(t *testing.T) {
@@ -60,7 +60,7 @@ func TestResolveKubeconfigPriority(t *testing.T) {
 			want:       "/config/profile",
 		},
 		{
-			name:       "loom config setting",
+			name:       "conven config setting",
 			configured: "/config/configured",
 			manifest:   "/config/manifest",
 			kubernetes: "/config/kubernetes",

@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/model"
 	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
@@ -269,7 +269,7 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 	for _, name := range result.Updated {
 		value := mappingValue(serviceMapping, name)
 		if value == nil || value.Kind != yaml.MappingNode {
-			return result, fmt.Errorf("loom manifest %q service %q must be a mapping", manifestPath, name)
+			return result, fmt.Errorf("Conven manifest %q service %q must be a mapping", manifestPath, name)
 		}
 		appendDiscoveredDescription(value, updates[name])
 	}
@@ -409,13 +409,13 @@ func isMissingDirectChildServicePath(workspace string, servicePath string) bool 
 func readManifestForUpdate(path string) ([]byte, os.FileInfo, error) {
 	observed, err := os.Lstat(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("inspect loom manifest %q: %w", path, err)
+		return nil, nil, fmt.Errorf("inspect Conven manifest %q: %w", path, err)
 	}
 	if observed.Mode()&os.ModeSymlink != 0 {
-		return nil, nil, fmt.Errorf("loom manifest %q is a symbolic link; Loom refuses to replace symbolic links", path)
+		return nil, nil, fmt.Errorf("Conven manifest %q is a symbolic link; Conven refuses to replace symbolic links", path)
 	}
 	if !observed.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("loom manifest %q is not a regular file", path)
+		return nil, nil, fmt.Errorf("Conven manifest %q is not a regular file", path)
 	}
 	file, err := openManifestNoFollow(path)
 	if err != nil {
@@ -424,32 +424,32 @@ func readManifestForUpdate(path string) ([]byte, os.FileInfo, error) {
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return nil, nil, fmt.Errorf("inspect opened loom manifest %q: %w", path, err)
+		return nil, nil, fmt.Errorf("inspect opened Conven manifest %q: %w", path, err)
 	}
 	if !info.Mode().IsRegular() || !os.SameFile(observed, info) {
-		return nil, nil, fmt.Errorf("loom manifest %q changed while it was opened; retry the command", path)
+		return nil, nil, fmt.Errorf("Conven manifest %q changed while it was opened; retry the command", path)
 	}
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read loom manifest %q: %w", path, err)
+		return nil, nil, fmt.Errorf("read Conven manifest %q: %w", path, err)
 	}
 	return data, info, nil
 }
 
 func loadManifestDocument(data []byte, path string) (*yaml.Node, *yaml.Node, error) {
 	if len(data) == 0 {
-		return nil, nil, fmt.Errorf("loom manifest %q is empty", path)
+		return nil, nil, fmt.Errorf("Conven manifest %q is empty", path)
 	}
 	document := &yaml.Node{}
 	if err := yaml.Unmarshal(data, document); err != nil {
-		return nil, nil, fmt.Errorf("decode loom manifest %q for discovery: %w", path, err)
+		return nil, nil, fmt.Errorf("decode Conven manifest %q for discovery: %w", path, err)
 	}
 	if document.Kind != yaml.DocumentNode || len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
-		return nil, nil, fmt.Errorf("loom manifest %q must contain one mapping document", path)
+		return nil, nil, fmt.Errorf("Conven manifest %q must contain one mapping document", path)
 	}
 	services := mappingValue(document.Content[0], "services")
 	if services == nil || services.Kind != yaml.MappingNode {
-		return nil, nil, fmt.Errorf("loom manifest %q services must be a mapping", path)
+		return nil, nil, fmt.Errorf("Conven manifest %q services must be a mapping", path)
 	}
 	return document, services, nil
 }
@@ -505,17 +505,17 @@ func saveManifestDocument(path string, document *yaml.Node, source []byte, sourc
 	encoder.SetIndent(2)
 	if err := encoder.Encode(document); err != nil {
 		encoder.Close()
-		return fmt.Errorf("encode loom manifest %q: %w", path, err)
+		return fmt.Errorf("encode Conven manifest %q: %w", path, err)
 	}
 	if err := encoder.Close(); err != nil {
-		return fmt.Errorf("close loom manifest encoder: %w", err)
+		return fmt.Errorf("close Conven manifest encoder: %w", err)
 	}
 	updated, err := decodeManifest(data.Bytes(), path)
 	if err != nil {
-		return fmt.Errorf("validate updated loom manifest: %w", err)
+		return fmt.Errorf("validate updated Conven manifest: %w", err)
 	}
 	if !reflect.DeepEqual(updated, expected) {
-		return fmt.Errorf("validate updated loom manifest: encoded manifest does not match the validated discovery result")
+		return fmt.Errorf("validate updated Conven manifest: encoded manifest does not match the validated discovery result")
 	}
 	return publishManifestUpdate(path, data.Bytes(), source, sourceInfo, "discovery")
 }
@@ -524,24 +524,24 @@ func publishManifestUpdate(path string, data []byte, source []byte, sourceInfo o
 	directory := filepath.Dir(path)
 	temporary, err := os.CreateTemp(directory, ".loom-manifest-*")
 	if err != nil {
-		return fmt.Errorf("create temporary loom manifest: %w", err)
+		return fmt.Errorf("create temporary Conven manifest: %w", err)
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
 	if err := temporary.Chmod(sourceInfo.Mode().Perm()); err != nil {
 		temporary.Close()
-		return fmt.Errorf("protect temporary loom manifest: %w", err)
+		return fmt.Errorf("protect temporary Conven manifest: %w", err)
 	}
 	if _, err := temporary.Write(data); err != nil {
 		temporary.Close()
-		return fmt.Errorf("write temporary loom manifest: %w", err)
+		return fmt.Errorf("write temporary Conven manifest: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()
-		return fmt.Errorf("sync temporary loom manifest: %w", err)
+		return fmt.Errorf("sync temporary Conven manifest: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary loom manifest: %w", err)
+		return fmt.Errorf("close temporary Conven manifest: %w", err)
 	}
 	locked, err := lockManifestSnapshot(path, source, sourceInfo, operation)
 	if err != nil {
@@ -549,7 +549,7 @@ func publishManifestUpdate(path string, data []byte, source []byte, sourceInfo o
 	}
 	defer unlockManifest(locked)
 	if err := os.Rename(temporaryName, path); err != nil {
-		return fmt.Errorf("publish loom manifest %q: %w", path, err)
+		return fmt.Errorf("publish Conven manifest %q: %w", path, err)
 	}
 	_ = syncDirectory(directory)
 	return nil
@@ -566,37 +566,37 @@ func verifyManifestSnapshot(path string, source []byte, sourceInfo os.FileInfo, 
 func lockManifestSnapshot(path string, source []byte, sourceInfo os.FileInfo, operation string) (*os.File, error) {
 	file, err := openManifestNoFollow(path)
 	if err != nil {
-		return nil, fmt.Errorf("reopen loom manifest before %s: %w", operation, err)
+		return nil, fmt.Errorf("reopen Conven manifest before %s: %w", operation, err)
 	}
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		file.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) {
-			return nil, fmt.Errorf("loom manifest %q is being updated by another Loom process; retry the command", path)
+			return nil, fmt.Errorf("Conven manifest %q is being updated by another Conven process; retry the command", path)
 		}
-		return nil, fmt.Errorf("lock loom manifest %q before %s: %w", path, operation, err)
+		return nil, fmt.Errorf("lock Conven manifest %q before %s: %w", path, operation, err)
 	}
 	info, err := file.Stat()
 	if err != nil {
 		unlockManifest(file)
-		return nil, fmt.Errorf("inspect locked loom manifest %q: %w", path, err)
+		return nil, fmt.Errorf("inspect locked Conven manifest %q: %w", path, err)
 	}
 	currentInfo, err := os.Lstat(path)
 	if err != nil {
 		unlockManifest(file)
-		return nil, fmt.Errorf("reinspect loom manifest %q before %s: %w", path, operation, err)
+		return nil, fmt.Errorf("reinspect Conven manifest %q before %s: %w", path, operation, err)
 	}
 	if currentInfo.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || !os.SameFile(sourceInfo, info) || !os.SameFile(info, currentInfo) {
 		unlockManifest(file)
-		return nil, fmt.Errorf("loom manifest %q changed during %s; retry the command", path, operation)
+		return nil, fmt.Errorf("Conven manifest %q changed during %s; retry the command", path, operation)
 	}
 	current, err := io.ReadAll(file)
 	if err != nil {
 		unlockManifest(file)
-		return nil, fmt.Errorf("reread locked loom manifest %q before %s: %w", path, operation, err)
+		return nil, fmt.Errorf("reread locked Conven manifest %q before %s: %w", path, operation, err)
 	}
 	if !bytes.Equal(current, source) {
 		unlockManifest(file)
-		return nil, fmt.Errorf("loom manifest %q was edited during %s; retry the command", path, operation)
+		return nil, fmt.Errorf("Conven manifest %q was edited during %s; retry the command", path, operation)
 	}
 	return file, nil
 }
@@ -604,7 +604,7 @@ func lockManifestSnapshot(path string, source []byte, sourceInfo os.FileInfo, op
 func openManifestNoFollow(path string) (*os.File, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open loom manifest %q without following symbolic links: %w", path, err)
+		return nil, fmt.Errorf("open Conven manifest %q without following symbolic links: %w", path, err)
 	}
 	return os.NewFile(uintptr(fd), path), nil
 }
@@ -613,10 +613,10 @@ func unlockManifest(file *os.File) error {
 	unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
 	closeErr := file.Close()
 	if unlockErr != nil {
-		return fmt.Errorf("unlock loom manifest %q: %w", file.Name(), unlockErr)
+		return fmt.Errorf("unlock Conven manifest %q: %w", file.Name(), unlockErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close locked loom manifest %q: %w", file.Name(), closeErr)
+		return fmt.Errorf("close locked Conven manifest %q: %w", file.Name(), closeErr)
 	}
 	return nil
 }

@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/leo1394/homebrew-loom/internal/config"
-	"github.com/leo1394/homebrew-loom/internal/terminal"
+	"github.com/leo1394/homebrew-conven/internal/config"
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
 func (app App) runPolicy(arguments []string) int {
@@ -33,7 +33,7 @@ func (app App) runPolicy(arguments []string) int {
 		return app.runPolicyReset(remaining)
 	default:
 		style := terminal.New(app.Error)
-		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("loom: unknown policy action %q", action)))
+		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: unknown policy action %q", action)))
 		app.printPolicyUsage(app.Error)
 		return 2
 	}
@@ -44,7 +44,7 @@ func (app App) runPolicyImport(arguments []string) int {
 	flags.SetOutput(app.Error)
 	edit := flags.Bool("edit", false, "edit a private import draft before validation and publication")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom policy --import <yaml-file> [--edit]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --import <yaml-file> [--edit]")
 		flags.PrintDefaults()
 		fmt.Fprintln(flags.Output(), "\nImports the YAML file as the entire .loom/loom.yaml for the workspace resolved from cwd.")
 		fmt.Fprintln(flags.Output(), "This is a whole-file replacement, not a merge with repository scan results.")
@@ -67,16 +67,16 @@ func (app App) runPolicyImport(arguments []string) int {
 		return app.fail(err)
 	}
 	if !result.Changed {
-		fmt.Fprintf(app.Output, "Loom policy manifest already matches imported file %s: %s\n", result.SourcePath, result.Path)
+		fmt.Fprintf(app.Output, "Conven policy manifest already matches imported file %s: %s\n", result.SourcePath, result.Path)
 	} else if result.Created {
-		fmt.Fprintf(app.Output, "Imported Loom policy manifest from %s: %s\n", result.SourcePath, result.Path)
+		fmt.Fprintf(app.Output, "Imported Conven policy manifest from %s: %s\n", result.SourcePath, result.Path)
 	} else {
-		fmt.Fprintf(app.Output, "Replaced Loom policy manifest from imported file %s: %s\n", result.SourcePath, result.Path)
+		fmt.Fprintf(app.Output, "Replaced Conven policy manifest from imported file %s: %s\n", result.SourcePath, result.Path)
 	}
 	if result.BackupPath != "" {
 		fmt.Fprintf(app.Output, "Pre-import manifest backup: %s\n", result.BackupPath)
 	}
-	fmt.Fprintln(app.Output, "Imported the entire manifest without merging repository scan results. Review it, then run loom doctor and loom services --start --dry-run before starting services.")
+	fmt.Fprintln(app.Output, "Imported the entire manifest without merging repository scan results. Review it, then run conven doctor and conven services --start --dry-run before starting services.")
 	return 0
 }
 
@@ -84,7 +84,7 @@ func (app App) runPolicyEdit(arguments []string) int {
 	flags := flag.NewFlagSet("policy --edit", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom policy --edit")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --edit")
 		flags.PrintDefaults()
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
@@ -100,9 +100,9 @@ func (app App) runPolicyEdit(arguments []string) int {
 		return app.fail(err)
 	}
 	if result.Changed {
-		fmt.Fprintf(app.Output, "Updated Loom policy manifest: %s\n", result.Path)
+		fmt.Fprintf(app.Output, "Updated Conven policy manifest: %s\n", result.Path)
 	} else {
-		fmt.Fprintf(app.Output, "Loom policy manifest unchanged: %s\n", result.Path)
+		fmt.Fprintf(app.Output, "Conven policy manifest unchanged: %s\n", result.Path)
 	}
 	return 0
 }
@@ -111,7 +111,7 @@ func (app App) runPolicyReset(arguments []string) int {
 	flags := flag.NewFlagSet("policy --reset", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom policy --reset")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --reset")
 		flags.PrintDefaults()
 		fmt.Fprintln(flags.Output(), "\nDestructive: rebuilds the entire loom.yaml from read-only repository analysis.")
 		fmt.Fprintln(flags.Output(), "Company policies, environments, ports, dependencies, patches, manual runner changes, and comments cannot be recovered by scanning.")
@@ -134,13 +134,13 @@ func (app App) runPolicyReset(arguments []string) int {
 		fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Skipped by the built-in repository analyzers"), style.Identifiers(result.Skipped, ", "))
 	}
 	if !result.Changed {
-		fmt.Fprintf(app.Output, "Loom policy manifest already matches the scan baseline: %s\n", result.Path)
+		fmt.Fprintf(app.Output, "Conven policy manifest already matches the scan baseline: %s\n", result.Path)
 		return 0
 	}
 	if result.Created {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Created Loom policy manifest from scan baseline"), style.Identifier(result.Path))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Created Conven policy manifest from scan baseline"), style.Identifier(result.Path))
 	} else {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Reset Loom policy manifest to scan baseline"), style.Identifier(result.Path))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Reset Conven policy manifest to scan baseline"), style.Identifier(result.Path))
 	}
 	if result.BackupPath != "" {
 		fmt.Fprintf(app.Output, "Pre-reset manifest backup: %s\n", result.BackupPath)
@@ -151,9 +151,9 @@ func (app App) runPolicyReset(arguments []string) int {
 
 func (app App) printPolicyUsage(output io.Writer) {
 	fmt.Fprint(output, `usage:
-  loom policy --edit
-  loom policy --import <yaml-file> [--edit]
-  loom policy --reset
+  conven policy --edit
+  conven policy --import <yaml-file> [--edit]
+  conven policy --reset
 
 --edit opens a temporary copy of the workspace's sole .loom/loom.yaml and
 publishes it only after strict validation. --import installs an arbitrary local
@@ -175,7 +175,7 @@ func launchPolicyEditor(ctx context.Context, input *os.File, output io.Writer, e
 	if editor == "" {
 		editor = "vi"
 	}
-	command := exec.CommandContext(ctx, "/bin/sh", "-c", "exec "+editor+` "$1"`, "loom-policy-editor", path)
+	command := exec.CommandContext(ctx, "/bin/sh", "-c", "exec "+editor+` "$1"`, "conven-policy-editor", path)
 	command.Stdin = input
 	command.Stdout = output
 	command.Stderr = errorOutput

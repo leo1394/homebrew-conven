@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/leo1394/homebrew-loom/examples"
-	"github.com/leo1394/homebrew-loom/internal/config"
-	loomruntime "github.com/leo1394/homebrew-loom/internal/runtime"
-	"github.com/leo1394/homebrew-loom/internal/terminal"
+	"github.com/leo1394/homebrew-conven/examples"
+	"github.com/leo1394/homebrew-conven/internal/config"
+	convenruntime "github.com/leo1394/homebrew-conven/internal/runtime"
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
 func (app App) runInit(arguments []string) int {
@@ -27,7 +27,7 @@ func (app App) runInit(arguments []string) int {
 	}
 	style := terminal.New(app.Output)
 	if result.Created {
-		fmt.Fprintf(app.Output, "%s %s\n", style.Label("Initialized Loom workspace in"), style.Identifier(result.Path))
+		fmt.Fprintf(app.Output, "%s %s\n", style.Label("Initialized Conven workspace in"), style.Identifier(result.Path))
 		if len(result.Discovered) > 0 {
 			fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Discovered supported services"), style.Identifiers(result.Discovered, ", "))
 		} else if result.UsedExample {
@@ -37,7 +37,7 @@ func (app App) runInit(arguments []string) int {
 			fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Skipped by the built-in repository analyzers"), style.Identifiers(result.Skipped, ", "))
 		}
 	} else {
-		fmt.Fprintf(app.Output, "%s %s; manifest was not overwritten.\n", style.Label("Reinitialized existing Loom workspace in"), style.Identifier(result.Path))
+		fmt.Fprintf(app.Output, "%s %s; manifest was not overwritten.\n", style.Label("Reinitialized existing Conven workspace in"), style.Identifier(result.Path))
 	}
 	return 0
 }
@@ -47,7 +47,7 @@ func (app App) runDiscover(arguments []string) int {
 	flags.SetOutput(app.Error)
 	prune := flags.Bool("prune", false, "remove services whose direct-child repository no longer exists")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom services --registry [--prune]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --registry [--prune]")
 		flags.PrintDefaults()
 		fmt.Fprintln(flags.Output(), "\nWithout --prune, manual service configuration is preserved; new services are added and empty discovered facts may be backfilled.")
 	}
@@ -78,7 +78,7 @@ func (app App) runDiscover(arguments []string) int {
 		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Backfilled discovered facts"), style.Identifiers(result.Updated, ", "))
 	}
 	if len(result.Missing) > 0 {
-		fmt.Fprintf(app.Output, "%s: %s (use loom services --registry --prune to remove)\n", style.Warning("Missing repositories kept in manifest"), style.Identifiers(result.Missing, ", "))
+		fmt.Fprintf(app.Output, "%s: %s (use conven services --registry --prune to remove)\n", style.Warning("Missing repositories kept in manifest"), style.Identifiers(result.Missing, ", "))
 	}
 	if len(result.Pruned) > 0 {
 		fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Pruned services"), style.Identifiers(result.Pruned, ", "))
@@ -93,7 +93,7 @@ func (app App) runDiscover(arguments []string) int {
 			fmt.Fprintln(app.Output, "Manifest already matches discovered repositories.")
 		}
 	} else {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Updated Loom manifest"), style.Identifier(manifestPath))
+		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Updated Conven manifest"), style.Identifier(manifestPath))
 	}
 	return 0
 }
@@ -171,18 +171,18 @@ func (app App) runRestart(arguments []string) int {
 	skipBuild := flags.Bool("skip-build", false, "skip build and reuse artifacts from the fixed current runtime")
 	skipVerify := flags.Bool("skip-verify", false, "skip service health checks")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom services --restart [flags] [service...]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --restart [flags] [service...]")
 		flags.PrintDefaults()
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
 	}
 	options := common.options(app.Cwd)
-	workspace, err := loomruntime.OpenWorkspace(options)
+	workspace, err := convenruntime.OpenWorkspace(options)
 	if err != nil {
 		return app.fail(err)
 	}
-	session, err := loomruntime.Restart(app.Context, workspace, loomruntime.RestartOptions{
+	session, err := convenruntime.Restart(app.Context, workspace, convenruntime.RestartOptions{
 		Common:     options,
 		Services:   flags.Args(),
 		SkipBuild:  *skipBuild,
@@ -193,7 +193,7 @@ func (app App) runRestart(arguments []string) int {
 		return app.fail(err)
 	}
 	if *tail && session != nil {
-		if err := loomruntime.TailLogs(app.Context, workspace, session, flags.Args(), app.Input, app.Output); err != nil {
+		if err := convenruntime.TailLogs(app.Context, workspace, session, flags.Args(), app.Input, app.Output); err != nil {
 			return app.fail(err)
 		}
 	}

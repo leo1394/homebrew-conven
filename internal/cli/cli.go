@@ -9,10 +9,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/leo1394/homebrew-loom/internal/config"
-	loomruntime "github.com/leo1394/homebrew-loom/internal/runtime"
-	"github.com/leo1394/homebrew-loom/internal/selector"
-	"github.com/leo1394/homebrew-loom/internal/terminal"
+	"github.com/leo1394/homebrew-conven/internal/config"
+	convenruntime "github.com/leo1394/homebrew-conven/internal/runtime"
+	"github.com/leo1394/homebrew-conven/internal/selector"
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
 type App struct {
@@ -45,7 +45,7 @@ func (app App) Run(arguments []string) int {
 		app.printUsage(app.Output)
 		return 0
 	case "-v", "--version", "version":
-		fmt.Fprintf(app.Output, "loom %s\n", app.Version)
+		fmt.Fprintf(app.Output, "conven %s\n", app.Version)
 		return 0
 	case "init":
 		return app.runInit(arguments[1:])
@@ -61,7 +61,7 @@ func (app App) Run(arguments []string) int {
 		return app.runCompletion(arguments[1:])
 	default:
 		style := terminal.New(app.Error)
-		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("loom: unknown command %q", arguments[0])))
+		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: unknown command %q", arguments[0])))
 		app.printUsage(app.Error)
 		return 2
 	}
@@ -96,7 +96,7 @@ func (app App) runServices(arguments []string) int {
 		return app.runStop(append([]string{"--all"}, remaining...))
 	default:
 		style := terminal.New(app.Error)
-		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("loom: unknown services action %q", action)))
+		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: unknown services action %q", action)))
 		app.printServicesUsage(app.Error)
 		return 2
 	}
@@ -111,7 +111,7 @@ func (app App) runStart(arguments []string) int {
 	skipBuild := flags.Bool("skip-build", false, "skip build; artifacts under current runtime cannot be reused after a fresh start")
 	skipVerify := flags.Bool("skip-verify", false, "skip service health checks")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom services --start [flags] [service...]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --start [flags] [service...]")
 		flags.PrintDefaults()
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
@@ -121,7 +121,7 @@ func (app App) runStart(arguments []string) int {
 		return app.fail(err)
 	}
 	options := common.options(app.Cwd)
-	workspace, err := loomruntime.OpenWorkspace(options)
+	workspace, err := convenruntime.OpenWorkspace(options)
 	if err != nil {
 		return app.fail(err)
 	}
@@ -153,7 +153,7 @@ func (app App) runStart(arguments []string) int {
 		}
 		services = selected
 	}
-	session, err := loomruntime.Start(app.Context, workspace, loomruntime.StartOptions{
+	session, err := convenruntime.Start(app.Context, workspace, convenruntime.StartOptions{
 		Common:     options,
 		Services:   services,
 		DryRun:     *dryRun,
@@ -165,7 +165,7 @@ func (app App) runStart(arguments []string) int {
 		return app.fail(err)
 	}
 	if *tail && session != nil {
-		if err := loomruntime.TailLogs(app.Context, workspace, session, nil, app.Input, app.Output); err != nil {
+		if err := convenruntime.TailLogs(app.Context, workspace, session, nil, app.Input, app.Output); err != nil {
 			return app.fail(err)
 		}
 	}
@@ -177,7 +177,7 @@ func (app App) runStatus(arguments []string) int {
 	flags.SetOutput(app.Error)
 	common := bindCommonFlags(flags, false)
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom services --status")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --status")
 		flags.PrintDefaults()
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
@@ -186,11 +186,11 @@ func (app App) runStatus(arguments []string) int {
 	if len(flags.Args()) != 0 {
 		return app.fail(errors.New("services --status does not accept service arguments"))
 	}
-	workspace, err := loomruntime.OpenWorkspace(common.options(app.Cwd))
+	workspace, err := convenruntime.OpenWorkspace(common.options(app.Cwd))
 	if err != nil {
 		return app.fail(err)
 	}
-	if err := loomruntime.Status(app.Context, workspace, app.Output); err != nil {
+	if err := convenruntime.Status(app.Context, workspace, app.Output); err != nil {
 		return app.fail(err)
 	}
 	return 0
@@ -203,9 +203,9 @@ func (app App) runStop(arguments []string) int {
 	all := flags.Bool("all", false, "stop every service in the current session")
 	force := flags.Bool("force", false, "bypass identity checks and recover saved process groups")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom services --stop [--force] (<service...>|--all)\n  loom services --stop-all [--force]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --stop [--force] (<service...>|--all)\n  conven services --stop-all [--force]")
 		flags.PrintDefaults()
-		fmt.Fprintln(flags.Output(), "\n--force is destructive: verify the saved PGID with `loom services --status` before using it.")
+		fmt.Fprintln(flags.Output(), "\n--force is destructive: verify the saved PGID with `conven services --status` before using it.")
 		fmt.Fprintln(flags.Output(), "With no workspace session, --all --force recovers unleased shared connection records.")
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
@@ -214,11 +214,11 @@ func (app App) runStop(arguments []string) int {
 	if *all && len(flags.Args()) > 0 {
 		return app.fail(errors.New("services --stop --all cannot be combined with service names"))
 	}
-	workspace, err := loomruntime.OpenWorkspace(common.options(app.Cwd))
+	workspace, err := convenruntime.OpenWorkspace(common.options(app.Cwd))
 	if err != nil {
 		return app.fail(err)
 	}
-	if err := loomruntime.Stop(app.Context, workspace, flags.Args(), *all, *force, app.Output); err != nil {
+	if err := convenruntime.Stop(app.Context, workspace, flags.Args(), *all, *force, app.Output); err != nil {
 		return app.fail(err)
 	}
 	return 0
@@ -230,13 +230,13 @@ func (app App) runLogs(arguments []string) int {
 	common := bindCommonFlags(flags, false)
 	tail := flags.Bool("tail", false, "continue tailing appended log lines")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom services --logs [--tail] [service...]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --logs [--tail] [service...]")
 		flags.PrintDefaults()
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
 	}
-	workspace, err := loomruntime.OpenWorkspace(common.options(app.Cwd))
+	workspace, err := convenruntime.OpenWorkspace(common.options(app.Cwd))
 	if err != nil {
 		return app.fail(err)
 	}
@@ -245,12 +245,12 @@ func (app App) runLogs(arguments []string) int {
 		return app.fail(err)
 	}
 	if *tail {
-		if err := loomruntime.TailLogs(app.Context, workspace, session, flags.Args(), app.Input, app.Output); err != nil {
+		if err := convenruntime.TailLogs(app.Context, workspace, session, flags.Args(), app.Input, app.Output); err != nil {
 			return app.fail(err)
 		}
 		return 0
 	}
-	if err := loomruntime.ShowLogs(app.Context, session, flags.Args(), false, app.Output); err != nil {
+	if err := convenruntime.ShowLogs(app.Context, session, flags.Args(), false, app.Output); err != nil {
 		return app.fail(err)
 	}
 	return 0
@@ -270,11 +270,11 @@ func (app App) runDoctor(arguments []string) int {
 		return app.fail(errors.New("doctor does not accept service arguments"))
 	}
 	options := common.options(app.Cwd)
-	workspace, err := loomruntime.OpenWorkspace(options)
+	workspace, err := convenruntime.OpenWorkspace(options)
 	if err != nil {
 		return app.fail(err)
 	}
-	if err := loomruntime.Doctor(workspace, options, app.Output); err != nil {
+	if err := convenruntime.Doctor(workspace, options, app.Output); err != nil {
 		return app.fail(err)
 	}
 	return 0
@@ -285,7 +285,7 @@ func (app App) runList(arguments []string) int {
 	flags.SetOutput(app.Error)
 	common := bindCommonFlags(flags, false)
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  loom services --list")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --list")
 		flags.PrintDefaults()
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
@@ -294,11 +294,11 @@ func (app App) runList(arguments []string) int {
 	if len(flags.Args()) != 0 {
 		return app.fail(errors.New("services --list does not accept service arguments"))
 	}
-	workspace, err := loomruntime.OpenWorkspace(common.options(app.Cwd))
+	workspace, err := convenruntime.OpenWorkspace(common.options(app.Cwd))
 	if err != nil {
 		return app.fail(err)
 	}
-	loomruntime.ListServices(workspace, app.Output)
+	convenruntime.ListServices(workspace, app.Output)
 	return 0
 }
 
@@ -454,8 +454,8 @@ func intersperseFlags(flags *flag.FlagSet, arguments []string) ([]string, error)
 	return append(options, positionals...), nil
 }
 
-func (common commonFlags) options(cwd string) loomruntime.CommonOptions {
-	return loomruntime.CommonOptions{
+func (common commonFlags) options(cwd string) convenruntime.CommonOptions {
+	return convenruntime.CommonOptions{
 		Cwd:         cwd,
 		Environment: common.environment,
 		Kubeconfig:  common.kubeconfig,
@@ -467,7 +467,7 @@ func (common commonFlags) options(cwd string) loomruntime.CommonOptions {
 func (app App) fail(err error) int {
 	message := strings.TrimSpace(err.Error())
 	style := terminal.New(app.Error)
-	fmt.Fprintln(app.Error, style.Failure("loom: "+message))
+	fmt.Fprintln(app.Error, style.Failure("conven: "+message))
 	return 1
 }
 
@@ -500,34 +500,34 @@ func (app App) withDefaults() App {
 
 func (app App) printUsage(output io.Writer) {
 	fmt.Fprint(output, `usage:
-  loom init
-  loom config [--global] [--list|--unset] [key] [value]
-  loom policy ACTION
-  loom services ACTION [flags] [service...]
-  loom doctor [flags]
-  loom --version
+  conven init
+  conven config [--global] [--list|--unset] [key] [value]
+  conven policy ACTION
+  conven services ACTION [flags] [service...]
+  conven doctor [flags]
+  conven --version
 
-Run "loom policy --help" for policy actions,
-"loom services --help" for service actions, and
-"loom services --start --help" for startup flags. Without service arguments,
-loom opens an interactive PathPicker-style selector and requires confirmation.
-Run "loom services --restart" without service arguments to restart only changed
+Run "conven policy --help" for policy actions,
+"conven services --help" for service actions, and
+"conven services --start --help" for startup flags. Without service arguments,
+Conven opens an interactive PathPicker-style selector and requires confirmation.
+Run "conven services --restart" without service arguments to restart only changed
 services from the current session.
 `)
 }
 
 func (app App) printServicesUsage(output io.Writer) {
 	fmt.Fprint(output, `usage:
-  loom services --list
-  loom services --registry [--prune]
-  loom services --status
-  loom services --logs [--tail] [service...]
-  loom services --start [flags] [service...]
-  loom services --restart [flags] [service...]
-  loom services --stop [--force] (<service...>|--all)
-  loom services --stop-all [--force]
+  conven services --list
+  conven services --registry [--prune]
+  conven services --status
+  conven services --logs [--tail] [service...]
+  conven services --start [flags] [service...]
+  conven services --restart [flags] [service...]
+  conven services --stop [--force] (<service...>|--all)
+  conven services --stop-all [--force]
 
-The action flag must be the first argument after "loom services".
-Run "loom services --ACTION --help" for action-specific flags.
+The action flag must be the first argument after "conven services".
+Run "conven services --ACTION --help" for action-specific flags.
 `)
 }

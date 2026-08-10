@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 const (

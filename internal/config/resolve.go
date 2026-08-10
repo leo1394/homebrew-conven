@@ -33,7 +33,7 @@ func ResolvePath(cwd string) (configPath string, workspace string, err error) {
 		current = parent
 	}
 
-	return "", "", fmt.Errorf("not a loom workspace (or any parent): .loom/loom.yaml not found from %q; run \"loom init\"", cwd)
+	return "", "", fmt.Errorf("not a Conven workspace (or any parent): .loom/loom.yaml not found from %q; run \"conven init\"", cwd)
 }
 
 func FindWorkspace(cwd string) (string, error) {
@@ -55,12 +55,12 @@ func FindWorkspace(cwd string) (string, error) {
 		info, statErr := os.Stat(boundary)
 		if statErr == nil {
 			if !info.IsDir() {
-				return "", fmt.Errorf("loom workspace boundary %q is not a directory", boundary)
+				return "", fmt.Errorf("Conven workspace boundary %q is not a directory", boundary)
 			}
 			return current, nil
 		}
 		if !os.IsNotExist(statErr) {
-			return "", fmt.Errorf("inspect loom workspace boundary %q: %w", boundary, statErr)
+			return "", fmt.Errorf("inspect Conven workspace boundary %q: %w", boundary, statErr)
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
@@ -68,7 +68,7 @@ func FindWorkspace(cwd string) (string, error) {
 		}
 		current = parent
 	}
-	return "", fmt.Errorf("not a loom workspace (or any parent): .loom directory not found; run \"loom init\"")
+	return "", fmt.Errorf("not a Conven workspace (or any parent): .loom directory not found; run \"conven init\"")
 }
 
 func resolveCwd(cwd string) (string, error) {
@@ -131,23 +131,23 @@ func findConfigInWorkspace(workspace string) (path string, found bool, err error
 		if os.IsNotExist(statErr) {
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("inspect loom workspace boundary %q: %w", boundary, statErr)
+		return "", false, fmt.Errorf("inspect Conven workspace boundary %q: %w", boundary, statErr)
 	}
 	if !info.IsDir() {
-		return "", false, fmt.Errorf("loom workspace boundary %q is not a directory", boundary)
+		return "", false, fmt.Errorf("Conven workspace boundary %q is not a directory", boundary)
 	}
 	candidate := filepath.Join(boundary, "loom.yaml")
 	info, statErr = os.Stat(candidate)
 	if statErr == nil {
 		if info.IsDir() {
-			return "", false, fmt.Errorf("loom manifest %q is a directory", candidate)
+			return "", false, fmt.Errorf("Conven manifest %q is a directory", candidate)
 		}
 		return filepath.Clean(candidate), true, nil
 	}
 	if !os.IsNotExist(statErr) {
-		return "", false, fmt.Errorf("inspect loom manifest %q: %w", candidate, statErr)
+		return "", false, fmt.Errorf("inspect Conven manifest %q: %w", candidate, statErr)
 	}
-	return "", false, fmt.Errorf("loom workspace boundary %q does not contain loom.yaml; run \"loom init\"", boundary)
+	return "", false, fmt.Errorf("Conven workspace boundary %q does not contain loom.yaml; run \"conven init\"", boundary)
 }
 
 func ResolveDirectory(cwd string) (string, error) {
@@ -158,10 +158,10 @@ func EnsureWorkspaceBoundary(workspace string) error {
 	boundary := filepath.Join(workspace, ".loom")
 	info, err := os.Stat(boundary)
 	if err != nil {
-		return fmt.Errorf("inspect loom workspace boundary %q: %w", boundary, err)
+		return fmt.Errorf("inspect Conven workspace boundary %q: %w", boundary, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("loom workspace boundary %q is not a directory", boundary)
+		return fmt.Errorf("Conven workspace boundary %q is not a directory", boundary)
 	}
 	return nil
 }

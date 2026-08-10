@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leo1394/homebrew-loom/internal/config"
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/config"
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 type CommonOptions struct {

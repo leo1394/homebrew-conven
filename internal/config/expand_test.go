@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 func TestExpandAllSupportedTemplates(t *testing.T) {

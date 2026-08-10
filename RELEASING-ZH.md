@@ -1,16 +1,16 @@
-# 发布 loom
+# 发布 Conven
 
 [English](RELEASING.md) | **简体中文**
 
-本文把 `homebrew-gits` 的发布纪律适配到 Loom 的 Go 源码构建和 Homebrew Formula。
+本文把 `homebrew-gits` 的发布纪律适配到 Conven 的 Go 源码构建和 Homebrew Formula。
 
 ## 发布模型
 
 - 从 `master` 发布源码，使用不可变 annotated tag `vX.Y.Z`。
 - 稳定 Formula 下载带 tag 的源码归档，校验 SHA-256，使用 Go 构建
-  `./cmd/loom`，并生成 Bash、Zsh 和 Fish 补全。
+  `./cmd/conven`，并生成 Bash、Zsh 和 Fish 补全。
 - 保留 `head`，开发版本仍可通过
-  `brew install --formula --HEAD leo1394/loom/loom` 安装。
+  `brew install --formula --HEAD leo1394/conven/conven` 安装。
 - Homebrew 会从稳定 URL 中的 tag 推断版本，不要重复声明 `version`。
 - 已发布 tag 不得移动、删除或重建；错误必须通过新的 patch 版本修复。
 
@@ -18,7 +18,7 @@
 新的 tag 归档。
 
 Formula 和 Go 源码位于同一个仓库，因此不能把最终 SHA 写入被该 SHA 校验的源码
-commit。Loom 使用两个 commit 完成发布：
+commit。Conven 使用两个 commit 完成发布：
 
 1. 源码发布 commit，由不可变 tag 引用。
 2. Formula commit，指向该 tag 并写入公开归档的 SHA-256。
@@ -34,7 +34,7 @@ commit。Loom 使用两个 commit 完成发布：
 
 ## 前置条件
 
-- 拥有 `git@github.com:leo1394/homebrew-loom.git` 的推送权限。
+- 拥有 `git@github.com:leo1394/homebrew-conven.git` 的推送权限。
 - 已安装 Go 1.23 或更高版本、Homebrew、Ruby、Git、ripgrep、`curl` 和 `shasum`。
 - 本地 `master` 干净，并与 `origin/master` 同步。
 - GitHub 仓库已公开，当前分支 CI 全部通过。
@@ -44,7 +44,7 @@ commit。Loom 使用两个 commit 完成发布：
 如果还没有 `origin`，必须先完成本节，再执行通用预检。创建公开仓库并配置远端：
 
 ```bash
-git remote add origin git@github.com:leo1394/homebrew-loom.git
+git remote add origin git@github.com:leo1394/homebrew-conven.git
 git remote -v
 git status --short
 ```
@@ -54,7 +54,7 @@ git status --short
 ```bash
 git add --all
 git diff --cached
-git commit -m "Initialize loom"
+git commit -m "Initialize conven"
 git push -u origin master
 ```
 
@@ -66,11 +66,11 @@ git push -u origin master
 在预检前选择语义化版本，并在整个流程中复用以下发布专用变量。下面的值只是示例：
 
 ```bash
-LOOM_RELEASE_VERSION=0.1.1
-LOOM_RELEASE_TAG="v$LOOM_RELEASE_VERSION"
-LOOM_ARCHIVE_URL="https://github.com/leo1394/homebrew-loom/archive/refs/tags/$LOOM_RELEASE_TAG.tar.gz"
-LOOM_ARCHIVE_PATH="/tmp/homebrew-loom-$LOOM_RELEASE_VERSION.tar.gz"
-LOOM_FORMULA="leo1394/loom/loom"
+CONVEN_RELEASE_VERSION=0.1.1
+CONVEN_RELEASE_TAG="v$CONVEN_RELEASE_VERSION"
+CONVEN_ARCHIVE_URL="https://github.com/leo1394/homebrew-conven/archive/refs/tags/$CONVEN_RELEASE_TAG.tar.gz"
+CONVEN_ARCHIVE_PATH="/tmp/homebrew-conven-$CONVEN_RELEASE_VERSION.tar.gz"
+CONVEN_FORMULA="leo1394/conven/conven"
 ```
 
 ### 每次发布的预检
@@ -87,8 +87,8 @@ git status --short
 
 ```bash
 git fetch origin --tags
-git tag --list "$LOOM_RELEASE_TAG"
-git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG"
+git tag --list "$CONVEN_RELEASE_TAG"
+git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG"
 ```
 
 两条 tag 查询命令都必须没有输出。
@@ -99,10 +99,10 @@ git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG"
 
 | 位置 | 必须修改的内容 |
 | --- | --- |
-| `cmd/loom/main.go` | 设置 `version` 变量 |
+| `cmd/conven/main.go` | 设置 `version` 变量 |
 | `VERSION.txt` | 仅保留 `X.Y.Z` 和末尾换行 |
 | `CHANGELOG.md` | 添加发布日期及用户可见变化 |
-| `Formula/loom.rb` test | HEAD 构建应断言 `loom X.Y.Z` |
+| `Formula/conven.rb` test | HEAD 构建应断言 `conven X.Y.Z` |
 | `README.md` / `README-ZH.md` | 仅在安装方式或行为变化时更新 |
 | `RELEASING.md` / `RELEASING-ZH.md` | 发布流程变化时保持中英文同步 |
 
@@ -114,18 +114,18 @@ git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG"
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --prepare
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --prepare
 )
 ```
 
-该动作更新 `cmd/loom/main.go`、`VERSION.txt` 和 Formula 版本断言，然后执行发布检查；
+该动作更新 `cmd/conven/main.go`、`VERSION.txt` 和 Formula 版本断言，然后执行发布检查；
 不会提交、创建 tag 或推送。
 
 检查所有版本位置：
 
 ```bash
-rg -n "$LOOM_RELEASE_VERSION|version =|assert_equal \"loom " \
-  cmd/loom/main.go VERSION.txt CHANGELOG.md Formula/loom.rb README.md README-ZH.md
+rg -n "$CONVEN_RELEASE_VERSION|version =|assert_equal \"conven " \
+  cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb README.md README-ZH.md
 ```
 
 ## 2. 本地检查
@@ -138,13 +138,13 @@ go mod tidy -diff
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
-go build -o /tmp/loom-release ./cmd/loom
-/tmp/loom-release --version
+go build -o /tmp/conven-release ./cmd/conven
+/tmp/conven-release --version
 test -f examples/application.yaml
 test ! -e examples/loom.yaml
 
-ruby -c Formula/loom.rb
-brew style Formula/loom.rb
+ruby -c Formula/conven.rb
+brew style Formula/conven.rb
 
 git diff --check
 git diff
@@ -154,7 +154,7 @@ git status --short
 构建出的程序必须输出目标版本，例如：
 
 ```text
-loom 0.1.1
+conven 0.1.1
 ```
 
 不能只依赖自动检查，还要人工审阅 diff，确认其中没有凭据、运行状态、日志或无关文件。
@@ -164,10 +164,10 @@ loom 0.1.1
 暂存必须的发布文件，以及本次确实发生变化的文档：
 
 ```bash
-git add cmd/loom/main.go VERSION.txt CHANGELOG.md Formula/loom.rb
+git add cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb
 git add README.md README-ZH.md RELEASING.md RELEASING-ZH.md
 git diff --cached
-git commit -m "Release loom $LOOM_RELEASE_VERSION"
+git commit -m "Release conven $CONVEN_RELEASE_VERSION"
 ```
 
 没有变化的文档不要加入 `git add`。首次发布时，如果已审阅的基线就是准确的发布
@@ -176,13 +176,13 @@ git commit -m "Release loom $LOOM_RELEASE_VERSION"
 记录准确的源码 SHA，推送 `master`，并验证远程分支包含该准确 commit：
 
 ```bash
-LOOM_SOURCE_COMMIT=$(git rev-parse HEAD)
+CONVEN_SOURCE_COMMIT=$(git rev-parse HEAD)
 git push origin master
 git fetch origin master
-test "$LOOM_SOURCE_COMMIT" = "$(git rev-parse origin/master)"
+test "$CONVEN_SOURCE_COMMIT" = "$(git rev-parse origin/master)"
 ```
 
-等待 `$LOOM_SOURCE_COMMIT` 的 CI 通过后再执行 `--apply`。此后不要修改工作树。apply
+等待 `$CONVEN_SOURCE_COMMIT` 的 CI 通过后再执行 `--apply`。此后不要修改工作树。apply
 预检要求本地 `master` 干净、与 `origin/master` 同步，并且本地和远程都不存在发布
 tag。
 
@@ -193,17 +193,17 @@ tag。
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --apply
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --apply
 )
 ```
 
 对于 Go 源码发布，`--apply` 会执行完整发布顺序：
 
 1. 再次运行发布检查，并验证干净且同步的 `master`。
-2. 在 `$LOOM_SOURCE_COMMIT` 上创建 annotated `vX.Y.Z` tag 并推送。
+2. 在 `$CONVEN_SOURCE_COMMIT` 上创建 annotated `vX.Y.Z` tag 并推送。
 3. 下载 GitHub 公开 tag 归档，验证顶层 `VERSION.txt` 并计算 SHA-256。
 4. 更新稳定 Formula URL 和校验和，然后执行 Ruby 语法、`brew style` 和 Git 空白检查。
-5. 验证只有 `Formula/loom.rb` 发生修改，将其暂存，并使用准确消息
+5. 验证只有 `Formula/conven.rb` 发生修改，将其暂存，并使用准确消息
    `update formula for vX.Y.Z` 提交。
 6. 推送 `origin/master`，并验证远程指向 Formula commit。
 
@@ -213,15 +213,15 @@ tag。
 验证两个 commit 的结果：
 
 ```bash
-LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
-test "$(git rev-parse "$LOOM_RELEASE_TAG^{commit}")" = "$LOOM_SOURCE_COMMIT"
-test "$(git log -1 --pretty=%s)" = "update formula for $LOOM_RELEASE_TAG"
-test "$(git rev-parse HEAD^)" = "$LOOM_SOURCE_COMMIT"
-LOOM_REMOTE_TAG_COMMIT=$(git ls-remote --tags origin \
-  "refs/tags/$LOOM_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }')
-test "$LOOM_REMOTE_TAG_COMMIT" = "$LOOM_SOURCE_COMMIT"
+CONVEN_FORMULA_COMMIT=$(git rev-parse HEAD)
+test "$(git rev-parse "$CONVEN_RELEASE_TAG^{commit}")" = "$CONVEN_SOURCE_COMMIT"
+test "$(git log -1 --pretty=%s)" = "update formula for $CONVEN_RELEASE_TAG"
+test "$(git rev-parse HEAD^)" = "$CONVEN_SOURCE_COMMIT"
+CONVEN_REMOTE_TAG_COMMIT=$(git ls-remote --tags origin \
+  "refs/tags/$CONVEN_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }')
+test "$CONVEN_REMOTE_TAG_COMMIT" = "$CONVEN_SOURCE_COMMIT"
 git fetch origin master
-test "$LOOM_FORMULA_COMMIT" = "$(git rev-parse origin/master)"
+test "$CONVEN_FORMULA_COMMIT" = "$(git rev-parse origin/master)"
 git status --short
 ```
 
@@ -234,9 +234,9 @@ git status --short
 生成带 tag 的归档。如果执行失败，采取后续动作前先检查 tag、分支和工作树：
 
 ```bash
-git tag --list "$LOOM_RELEASE_TAG"
-git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG" \
-  "refs/tags/$LOOM_RELEASE_TAG^{}"
+git tag --list "$CONVEN_RELEASE_TAG"
+git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG" \
+  "refs/tags/$CONVEN_RELEASE_TAG^{}"
 git status --short
 ```
 
@@ -253,14 +253,14 @@ git status --short
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --finalize-formula
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --finalize-formula
 )
-git diff -- Formula/loom.rb
+git diff -- Formula/conven.rb
 ```
 
 审阅 diff，并执行下方稳定 Formula 门禁，然后再手动完成故障恢复。
 
-如果失败的 Formula 完成过程已经修改 `Formula/loom.rb`，先检查并只处理该文件。不要
+如果失败的 Formula 完成过程已经修改 `Formula/conven.rb`，先检查并只处理该文件。不要
 移动 tag，也不要强制推送改写后的发布。
 
 ### 稳定 Formula 门禁
@@ -269,31 +269,31 @@ git diff -- Formula/loom.rb
 Homebrew 测试机上执行以下稳定 Formula 门禁；手动提交独立完成结果前也必须执行：
 
 ```bash
-LOOM_TEST_TAP="loom-release/loom"
-LOOM_TEST_FORMULA="$LOOM_TEST_TAP/loom"
-brew tap-new --no-git "$LOOM_TEST_TAP"
-LOOM_TEST_TAP_DIR="$(brew --repository "$LOOM_TEST_TAP")"
-cp Formula/loom.rb "$LOOM_TEST_TAP_DIR/Formula/loom.rb"
+CONVEN_TEST_TAP="conven-release/conven"
+CONVEN_TEST_FORMULA="$CONVEN_TEST_TAP/conven"
+brew tap-new --no-git "$CONVEN_TEST_TAP"
+CONVEN_TEST_TAP_DIR="$(brew --repository "$CONVEN_TEST_TAP")"
+cp Formula/conven.rb "$CONVEN_TEST_TAP_DIR/Formula/conven.rb"
 
-brew audit --formula --strict "$LOOM_TEST_FORMULA"
-brew install --formula --build-from-source "$LOOM_TEST_FORMULA"
-brew test "$LOOM_TEST_FORMULA"
-"$(brew --prefix "$LOOM_TEST_FORMULA")/bin/loom" --version
+brew audit --formula --strict "$CONVEN_TEST_FORMULA"
+brew install --formula --build-from-source "$CONVEN_TEST_FORMULA"
+brew test "$CONVEN_TEST_FORMULA"
+"$(brew --prefix "$CONVEN_TEST_FORMULA")/bin/conven" --version
 ```
 
-版本必须等于 `loom $LOOM_RELEASE_VERSION`。门禁通过后，清理临时测试安装和 tap：
+版本必须等于 `conven $CONVEN_RELEASE_VERSION`。门禁通过后，清理临时测试安装和 tap：
 
 ```bash
-brew uninstall --formula "$LOOM_TEST_FORMULA"
-brew untap "$LOOM_TEST_TAP"
+brew uninstall --formula "$CONVEN_TEST_FORMULA"
+brew untap "$CONVEN_TEST_TAP"
 ```
 
 独立完成 Formula 时，只有该门禁通过后，才手动提交并推送已审阅的 Formula：
 
 ```bash
-git add Formula/loom.rb
-git commit -m "update formula for $LOOM_RELEASE_TAG"
-LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
+git add Formula/conven.rb
+git commit -m "update formula for $CONVEN_RELEASE_TAG"
+CONVEN_FORMULA_COMMIT=$(git rev-parse HEAD)
 git push origin master
 ```
 
@@ -302,8 +302,8 @@ git push origin master
 ```bash
 git switch master
 git pull --ff-only origin master
-git merge-base --is-ancestor "$LOOM_SOURCE_COMMIT" origin/master
-git merge-base --is-ancestor "$LOOM_FORMULA_COMMIT" origin/master
+git merge-base --is-ancestor "$CONVEN_SOURCE_COMMIT" origin/master
+git merge-base --is-ancestor "$CONVEN_FORMULA_COMMIT" origin/master
 git status --short
 ```
 
@@ -313,22 +313,22 @@ git status --short
 
 ```bash
 curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
-  "$LOOM_ARCHIVE_URL" -o "$LOOM_ARCHIVE_PATH"
-LOOM_PUBLISHED_SHA=$(LC_ALL=C shasum -a 256 "$LOOM_ARCHIVE_PATH" | awk '{print $1}')
-FORMULA_SHA=$(ruby -ne 'puts $1 if $_ =~ /^\s*sha256 "([0-9a-f]{64})"/' Formula/loom.rb)
-test "$LOOM_PUBLISHED_SHA" = "$FORMULA_SHA"
+  "$CONVEN_ARCHIVE_URL" -o "$CONVEN_ARCHIVE_PATH"
+CONVEN_PUBLISHED_SHA=$(LC_ALL=C shasum -a 256 "$CONVEN_ARCHIVE_PATH" | awk '{print $1}')
+FORMULA_SHA=$(ruby -ne 'puts $1 if $_ =~ /^\s*sha256 "([0-9a-f]{64})"/' Formula/conven.rb)
+test "$CONVEN_PUBLISHED_SHA" = "$FORMULA_SHA"
 ```
 
 也可直接从解压后的归档构建，以便把源码包问题和 Homebrew 问题分开：
 
 ```bash
-LOOM_ARCHIVE_DIR=$(mktemp -d /tmp/homebrew-loom-release.XXXXXX)
+CONVEN_ARCHIVE_DIR=$(mktemp -d /tmp/homebrew-conven-release.XXXXXX)
 (
-  tar -xzf "$LOOM_ARCHIVE_PATH" -C "$LOOM_ARCHIVE_DIR" --strip-components=1
-  cd "$LOOM_ARCHIVE_DIR"
+  tar -xzf "$CONVEN_ARCHIVE_PATH" -C "$CONVEN_ARCHIVE_DIR" --strip-components=1
+  cd "$CONVEN_ARCHIVE_DIR"
   go test -count=1 ./...
-  go build -o /tmp/loom-published ./cmd/loom
-  /tmp/loom-published --version
+  go build -o /tmp/conven-published ./cmd/conven
+  /tmp/conven-published --version
 )
 ```
 
@@ -337,78 +337,75 @@ LOOM_ARCHIVE_DIR=$(mktemp -d /tmp/homebrew-loom-release.XXXXXX)
 刷新 tap 并审计公开 Formula：
 
 ```bash
-brew tap leo1394/loom
+brew tap leo1394/conven
 brew update
-brew audit --formula --strict --online "$LOOM_FORMULA"
+brew audit --formula --strict --online "$CONVEN_FORMULA"
 ```
 
-Homebrew core 中存在无关的同名 `loom` cask。命令支持时始终同时使用
-`$LOOM_FORMULA` 和 `--formula`。
-
-未安装 Loom 时：
+未安装 Conven 时：
 
 ```bash
-brew install --formula --build-from-source "$LOOM_FORMULA"
+brew install --formula --build-from-source "$CONVEN_FORMULA"
 ```
 
 已安装稳定版或 HEAD 时，应显式切换，不要使用会保留原安装选项的 `reinstall`：
 
 ```bash
-brew uninstall --formula "$LOOM_FORMULA"
-brew install --formula --build-from-source "$LOOM_FORMULA"
+brew uninstall --formula "$CONVEN_FORMULA"
+brew install --formula --build-from-source "$CONVEN_FORMULA"
 ```
 
 然后验证 Formula 和程序：
 
 ```bash
-brew test "$LOOM_FORMULA"
-"$(brew --prefix "$LOOM_FORMULA")/bin/loom" --version
-brew info --formula "$LOOM_FORMULA"
-brew deps --formula --include-build "$LOOM_FORMULA"
+brew test "$CONVEN_FORMULA"
+"$(brew --prefix "$CONVEN_FORMULA")/bin/conven" --version
+brew info --formula "$CONVEN_FORMULA"
+brew deps --formula --include-build "$CONVEN_FORMULA"
 ```
 
 验证三种补全：
 
 ```bash
-LOOM_BASH_COMPLETION="$(brew --prefix)/etc/bash_completion.d/loom"
-LOOM_ZSH_COMPLETION="$(brew --prefix)/share/zsh/site-functions/_loom"
-LOOM_FISH_COMPLETION="$(brew --prefix)/share/fish/vendor_completions.d/loom.fish"
-test -e "$LOOM_BASH_COMPLETION"
-test -e "$LOOM_ZSH_COMPLETION"
-test -e "$LOOM_FISH_COMPLETION"
-for completion in "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION" "$LOOM_FISH_COMPLETION"; do
+CONVEN_BASH_COMPLETION="$(brew --prefix)/etc/bash_completion.d/conven"
+CONVEN_ZSH_COMPLETION="$(brew --prefix)/share/zsh/site-functions/_conven"
+CONVEN_FISH_COMPLETION="$(brew --prefix)/share/fish/vendor_completions.d/conven.fish"
+test -e "$CONVEN_BASH_COMPLETION"
+test -e "$CONVEN_ZSH_COMPLETION"
+test -e "$CONVEN_FISH_COMPLETION"
+for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION" "$CONVEN_FISH_COMPLETION"; do
   grep -Fq -- "services" "$completion"
 done
 for action in list registry status logs start restart stop stop-all; do
-  for completion in "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"; do
+  for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
-  grep -Fq -- "-l $action" "$LOOM_FISH_COMPLETION"
+  grep -Fq -- "-l $action" "$CONVEN_FISH_COMPLETION"
 done
 for action in edit import reset; do
-  for completion in "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"; do
+  for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
-  grep -Fq -- "-l $action" "$LOOM_FISH_COMPLETION"
+  grep -Fq -- "-l $action" "$CONVEN_FISH_COMPLETION"
 done
 for option in prune tail; do
-  for completion in "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"; do
+  for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$option" "$completion"
   done
-  grep -Fq -- "-l $option" "$LOOM_FISH_COMPLETION"
+  grep -Fq -- "-l $option" "$CONVEN_FISH_COMPLETION"
 done
-! grep -Eq 'compgen -W "[^"]* (discover|start|restart|status|stop|logs|list)( |")' "$LOOM_BASH_COMPLETION"
-! grep -Eq "^[[:space:]]*'(discover|start|restart|status|stop|logs|list):" "$LOOM_ZSH_COMPLETION"
-! grep -Eq ' -a (discover|start|restart|status|stop|logs|list) -d ' "$LOOM_FISH_COMPLETION"
-! grep -Fq -- "--workspace" "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"
-! grep -Fq -- "--config" "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"
-! grep -Fq -- "-l workspace" "$LOOM_FISH_COMPLETION"
-! grep -Fq -- "-l config" "$LOOM_FISH_COMPLETION"
+! grep -Eq 'compgen -W "[^"]* (discover|start|restart|status|stop|logs|list)( |")' "$CONVEN_BASH_COMPLETION"
+! grep -Eq "^[[:space:]]*'(discover|start|restart|status|stop|logs|list):" "$CONVEN_ZSH_COMPLETION"
+! grep -Eq ' -a (discover|start|restart|status|stop|logs|list) -d ' "$CONVEN_FISH_COMPLETION"
+! grep -Fq -- "--workspace" "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"
+! grep -Fq -- "--config" "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"
+! grep -Fq -- "-l workspace" "$CONVEN_FISH_COMPLETION"
+! grep -Fq -- "-l config" "$CONVEN_FISH_COMPLETION"
 ```
 
 ## 7. 功能验收
 
-下面的进程验收使用没有强匹配一级子仓库的一次性开发 workspace。此时 `loom init`
+下面的进程验收使用没有强匹配一级子仓库的一次性开发 workspace。此时 `conven init`
 必须根据内置的 `examples/application.yaml` 模板创建回退 manifest
 `.loom/loom.yaml`，再次执行时必须保留已有 manifest。启动服务前，应编辑生成的
 manifest，并准备其中引用的服务仓库。至少让一个选中的验收服务在启动时输出一条
@@ -417,89 +414,89 @@ manifest，并准备其中引用的服务仓库。至少让一个选中的验收
 连接或进程恢复测试。
 
 执行下面命令前，先准备 `.acceptance/import-candidate.yaml`：它必须是适用于同一组
-一次性服务仓库的完整、合法 Loom v1 manifest，不含凭据，并且至少让
+一次性服务仓库的完整、合法 Conven v1 manifest，不含凭据，并且至少让
 `workspace.name` 与 `init` 结果不同。这样才能覆盖真实替换和备份路径，而不是逐字节
 相同的 no-op。
 
 至少验证：
 
 ```bash
-LOOM_BIN="$(brew --prefix "$LOOM_FORMULA")/bin/loom"
-LOOM_TEST_KUBECONFIG=/absolute/path/to/disposable/kubeconfig
-test -f "$LOOM_TEST_KUBECONFIG"
-"$LOOM_BIN" init
+CONVEN_BIN="$(brew --prefix "$CONVEN_FORMULA")/bin/conven"
+CONVEN_TEST_KUBECONFIG=/absolute/path/to/disposable/kubeconfig
+test -f "$CONVEN_TEST_KUBECONFIG"
+"$CONVEN_BIN" init
 test -f .loom/loom.yaml
-LOOM_MANIFEST_SHA=$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')
-"$LOOM_BIN" init
-test "$LOOM_MANIFEST_SHA" = "$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')"
+CONVEN_MANIFEST_SHA=$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')
+"$CONVEN_BIN" init
+test "$CONVEN_MANIFEST_SHA" = "$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')"
 mkdir -p .acceptance/descendant
-LOOM_IMPORT_SOURCE=.acceptance/import-candidate.yaml
-LOOM_IMPORT_SOURCE_SHA=$(shasum -a 256 "$LOOM_IMPORT_SOURCE" | awk '{print $1}')
-(cd .acceptance/descendant && "$LOOM_BIN" policy --import ../import-candidate.yaml)
-test "$LOOM_IMPORT_SOURCE_SHA" = "$(shasum -a 256 "$LOOM_IMPORT_SOURCE" | awk '{print $1}')"
-cmp "$LOOM_IMPORT_SOURCE" .loom/loom.yaml
+CONVEN_IMPORT_SOURCE=.acceptance/import-candidate.yaml
+CONVEN_IMPORT_SOURCE_SHA=$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')
+(cd .acceptance/descendant && "$CONVEN_BIN" policy --import ../import-candidate.yaml)
+test "$CONVEN_IMPORT_SOURCE_SHA" = "$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')"
+cmp "$CONVEN_IMPORT_SOURCE" .loom/loom.yaml
 test -n "$(find .loom/backups -type f -name 'loom.yaml-before-import-*.bak' -print -quit)"
-"$LOOM_BIN" config ktctl.path ktctl
-test "$("$LOOM_BIN" config ktctl.path)" = "ktctl"
-"$LOOM_BIN" config ktctl.kubeconfig "$LOOM_TEST_KUBECONFIG"
-test "$("$LOOM_BIN" config ktctl.kubeconfig)" = "$LOOM_TEST_KUBECONFIG"
-"$LOOM_BIN" config --list
-"$LOOM_BIN" doctor
-"$LOOM_BIN" services --start --dry-run user-svc order-svc
-"$LOOM_BIN" services --list
-(cd .acceptance/descendant && "$LOOM_BIN" services --list)
-(cd .acceptance/descendant && "$LOOM_BIN" services --registry)
-LOOM_WORKSPACE=/path/that/is/not/a/workspace "$LOOM_BIN" services --list
+"$CONVEN_BIN" config ktctl.path ktctl
+test "$("$CONVEN_BIN" config ktctl.path)" = "ktctl"
+"$CONVEN_BIN" config ktctl.kubeconfig "$CONVEN_TEST_KUBECONFIG"
+test "$("$CONVEN_BIN" config ktctl.kubeconfig)" = "$CONVEN_TEST_KUBECONFIG"
+"$CONVEN_BIN" config --list
+"$CONVEN_BIN" doctor
+"$CONVEN_BIN" services --start --dry-run user-svc order-svc
+"$CONVEN_BIN" services --list
+(cd .acceptance/descendant && "$CONVEN_BIN" services --list)
+(cd .acceptance/descendant && "$CONVEN_BIN" services --registry)
+LOOM_WORKSPACE=/path/that/is/not/a/workspace "$CONVEN_BIN" services --list
 for command in services doctor; do
   for removed_flag in --workspace --config; do
-    if "$LOOM_BIN" "$command" "$removed_flag" /tmp >/dev/null 2>&1; then
+    if "$CONVEN_BIN" "$command" "$removed_flag" /tmp >/dev/null 2>&1; then
       false
     else
-      LOOM_USAGE_STATUS=$?
-      test "$LOOM_USAGE_STATUS" -eq 2
+      CONVEN_USAGE_STATUS=$?
+      test "$CONVEN_USAGE_STATUS" -eq 2
     fi
   done
 done
-LOOM_HELP_OUTPUT=$(mktemp /tmp/loom-help.XXXXXX)
+CONVEN_HELP_OUTPUT=$(mktemp /tmp/conven-help.XXXXXX)
 for command in services doctor; do
-  "$LOOM_BIN" "$command" --help >"$LOOM_HELP_OUTPUT"
-  ! grep -Fq -- "--workspace" "$LOOM_HELP_OUTPUT"
-  ! grep -Fq -- "--config" "$LOOM_HELP_OUTPUT"
+  "$CONVEN_BIN" "$command" --help >"$CONVEN_HELP_OUTPUT"
+  ! grep -Fq -- "--workspace" "$CONVEN_HELP_OUTPUT"
+  ! grep -Fq -- "--config" "$CONVEN_HELP_OUTPUT"
 done
 for removed_command in discover start restart status stop logs list; do
-  if "$LOOM_BIN" "$removed_command" --help >/dev/null 2>&1; then
+  if "$CONVEN_BIN" "$removed_command" --help >/dev/null 2>&1; then
     false
   else
-    LOOM_USAGE_STATUS=$?
-    test "$LOOM_USAGE_STATUS" -eq 2
+    CONVEN_USAGE_STATUS=$?
+    test "$CONVEN_USAGE_STATUS" -eq 2
   fi
 done
-if "$LOOM_BIN" services --tail --logs user-svc >/dev/null 2>&1; then
+if "$CONVEN_BIN" services --tail --logs user-svc >/dev/null 2>&1; then
   false
 else
-  LOOM_USAGE_STATUS=$?
-  test "$LOOM_USAGE_STATUS" -eq 2
+  CONVEN_USAGE_STATUS=$?
+  test "$CONVEN_USAGE_STATUS" -eq 2
 fi
-rm -f "$LOOM_HELP_OUTPUT"
-"$LOOM_BIN" services --start --dry-run --dev user-svc order-svc
-"$LOOM_BIN" services --start --dry-run user-svc order-svc
-"$LOOM_BIN" services --start user-svc order-svc
-"$LOOM_BIN" services --status
-"$LOOM_BIN" services --logs user-svc order-svc
-LOOM_TAIL_OUTPUT=$(mktemp /tmp/loom-tail.XXXXXX)
-"$LOOM_BIN" services --logs --tail user-svc order-svc >"$LOOM_TAIL_OUTPUT" &
-LOOM_TAIL_PID=$!
+rm -f "$CONVEN_HELP_OUTPUT"
+"$CONVEN_BIN" services --start --dry-run --dev user-svc order-svc
+"$CONVEN_BIN" services --start --dry-run user-svc order-svc
+"$CONVEN_BIN" services --start user-svc order-svc
+"$CONVEN_BIN" services --status
+"$CONVEN_BIN" services --logs user-svc order-svc
+CONVEN_TAIL_OUTPUT=$(mktemp /tmp/conven-tail.XXXXXX)
+"$CONVEN_BIN" services --logs --tail user-svc order-svc >"$CONVEN_TAIL_OUTPUT" &
+CONVEN_TAIL_PID=$!
 sleep 1
-kill -INT "$LOOM_TAIL_PID"
-wait "$LOOM_TAIL_PID"
-grep -Eq '^\[(user-svc|order-svc)\] ' "$LOOM_TAIL_OUTPUT"
-! LC_ALL=C grep -Fq "$(printf '\033[?1049h')" "$LOOM_TAIL_OUTPUT"
-! LC_ALL=C grep -Fq "$(printf '\033[2J')" "$LOOM_TAIL_OUTPUT"
-rm -f "$LOOM_TAIL_OUTPUT"
+kill -INT "$CONVEN_TAIL_PID"
+wait "$CONVEN_TAIL_PID"
+grep -Eq '^\[(user-svc|order-svc)\] ' "$CONVEN_TAIL_OUTPUT"
+! LC_ALL=C grep -Fq "$(printf '\033[?1049h')" "$CONVEN_TAIL_OUTPUT"
+! LC_ALL=C grep -Fq "$(printf '\033[2J')" "$CONVEN_TAIL_OUTPUT"
+rm -f "$CONVEN_TAIL_OUTPUT"
 # 在执行下面的自动检查前，修改一个运行中服务的已跟踪源码文件。
-"$LOOM_BIN" services --restart
-"$LOOM_BIN" services --restart user-svc
-"$LOOM_BIN" services --stop-all
+"$CONVEN_BIN" services --restart
+"$CONVEN_BIN" services --restart user-svc
+"$CONVEN_BIN" services --stop-all
 ```
 
 Import 验收必须确认：相对路径从 `.acceptance/descendant` 解析；源文件 hash 不变；规范
@@ -518,7 +515,7 @@ Schema 校验通过不是运行门禁，实际启动前仍必须通过上面的 
   `["${artifact}"]`。无强匹配时回退内置示例；再次执行 `init` 不得修改这两种
   manifest。并发创建者必须保留，不能被 `init` 替换；发布必须是原子的 no-replace。
 - 在一个已发现 service 中人工添加端口、环境变量、依赖和 YAML 注释，再增加另一个
-  强匹配一级子仓库并执行 `loom services --registry`。新路径必须加入，原 service block
+  强匹配一级子仓库并执行 `conven services --registry`。新路径必须加入，原 service block
   及其注释必须保持不变。从 workspace 子目录执行 `services --registry` 时必须扫描
   同一个 workspace 根目录。
 - 把一个先前发现的仓库移出 workspace。普通 `services --registry` 保留其 service
@@ -544,15 +541,15 @@ ANSI 字节可以保留在该普通文本流中；净化只用于全屏 Dashboar
 还要在真实交互式终端中验收 Dashboard，不能使用重定向或管道：
 
 ```bash
-"$LOOM_BIN" services --start --tail user-svc order-svc
+"$CONVEN_BIN" services --start --tail user-svc order-svc
 # 调整窗口大小后按 q；两个服务必须继续运行。
-"$LOOM_BIN" services --status
-"$LOOM_BIN" services --restart --tail user-svc
+"$CONVEN_BIN" services --status
+"$CONVEN_BIN" services --restart --tail user-svc
 # 按 Ctrl-C；已重启服务和未变化服务都必须继续运行。
-"$LOOM_BIN" services --status
-"$LOOM_BIN" services --logs --tail user-svc order-svc
+"$CONVEN_BIN" services --status
+"$CONVEN_BIN" services --logs --tail user-svc order-svc
 # 按 q，再清理仍在运行的服务。
-"$LOOM_BIN" services --stop --all
+"$CONVEN_BIN" services --stop --all
 ```
 
 对每个 TTY 入口，都要确认 `--tail` 是布尔开关，而不是日志行数选项。全屏
@@ -580,12 +577,12 @@ LAN 地址与端口同时显示，本身不能证明 endpoint 已绑定或可达
   生成；本地 `config` 及服务命令必须给出清晰的初始化错误。不完整 `.loom`
   边界中的本地 `config` 在 `loom.yaml` 仍在准备时即可使用。
   用户级 `~/.loom` 始终专用于全局设置：即使其中被手工放入 manifest，也不得把
-  HOME 或其子目录识别为 workspace；`loom init` 必须拒绝 HOME。
+  HOME 或其子目录识别为 workspace；`conven init` 必须拒绝 HOME。
 - 每个启动的本地服务都会在 `LOOM_WORKSPACE` 中收到解析后的 workspace 绝对根目录，
   并覆盖继承值。它是只读的服务元数据，不作为 CLI 发现的输入。
 - 本地配置保存在 `.loom/config`，全局配置保存在 `~/.loom/config`；本地
   `ktctl.path` 和 `ktctl.kubeconfig` 均优先于全局值。测试后分别使用
-  `loom config --unset` 删除两个临时本地值。
+  `conven config --unset` 删除两个临时本地值。
 - `services --start` 和 `doctor` 中，`--dev` 等效于 `--env dev`，`--test` 等效于
   `--env test`。检查 `--test` 前先在一次性 manifest 中添加 `test` profile。快捷参数
   与同值 `--env` 可组合；`--dev --test` 或快捷参数与不同值 `--env` 的组合必须在
@@ -594,9 +591,9 @@ LAN 地址与端口同时显示，本身不能证明 endpoint 已绑定或可达
   及匹配的 `environments` profile 表达。
 - 只启动显式指定或在交互界面选中的服务。
 - PathPicker 的候选项仍只来自 manifest，不能隐式触发仓库发现。
-- 启动信息严格为 `Looming local services: user-svc, order-svc`。
+- 启动信息严格为 `Convening local services: user-svc, order-svc`。
 - 对已选中的依赖注入 `localEnv`，对未选中的依赖注入 `remoteEnv`。
-- 可通过 `loom services --logs` 查看所有选中服务的日志；布尔开关 `--tail` 提供上述 TTY
+- 可通过 `conven services --logs` 查看所有选中服务的日志；布尔开关 `--tail` 提供上述 TTY
   Dashboard 和非 TTY 普通文本降级路径。
 - `services --status` 显示保存的 PID/PGID，普通 `services --stop` 会校验进程身份。
 - PathPicker 使用 `f` 切换；空选择仍停留在选择页；仅 `y` 或 `yes` 确认启动；
@@ -633,20 +630,20 @@ manifest 中的 kubeconfig 路径。使用 `connection.sudo: true` 时，确认�
 稳定版本功能验收通过后，再保留一次 HEAD smoke test：
 
 ```bash
-brew uninstall --formula "$LOOM_FORMULA"
-brew install --formula --HEAD "$LOOM_FORMULA"
-brew test --HEAD "$LOOM_FORMULA"
-"$(brew --prefix "$LOOM_FORMULA")/bin/loom" --version
+brew uninstall --formula "$CONVEN_FORMULA"
+brew install --formula --HEAD "$CONVEN_FORMULA"
+brew test --HEAD "$CONVEN_FORMULA"
+"$(brew --prefix "$CONVEN_FORMULA")/bin/conven" --version
 ```
 
 `brew reinstall` 不支持 `--HEAD`，所以发布测试机需要通过 uninstall/install 切换
 channel。随后恢复并验证稳定版本：
 
 ```bash
-brew uninstall --formula "$LOOM_FORMULA"
-brew install --formula --build-from-source "$LOOM_FORMULA"
-brew test "$LOOM_FORMULA"
-"$(brew --prefix "$LOOM_FORMULA")/bin/loom" --version
+brew uninstall --formula "$CONVEN_FORMULA"
+brew install --formula --build-from-source "$CONVEN_FORMULA"
+brew test "$CONVEN_FORMULA"
+"$(brew --prefix "$CONVEN_FORMULA")/bin/conven" --version
 ```
 
 ## 8. 完成发布

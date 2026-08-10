@@ -79,7 +79,7 @@ func runForeground(ctx context.Context, argv []string, directory string, environ
 	}
 	waitErr := waitCommandContext(ctx, command, syscall.SIGTERM, 2*time.Second)
 	if logErr := logWriter.Err(); logErr != nil {
-		failure := fmt.Errorf("%s failed because Loom could not write log %s: %w", strings.Join(argv, " "), logPath, logErr)
+		failure := fmt.Errorf("%s failed because Conven could not write log %s: %w", strings.Join(argv, " "), logPath, logErr)
 		if waitErr != nil {
 			return errors.Join(failure, fmt.Errorf("child process result: %w", waitErr))
 		}

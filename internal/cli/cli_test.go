@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	loomruntime "github.com/leo1394/homebrew-loom/internal/runtime"
+	convenruntime "github.com/leo1394/homebrew-conven/internal/runtime"
 )
 
 func TestVersion(t *testing.T) {
@@ -22,13 +22,13 @@ func TestVersion(t *testing.T) {
 	if code := app.Run([]string{"--version"}); code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
-	if output.String() != "loom test-version\n" {
+	if output.String() != "conven test-version\n" {
 		t.Fatalf("output = %q", output.String())
 	}
 }
 
 func TestLegacyServiceCommandsWereRemoved(t *testing.T) {
-	for _, command := range []string{"looming", "discover", "start", "restart", "status", "stop", "logs", "list", "serivces"} {
+	for _, command := range []string{"convening", "discover", "start", "restart", "status", "stop", "logs", "list", "serivces"} {
 		t.Run(command, func(t *testing.T) {
 			var output bytes.Buffer
 			var errorOutput bytes.Buffer
@@ -54,20 +54,20 @@ func TestRootHelpExposesOnlyServicesCommandForServiceOperations(t *testing.T) {
 	if code := app.Run([]string{"help"}); code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
-	if !strings.Contains(output.String(), "loom services ACTION") {
+	if !strings.Contains(output.String(), "conven services ACTION") {
 		t.Fatalf("root help does not expose the services command: %q", output.String())
 	}
-	if !strings.Contains(output.String(), "loom policy ACTION") {
+	if !strings.Contains(output.String(), "conven policy ACTION") {
 		t.Fatalf("root help does not expose the policy command: %q", output.String())
 	}
 	for _, removed := range []string{
-		"loom discover ",
-		"loom start ",
-		"loom restart ",
-		"loom status\n",
-		"loom stop ",
-		"loom logs ",
-		"loom list\n",
+		"conven discover ",
+		"conven start ",
+		"conven restart ",
+		"conven status\n",
+		"conven stop ",
+		"conven logs ",
+		"conven list\n",
 	} {
 		if strings.Contains(output.String(), removed) {
 			t.Fatalf("root help still exposes legacy command %q: %q", removed, output.String())
@@ -111,7 +111,7 @@ func TestServiceActionHelpUsesStdout(t *testing.T) {
 			if code := app.Run([]string{"services", action, "--help"}); code != 0 {
 				t.Fatalf("exit code = %d", code)
 			}
-			if !strings.Contains(output.String(), "loom services "+action) {
+			if !strings.Contains(output.String(), "conven services "+action) {
 				t.Fatalf("stdout = %q", output.String())
 			}
 			if errorOutput.Len() != 0 {
@@ -144,7 +144,7 @@ func TestServicesRequiresKnownActionFirst(t *testing.T) {
 			if errorOutput.Len() == 0 {
 				t.Fatal("stderr is empty")
 			}
-			if strings.Contains(errorOutput.String(), "not a loom workspace") {
+			if strings.Contains(errorOutput.String(), "not a Conven workspace") {
 				t.Fatalf("workspace lookup happened before action validation: %q", errorOutput.String())
 			}
 		})
@@ -187,7 +187,7 @@ func TestPolicyHelpUsesStdout(t *testing.T) {
 		if code := app.Run(arguments); code != 0 {
 			t.Fatalf("%v exit code = %d", arguments, code)
 		}
-		if !strings.Contains(output.String(), "loom policy") {
+		if !strings.Contains(output.String(), "conven policy") {
 			t.Fatalf("%v stdout = %q", arguments, output.String())
 		}
 		if errorOutput.Len() != 0 {
@@ -208,7 +208,7 @@ func TestPolicyRequiresKnownActionBeforeWorkspaceLookup(t *testing.T) {
 		if code := app.Run(arguments); code != 2 {
 			t.Fatalf("%v exit code = %d: %s", arguments, code, output.String())
 		}
-		if !strings.Contains(output.String(), "loom policy --edit") || strings.Contains(output.String(), "not a loom workspace") {
+		if !strings.Contains(output.String(), "conven policy --edit") || strings.Contains(output.String(), "not a Conven workspace") {
 			t.Fatalf("%v output = %q", arguments, output.String())
 		}
 	}
@@ -371,13 +371,13 @@ services:
 	if err := os.WriteFile(logPath, []byte("ready\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	store, err := loomruntime.NewStore(workspace)
+	store, err := convenruntime.NewStore(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(&loomruntime.Session{
+	if err := store.Save(&convenruntime.Session{
 		Environment: "dev",
-		Services:    []loomruntime.ServiceProcess{{Name: "api", LogPath: logPath}},
+		Services:    []convenruntime.ServiceProcess{{Name: "api", LogPath: logPath}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +431,7 @@ services:
 func TestEnvironmentShortcutsMatchEnvFlag(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := environmentShortcutWorkspace(t)
-	store, err := loomruntime.NewStore(workspace)
+	store, err := convenruntime.NewStore(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +492,7 @@ func TestEnvironmentShortcutsRejectConflictsBeforeWorkspaceLookup(t *testing.T) 
 			if !strings.Contains(output.String(), test.want) {
 				t.Fatalf("output = %q, want conflict %q", output.String(), test.want)
 			}
-			if strings.Contains(output.String(), "not a loom workspace") {
+			if strings.Contains(output.String(), "not a Conven workspace") {
 				t.Fatalf("workspace lookup happened before conflict validation: %q", output.String())
 			}
 		})
@@ -508,10 +508,10 @@ func TestStopHelpDocumentsMutualExclusionAndForceRisk(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"(<service...>|--all)",
-		"loom services --stop-all",
+		"conven services --stop-all",
 		"bypass identity checks",
 		"--force is destructive",
-		"loom services --status",
+		"conven services --status",
 		"unleased shared connection records",
 	} {
 		if !strings.Contains(output.String(), expected) {
@@ -573,7 +573,7 @@ func TestStopAllShortcutMatchesStopAll(t *testing.T) {
 	if outputs[0] != outputs[1] {
 		t.Fatalf("--stop --all output %q differs from --stop-all output %q", outputs[0], outputs[1])
 	}
-	if !strings.Contains(outputs[0], "No loom session found.") {
+	if !strings.Contains(outputs[0], "No Conven session found.") {
 		t.Fatalf("stop-all output = %q", outputs[0])
 	}
 }
@@ -613,7 +613,7 @@ func TestServiceActionsRejectInvalidPositionalsBeforeWorkspaceLookup(t *testing.
 			if !strings.Contains(output.String(), test.message) {
 				t.Fatalf("output = %q, want %q", output.String(), test.message)
 			}
-			if strings.Contains(output.String(), "not a loom workspace") {
+			if strings.Contains(output.String(), "not a Conven workspace") {
 				t.Fatalf("workspace lookup happened before argument validation: %q", output.String())
 			}
 		})
@@ -624,7 +624,7 @@ func TestServicesListStatusRestartAndStopRoutes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("LOOM_STATE_HOME", t.TempDir())
 	workspace := environmentShortcutWorkspace(t)
-	store, err := loomruntime.NewStore(workspace)
+	store, err := convenruntime.NewStore(workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,8 +635,8 @@ func TestServicesListStatusRestartAndStopRoutes(t *testing.T) {
 		message   string
 	}{
 		{name: "list", arguments: []string{"services", "--list"}, code: 0, message: "api"},
-		{name: "status", arguments: []string{"services", "--status"}, code: 0, message: "No loom session found."},
-		{name: "restart", arguments: []string{"services", "--restart"}, code: 1, message: "no running loom session found"},
+		{name: "status", arguments: []string{"services", "--status"}, code: 0, message: "No Conven session found."},
+		{name: "restart", arguments: []string{"services", "--restart"}, code: 1, message: "no running Conven session found"},
 		{name: "stop requires target", arguments: []string{"services", "--stop"}, code: 1, message: "requires service names or --all"},
 	} {
 			t.Run(test.name, func(t *testing.T) {
@@ -714,7 +714,7 @@ func TestCompletions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(completion, "loom") {
+			if !strings.Contains(completion, "conven") {
 				t.Fatalf("completion for %s is empty", shell)
 			}
 			for _, command := range []string{"init", "services", "config", "policy", "doctor"} {
@@ -731,8 +731,8 @@ func TestCompletions(t *testing.T) {
 					t.Fatalf("completion for %s is missing %s", shell, action)
 				}
 			}
-			if strings.Contains(completion, "looming") {
-				t.Fatalf("completion for %s still exposes looming", shell)
+			if strings.Contains(completion, "convening") {
+				t.Fatalf("completion for %s still exposes convening", shell)
 			}
 			if strings.Contains(completion, "--follow") {
 				t.Fatalf("completion for %s still exposes --follow", shell)
@@ -824,35 +824,35 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		`function __loom_using_subcommand`,
-		`function __loom_services_action`,
-		`function __loom_services_without_action`,
-		`function __loom_policy_without_action`,
-		`function __loom_policy_action`,
-		`function __loom_policy_action_without_edit`,
-		`function __loom_policy_import_without_source`,
+		`function __conven_using_subcommand`,
+		`function __conven_services_action`,
+		`function __conven_services_without_action`,
+		`function __conven_policy_without_action`,
+		`function __conven_policy_action`,
+		`function __conven_policy_action_without_edit`,
+		`function __conven_policy_import_without_source`,
 		`__fish_use_subcommand' -a services`,
 		`__fish_use_subcommand' -a policy`,
-		`__loom_services_without_action' -l list`,
-		`__loom_services_without_action' -l registry`,
-		`__loom_services_without_action' -l stop-all`,
-		`__loom_services_action --start' -l env`,
-		`__loom_services_action --start' -l dev`,
-		`__loom_services_action --start' -l test`,
-		`__loom_services_action --start' -l tail`,
-		`__loom_services_action --start' -l dry-run`,
-		`__loom_services_action --restart' -l tail`,
-		`__loom_services_action --logs' -l tail`,
-		`__loom_using_subcommand config' -l global`,
-		`__loom_services_action --stop' -l all`,
-		`__loom_services_action --stop' -l force`,
-		`__loom_services_action --stop-all' -l force`,
-		`__loom_services_action --registry' -l prune`,
-		`__loom_using_subcommand policy; and __loom_policy_without_action' -l edit`,
-		`__loom_using_subcommand policy; and __loom_policy_without_action' -l import`,
-		`__loom_using_subcommand policy; and __loom_policy_without_action' -l reset`,
-		`__loom_policy_action_without_edit --import' -l edit`,
-		`__loom_policy_import_without_source' -F`,
+		`__conven_services_without_action' -l list`,
+		`__conven_services_without_action' -l registry`,
+		`__conven_services_without_action' -l stop-all`,
+		`__conven_services_action --start' -l env`,
+		`__conven_services_action --start' -l dev`,
+		`__conven_services_action --start' -l test`,
+		`__conven_services_action --start' -l tail`,
+		`__conven_services_action --start' -l dry-run`,
+		`__conven_services_action --restart' -l tail`,
+		`__conven_services_action --logs' -l tail`,
+		`__conven_using_subcommand config' -l global`,
+		`__conven_services_action --stop' -l all`,
+		`__conven_services_action --stop' -l force`,
+		`__conven_services_action --stop-all' -l force`,
+		`__conven_services_action --registry' -l prune`,
+		`__conven_using_subcommand policy; and __conven_policy_without_action' -l edit`,
+		`__conven_using_subcommand policy; and __conven_policy_without_action' -l import`,
+		`__conven_using_subcommand policy; and __conven_policy_without_action' -l reset`,
+		`__conven_policy_action_without_edit --import' -l edit`,
+		`__conven_policy_import_without_source' -F`,
 	} {
 		if !strings.Contains(fish, expected) {
 			t.Fatalf("fish completion is missing %q", expected)
@@ -875,15 +875,15 @@ func TestBashPolicyCompletionDoesNotOfferSecondAction(t *testing.T) {
 		words string
 		want  string
 	}{
-		{name: "action", words: "loom policy --r", want: "--reset\n"},
-		{name: "import action", words: "loom policy --i", want: "--import\n"},
-		{name: "after action", words: "loom policy --edit --", want: "--help\n"},
-		{name: "import options", words: "loom policy --import --", want: "--edit\n--help\n"},
-		{name: "after import source", words: "loom policy --import README.md --", want: "--edit\n--help\n"},
-		{name: "after import edit", words: "loom policy --import README.md --edit --", want: "--help\n"},
+		{name: "action", words: "conven policy --r", want: "--reset\n"},
+		{name: "import action", words: "conven policy --i", want: "--import\n"},
+		{name: "after action", words: "conven policy --edit --", want: "--help\n"},
+		{name: "import options", words: "conven policy --import --", want: "--edit\n--help\n"},
+		{name: "after import source", words: "conven policy --import README.md --", want: "--edit\n--help\n"},
+		{name: "after import edit", words: "conven policy --import README.md --edit --", want: "--help\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			script := completion + "\nCOMP_WORDS=(" + test.words + ")\nCOMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_loom\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
+			script := completion + "\nCOMP_WORDS=(" + test.words + ")\nCOMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_conven\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
 			output, err := exec.Command("bash", "-c", script).CombinedOutput()
 			if err != nil {
 				t.Fatalf("bash completion failed: %v: %s", err, output)
@@ -904,7 +904,7 @@ func TestBashPolicyImportCompletesLocalFilesBeforeSource(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "candidate-policy.yaml"), []byte("candidate"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	script := completion + "\nCOMP_WORDS=(loom policy --import candidate)\nCOMP_CWORD=3\n_loom\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
+	script := completion + "\nCOMP_WORDS=(conven policy --import candidate)\nCOMP_CWORD=3\n_conven\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
 	command := exec.Command("bash", "-c", script)
 	command.Dir = directory
 	output, err := command.CombinedOutput()
@@ -1042,7 +1042,7 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 	for _, expected := range []string{
 		"Discovered supported services: alpha-service, beta-service",
 		"Added services: beta-service",
-		"Updated Loom manifest:",
+		"Updated Conven manifest:",
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("registry output is missing %q: %q", expected, output.String())
@@ -1096,7 +1096,7 @@ services:
 	if code := app.Run([]string{"policy", "--edit"}); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
 	}
-	if !called || !strings.Contains(output.String(), "Updated Loom policy manifest:") || errorOutput.Len() != 0 {
+	if !called || !strings.Contains(output.String(), "Updated Conven policy manifest:") || errorOutput.Len() != 0 {
 		t.Fatalf("called=%v stdout=%q stderr=%q", called, output.String(), errorOutput.String())
 	}
 	data, err := os.ReadFile(manifestPath)
@@ -1137,7 +1137,7 @@ services:
 	}
 	for _, expected := range []string{
 		"Discovered supported services: api-service",
-		"Reset Loom policy manifest to scan baseline:",
+		"Reset Conven policy manifest to scan baseline:",
 		"Pre-reset manifest backup:",
 		"re-declare policies, environments, ports, dependencies",
 	} {
@@ -1212,11 +1212,11 @@ services:
 		t.Fatalf("manifest = %s", data)
 	}
 	for _, expected := range []string{
-		"Replaced Loom policy manifest from imported file",
+		"Replaced Conven policy manifest from imported file",
 		"Pre-import manifest backup:",
 		"without merging repository scan results",
-		"loom doctor",
-		"loom services --start --dry-run",
+		"conven doctor",
+		"conven services --start --dry-run",
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("output is missing %q: %q", expected, output.String())
@@ -1325,7 +1325,7 @@ func TestPolicyActionsRejectArgumentsAndUnknownFlags(t *testing.T) {
 		if code := app.Run(test.arguments); code != test.code {
 			t.Fatalf("%v exit code = %d, want %d: %s", test.arguments, code, test.code, output.String())
 		}
-		if !strings.Contains(output.String(), test.message) || strings.Contains(output.String(), "not a loom workspace") {
+		if !strings.Contains(output.String(), test.message) || strings.Contains(output.String(), "not a Conven workspace") {
 			t.Fatalf("%v output = %q", test.arguments, output.String())
 		}
 	}
@@ -1437,7 +1437,7 @@ services:
 	if strings.Contains(output.String(), "already matches") {
 		t.Fatalf("output contradicts missing repository status: %q", output.String())
 	}
-	if !strings.Contains(output.String(), "loom services --registry --prune") || strings.Contains(output.String(), "loom discover") {
+	if !strings.Contains(output.String(), "conven services --registry --prune") || strings.Contains(output.String(), "conven discover") {
 		t.Fatalf("output does not use the registry action: %q", output.String())
 	}
 }
@@ -1542,7 +1542,7 @@ func TestLocalConfigDoesNotTreatGlobalSettingsAsWorkspace(t *testing.T) {
 		if code := app.Run(arguments); code != 1 {
 			t.Fatalf("%v exit code = %d: %s", arguments, code, output.String())
 		}
-		if !strings.Contains(output.String(), "not a loom workspace") {
+		if !strings.Contains(output.String(), "not a Conven workspace") {
 			t.Fatalf("%v output = %q", arguments, output.String())
 		}
 	}
@@ -1580,7 +1580,7 @@ func TestLocalConfigThroughHomeAliasDoesNotChangeGlobalSettings(t *testing.T) {
 	if code := app.Run([]string{"config", "ktctl.path", "local-ktctl"}); code != 1 {
 		t.Fatalf("local set exit code = %d: %s", code, output.String())
 	}
-	if !strings.Contains(output.String(), "not a loom workspace") {
+	if !strings.Contains(output.String(), "not a Conven workspace") {
 		t.Fatalf("local set output = %q", output.String())
 	}
 	output.Reset()
@@ -1614,7 +1614,7 @@ func TestWorkspaceCommandsFailOutsideDotLoomBoundary(t *testing.T) {
 			if code := app.Run(arguments); code != 1 {
 				t.Fatalf("exit code = %d: %s", code, output.String())
 			}
-			if !strings.Contains(output.String(), "not a loom workspace") {
+			if !strings.Contains(output.String(), "not a Conven workspace") {
 				t.Fatalf("output = %q", output.String())
 			}
 		})

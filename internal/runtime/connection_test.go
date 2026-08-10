@@ -444,7 +444,7 @@ func TestKtctlRegistryRejectsSecondStateRootConnection(t *testing.T) {
 		Timeout:    100 * time.Millisecond,
 		Readiness:  []ConnectionEndpoint{{Name: "closed", Address: address}},
 	}, filepath.Join(directory, "second.log"), "workspace-b", io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "another ktctl connection is active in this Loom state root") {
+	if err == nil || !strings.Contains(err.Error(), "another ktctl connection is active in this Conven state root") {
 		t.Fatalf("process=%#v error=%v, want shared connection conflict", process, err)
 	}
 }
@@ -486,7 +486,7 @@ func TestKtctlRegistryIgnoresManagedCommandConnection(t *testing.T) {
 	listener.Close()
 	process, err := EnsureConnection(context.Background(), ConnectionConfig{
 		Driver:     "ktctl",
-		Command:    "loom-ktctl-that-does-not-exist",
+		Command:    "conven-ktctl-that-does-not-exist",
 		Timeout:    100 * time.Millisecond,
 		Readiness:  []ConnectionEndpoint{{Name: "closed", Address: address}},
 	}, filepath.Join(directory, "second.log"), "workspace-b", io.Discard)
@@ -588,21 +588,21 @@ func TestWaitForElevatedTargetFindsManagedDescendant(t *testing.T) {
 }
 
 func TestCommandMatchesExecutablePathContainingSpaces(t *testing.T) {
-	executable := "/tmp/loom tools/kt ctl"
+	executable := "/tmp/conven tools/kt ctl"
 	if !commandMatchesExecutable(executable+" --kubeconfig /tmp/dev connect", executable, filepath.Base(executable)) {
 		t.Fatal("executable path containing spaces did not match ps command line")
 	}
-	if commandMatchesExecutable("/tmp/loom tools/kt ctl-other connect", executable, filepath.Base(executable)) {
+	if commandMatchesExecutable("/tmp/conven tools/kt ctl-other connect", executable, filepath.Base(executable)) {
 		t.Fatal("executable prefix matched a different command")
 	}
 }
 
 func TestParseProcessTreeLinePreservesRepeatedCommandWhitespace(t *testing.T) {
-	entry, valid := parseProcessTreeLine("  123  45 /tmp/loom  tools/vpn-up --profile dev")
+	entry, valid := parseProcessTreeLine("  123  45 /tmp/conven  tools/vpn-up --profile dev")
 	if !valid {
 		t.Fatal("valid process tree line was rejected")
 	}
-	if entry.PID != 123 || entry.Parent != 45 || entry.Command != "/tmp/loom  tools/vpn-up --profile dev" {
+	if entry.PID != 123 || entry.Parent != 45 || entry.Command != "/tmp/conven  tools/vpn-up --profile dev" {
 		t.Fatalf("process tree entry = %#v", entry)
 	}
 }

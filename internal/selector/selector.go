@@ -175,7 +175,7 @@ func renderPicker(out io.Writer, state *pickerState, width int, height int) erro
 }
 
 func renderConfirmation(out io.Writer, state *pickerState) error {
-	if _, err := fmt.Fprintf(out, "Looming local services: %s\r\n\r\n", strings.Join(state.selectedNames(), ", ")); err != nil {
+	if _, err := fmt.Fprintf(out, "Convening local services: %s\r\n\r\n", strings.Join(state.selectedNames(), ", ")); err != nil {
 		return fmt.Errorf("selector: render confirmation: %w", err)
 	}
 	if _, err := fmt.Fprintf(out, "Confirm? Type y or yes, then press Enter: %s", string(state.confirmation)); err != nil {

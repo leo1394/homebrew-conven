@@ -266,7 +266,7 @@ func dashboardBannerLines(info dashboardInfo, height int) []string {
 	if info.Interface != "" {
 		interfaceLabel = " (" + info.Interface + ")"
 	}
-	title := fmt.Sprintf(" LOOM | %s | env=%s | LAN=%s%s", info.Workspace, info.Environment, info.Address, interfaceLabel)
+	title := fmt.Sprintf(" CONVEN | %s | env=%s | LAN=%s%s", info.Workspace, info.Environment, info.Address, interfaceLabel)
 	maximumBannerRows := height - 1
 	if maximumBannerRows < 1 {
 		return []string{title}

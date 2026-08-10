@@ -1,8 +1,8 @@
-# Releasing loom
+# Releasing Conven
 
 **English** | [简体中文](RELEASING-ZH.md)
 
-This document adapts the release discipline used by `homebrew-gits` to Loom's
+This document adapts the release discipline used by `homebrew-gits` to Conven's
 Go source build and Homebrew Formula.
 
 ## Release model
@@ -10,9 +10,9 @@ Go source build and Homebrew Formula.
 - Release source from `master` with an immutable annotated tag named
   `vX.Y.Z`.
 - The stable Formula downloads the tagged source archive, verifies its SHA-256,
-  builds `./cmd/loom` with Go, and generates Bash, Zsh, and Fish completions.
+  builds `./cmd/conven` with Go, and generates Bash, Zsh, and Fish completions.
 - Keep the `head` stanza so development builds remain available through
-  `brew install --formula --HEAD leo1394/loom/loom`.
+  `brew install --formula --HEAD leo1394/conven/conven`.
 - Homebrew infers the version from the tag in the stable URL. Do not add a
   redundant `version` stanza.
 - Never move, delete, or recreate a published tag. Fix a bad release with a new
@@ -22,7 +22,7 @@ The first stable release adds `url` and `sha256` after its tag exists. Later
 releases replace those two values with the new tag archive.
 
 Because the Formula lives in the same repository as the Go source, its final
-SHA cannot be written into the source commit being hashed. Loom therefore uses
+SHA cannot be written into the source commit being hashed. Conven therefore uses
 two commits:
 
 1. A source release commit, referenced by the immutable tag.
@@ -40,7 +40,7 @@ Formula but never stages, commits, or pushes it.
 
 ## Prerequisites
 
-- Push access to `git@github.com:leo1394/homebrew-loom.git`.
+- Push access to `git@github.com:leo1394/homebrew-conven.git`.
 - Go 1.23 or later, Homebrew, Ruby, Git, ripgrep, `curl`, and `shasum`.
 - A clean local `master` synchronized with `origin/master`.
 - A public GitHub repository and green CI on the current branch.
@@ -51,7 +51,7 @@ Complete this section before the normal preflight when `origin` does not exist.
 Create the public repository and configure the remote:
 
 ```bash
-git remote add origin git@github.com:leo1394/homebrew-loom.git
+git remote add origin git@github.com:leo1394/homebrew-conven.git
 git remote -v
 git status --short
 ```
@@ -62,7 +62,7 @@ push it:
 ```bash
 git add --all
 git diff --cached
-git commit -m "Initialize loom"
+git commit -m "Initialize conven"
 git push -u origin master
 ```
 
@@ -77,11 +77,11 @@ Choose a semantic version before preflight and reuse these release-specific
 variables throughout the procedure. The value below is an example:
 
 ```bash
-LOOM_RELEASE_VERSION=0.1.1
-LOOM_RELEASE_TAG="v$LOOM_RELEASE_VERSION"
-LOOM_ARCHIVE_URL="https://github.com/leo1394/homebrew-loom/archive/refs/tags/$LOOM_RELEASE_TAG.tar.gz"
-LOOM_ARCHIVE_PATH="/tmp/homebrew-loom-$LOOM_RELEASE_VERSION.tar.gz"
-LOOM_FORMULA="leo1394/loom/loom"
+CONVEN_RELEASE_VERSION=0.1.1
+CONVEN_RELEASE_TAG="v$CONVEN_RELEASE_VERSION"
+CONVEN_ARCHIVE_URL="https://github.com/leo1394/homebrew-conven/archive/refs/tags/$CONVEN_RELEASE_TAG.tar.gz"
+CONVEN_ARCHIVE_PATH="/tmp/homebrew-conven-$CONVEN_RELEASE_VERSION.tar.gz"
+CONVEN_FORMULA="leo1394/conven/conven"
 ```
 
 ### Preflight for every release
@@ -99,8 +99,8 @@ tag does not exist locally or remotely:
 
 ```bash
 git fetch origin --tags
-git tag --list "$LOOM_RELEASE_TAG"
-git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG"
+git tag --list "$CONVEN_RELEASE_TAG"
+git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG"
 ```
 
 Both tag lookup commands must print nothing.
@@ -111,10 +111,10 @@ Update these locations:
 
 | Location | Required change |
 | --- | --- |
-| `cmd/loom/main.go` | Set the `version` variable |
+| `cmd/conven/main.go` | Set the `version` variable |
 | `VERSION.txt` | Write only `X.Y.Z` and a trailing newline |
 | `CHANGELOG.md` | Add the release date and user-visible changes |
-| `Formula/loom.rb` test | Expect `loom X.Y.Z` for the HEAD build |
+| `Formula/conven.rb` test | Expect `conven X.Y.Z` for the HEAD build |
 | `README.md` / `README-ZH.md` | Update only when installation or behavior changed |
 | `RELEASING.md` / `RELEASING-ZH.md` | Keep both languages aligned when the release workflow changes |
 
@@ -128,18 +128,18 @@ working directory unchanged:
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --prepare
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --prepare
 )
 ```
 
-The action updates `cmd/loom/main.go`, `VERSION.txt`, and the Formula version
+The action updates `cmd/conven/main.go`, `VERSION.txt`, and the Formula version
 assertion, then runs the release checks. It does not commit, tag, or push.
 
 Check every version occurrence:
 
 ```bash
-rg -n "$LOOM_RELEASE_VERSION|version =|assert_equal \"loom " \
-  cmd/loom/main.go VERSION.txt CHANGELOG.md Formula/loom.rb README.md README-ZH.md
+rg -n "$CONVEN_RELEASE_VERSION|version =|assert_equal \"conven " \
+  cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb README.md README-ZH.md
 ```
 
 ## 2. Run local checks
@@ -153,13 +153,13 @@ go mod tidy -diff
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
-go build -o /tmp/loom-release ./cmd/loom
-/tmp/loom-release --version
+go build -o /tmp/conven-release ./cmd/conven
+/tmp/conven-release --version
 test -f examples/application.yaml
 test ! -e examples/loom.yaml
 
-ruby -c Formula/loom.rb
-brew style Formula/loom.rb
+ruby -c Formula/conven.rb
+brew style Formula/conven.rb
 
 git diff --check
 git diff
@@ -169,7 +169,7 @@ git status --short
 The built binary must print the intended version, for example:
 
 ```text
-loom 0.1.1
+conven 0.1.1
 ```
 
 Review the diff rather than relying only on automated checks. In particular,
@@ -182,10 +182,10 @@ Stage the required release files and any documentation changed for this
 release:
 
 ```bash
-git add cmd/loom/main.go VERSION.txt CHANGELOG.md Formula/loom.rb
+git add cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb
 git add README.md README-ZH.md RELEASING.md RELEASING-ZH.md
 git diff --cached
-git commit -m "Release loom $LOOM_RELEASE_VERSION"
+git commit -m "Release conven $CONVEN_RELEASE_VERSION"
 ```
 
 Omit unchanged documentation files from `git add`. For the first release, skip
@@ -195,13 +195,13 @@ Record the exact source SHA, push `master`, and verify that the remote branch
 contains that exact commit:
 
 ```bash
-LOOM_SOURCE_COMMIT=$(git rev-parse HEAD)
+CONVEN_SOURCE_COMMIT=$(git rev-parse HEAD)
 git push origin master
 git fetch origin master
-test "$LOOM_SOURCE_COMMIT" = "$(git rev-parse origin/master)"
+test "$CONVEN_SOURCE_COMMIT" = "$(git rev-parse origin/master)"
 ```
 
-Wait for CI on `$LOOM_SOURCE_COMMIT` to pass before running `--apply`. Do not
+Wait for CI on `$CONVEN_SOURCE_COMMIT` to pass before running `--apply`. Do not
 change the working tree after this point. The apply preflight requires a clean
 local `master`, synchronized `origin/master`, and no local or remote release
 tag.
@@ -213,19 +213,19 @@ Run the apply action from the clean repository root:
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --apply
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --apply
 )
 ```
 
 For a Go-source release, `--apply` performs the complete publication sequence:
 
 1. Repeats the release checks and verifies the clean, synchronized `master`.
-2. Creates an annotated `vX.Y.Z` tag on `$LOOM_SOURCE_COMMIT` and pushes it.
+2. Creates an annotated `vX.Y.Z` tag on `$CONVEN_SOURCE_COMMIT` and pushes it.
 3. Downloads the public GitHub tag archive, verifies its top-level
    `VERSION.txt`, and calculates its SHA-256.
 4. Updates the stable Formula URL and checksum, then runs Ruby syntax,
    `brew style`, and Git whitespace checks.
-5. Verifies that only `Formula/loom.rb` changed, stages it, and commits it with
+5. Verifies that only `Formula/conven.rb` changed, stages it, and commits it with
    the exact message `update formula for vX.Y.Z`.
 6. Pushes `origin/master` and verifies that the remote points to the Formula
    commit.
@@ -237,15 +237,15 @@ tools such as `ktctl` or `sudo` hard Formula dependencies.
 Verify the two-commit result:
 
 ```bash
-LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
-test "$(git rev-parse "$LOOM_RELEASE_TAG^{commit}")" = "$LOOM_SOURCE_COMMIT"
-test "$(git log -1 --pretty=%s)" = "update formula for $LOOM_RELEASE_TAG"
-test "$(git rev-parse HEAD^)" = "$LOOM_SOURCE_COMMIT"
-LOOM_REMOTE_TAG_COMMIT=$(git ls-remote --tags origin \
-  "refs/tags/$LOOM_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }')
-test "$LOOM_REMOTE_TAG_COMMIT" = "$LOOM_SOURCE_COMMIT"
+CONVEN_FORMULA_COMMIT=$(git rev-parse HEAD)
+test "$(git rev-parse "$CONVEN_RELEASE_TAG^{commit}")" = "$CONVEN_SOURCE_COMMIT"
+test "$(git log -1 --pretty=%s)" = "update formula for $CONVEN_RELEASE_TAG"
+test "$(git rev-parse HEAD^)" = "$CONVEN_SOURCE_COMMIT"
+CONVEN_REMOTE_TAG_COMMIT=$(git ls-remote --tags origin \
+  "refs/tags/$CONVEN_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }')
+test "$CONVEN_REMOTE_TAG_COMMIT" = "$CONVEN_SOURCE_COMMIT"
 git fetch origin master
-test "$LOOM_FORMULA_COMMIT" = "$(git rev-parse origin/master)"
+test "$CONVEN_FORMULA_COMMIT" = "$(git rev-parse origin/master)"
 git status --short
 ```
 
@@ -259,9 +259,9 @@ because GitHub must first materialize the tagged archive. If it fails, inspect
 the tag, branch, and working tree before taking another action:
 
 ```bash
-git tag --list "$LOOM_RELEASE_TAG"
-git ls-remote --tags origin "refs/tags/$LOOM_RELEASE_TAG" \
-  "refs/tags/$LOOM_RELEASE_TAG^{}"
+git tag --list "$CONVEN_RELEASE_TAG"
+git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG" \
+  "refs/tags/$CONVEN_RELEASE_TAG^{}"
 git status --short
 ```
 
@@ -281,15 +281,15 @@ but deliberately does not stage, commit, or push:
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-loom --version "$LOOM_RELEASE_VERSION" --finalize-formula
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --finalize-formula
 )
-git diff -- Formula/loom.rb
+git diff -- Formula/conven.rb
 ```
 
 Review the diff and run the stable Formula gate below before manually completing
 the recovery.
 
-If a failed finalization already left `Formula/loom.rb` modified, inspect and
+If a failed finalization already left `Formula/conven.rb` modified, inspect and
 resolve that exact file first. Do not move the tag or force-push a rewritten
 release.
 
@@ -301,33 +301,33 @@ finalization, run the following stable Formula gate on a disposable Homebrew
 test machine:
 
 ```bash
-LOOM_TEST_TAP="loom-release/loom"
-LOOM_TEST_FORMULA="$LOOM_TEST_TAP/loom"
-brew tap-new --no-git "$LOOM_TEST_TAP"
-LOOM_TEST_TAP_DIR="$(brew --repository "$LOOM_TEST_TAP")"
-cp Formula/loom.rb "$LOOM_TEST_TAP_DIR/Formula/loom.rb"
+CONVEN_TEST_TAP="conven-release/conven"
+CONVEN_TEST_FORMULA="$CONVEN_TEST_TAP/conven"
+brew tap-new --no-git "$CONVEN_TEST_TAP"
+CONVEN_TEST_TAP_DIR="$(brew --repository "$CONVEN_TEST_TAP")"
+cp Formula/conven.rb "$CONVEN_TEST_TAP_DIR/Formula/conven.rb"
 
-brew audit --formula --strict "$LOOM_TEST_FORMULA"
-brew install --formula --build-from-source "$LOOM_TEST_FORMULA"
-brew test "$LOOM_TEST_FORMULA"
-"$(brew --prefix "$LOOM_TEST_FORMULA")/bin/loom" --version
+brew audit --formula --strict "$CONVEN_TEST_FORMULA"
+brew install --formula --build-from-source "$CONVEN_TEST_FORMULA"
+brew test "$CONVEN_TEST_FORMULA"
+"$(brew --prefix "$CONVEN_TEST_FORMULA")/bin/conven" --version
 ```
 
-The version must equal `loom $LOOM_RELEASE_VERSION`. After the gate passes,
+The version must equal `conven $CONVEN_RELEASE_VERSION`. After the gate passes,
 clean up the temporary test installation and tap:
 
 ```bash
-brew uninstall --formula "$LOOM_TEST_FORMULA"
-brew untap "$LOOM_TEST_TAP"
+brew uninstall --formula "$CONVEN_TEST_FORMULA"
+brew untap "$CONVEN_TEST_TAP"
 ```
 
 For standalone finalization, only after this gate passes, commit and push the
 reviewed Formula explicitly:
 
 ```bash
-git add Formula/loom.rb
-git commit -m "update formula for $LOOM_RELEASE_TAG"
-LOOM_FORMULA_COMMIT=$(git rev-parse HEAD)
+git add Formula/conven.rb
+git commit -m "update formula for $CONVEN_RELEASE_TAG"
+CONVEN_FORMULA_COMMIT=$(git rev-parse HEAD)
 git push origin master
 ```
 
@@ -337,8 +337,8 @@ and verify the ancestry:
 ```bash
 git switch master
 git pull --ff-only origin master
-git merge-base --is-ancestor "$LOOM_SOURCE_COMMIT" origin/master
-git merge-base --is-ancestor "$LOOM_FORMULA_COMMIT" origin/master
+git merge-base --is-ancestor "$CONVEN_SOURCE_COMMIT" origin/master
+git merge-base --is-ancestor "$CONVEN_FORMULA_COMMIT" origin/master
 git status --short
 ```
 
@@ -349,23 +349,23 @@ Formula:
 
 ```bash
 curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
-  "$LOOM_ARCHIVE_URL" -o "$LOOM_ARCHIVE_PATH"
-LOOM_PUBLISHED_SHA=$(LC_ALL=C shasum -a 256 "$LOOM_ARCHIVE_PATH" | awk '{print $1}')
-FORMULA_SHA=$(ruby -ne 'puts $1 if $_ =~ /^\s*sha256 "([0-9a-f]{64})"/' Formula/loom.rb)
-test "$LOOM_PUBLISHED_SHA" = "$FORMULA_SHA"
+  "$CONVEN_ARCHIVE_URL" -o "$CONVEN_ARCHIVE_PATH"
+CONVEN_PUBLISHED_SHA=$(LC_ALL=C shasum -a 256 "$CONVEN_ARCHIVE_PATH" | awk '{print $1}')
+FORMULA_SHA=$(ruby -ne 'puts $1 if $_ =~ /^\s*sha256 "([0-9a-f]{64})"/' Formula/conven.rb)
+test "$CONVEN_PUBLISHED_SHA" = "$FORMULA_SHA"
 ```
 
 Optionally build directly from the extracted archive to isolate source-package
 problems from Homebrew:
 
 ```bash
-LOOM_ARCHIVE_DIR=$(mktemp -d /tmp/homebrew-loom-release.XXXXXX)
+CONVEN_ARCHIVE_DIR=$(mktemp -d /tmp/homebrew-conven-release.XXXXXX)
 (
-  tar -xzf "$LOOM_ARCHIVE_PATH" -C "$LOOM_ARCHIVE_DIR" --strip-components=1
-  cd "$LOOM_ARCHIVE_DIR"
+  tar -xzf "$CONVEN_ARCHIVE_PATH" -C "$CONVEN_ARCHIVE_DIR" --strip-components=1
+  cd "$CONVEN_ARCHIVE_DIR"
   go test -count=1 ./...
-  go build -o /tmp/loom-published ./cmd/loom
-  /tmp/loom-published --version
+  go build -o /tmp/conven-published ./cmd/conven
+  /tmp/conven-published --version
 )
 ```
 
@@ -374,80 +374,77 @@ LOOM_ARCHIVE_DIR=$(mktemp -d /tmp/homebrew-loom-release.XXXXXX)
 Refresh the tap and audit the published Formula:
 
 ```bash
-brew tap leo1394/loom
+brew tap leo1394/conven
 brew update
-brew audit --formula --strict --online "$LOOM_FORMULA"
+brew audit --formula --strict --online "$CONVEN_FORMULA"
 ```
 
-Homebrew core contains an unrelated cask named `loom`. Always use
-`$LOOM_FORMULA` and `--formula` where the command supports it.
-
-For a machine without Loom installed:
+For a machine without Conven installed:
 
 ```bash
-brew install --formula --build-from-source "$LOOM_FORMULA"
+brew install --formula --build-from-source "$CONVEN_FORMULA"
 ```
 
 For an existing stable or HEAD installation, switch explicitly rather than
 using `reinstall`, which preserves the original install options:
 
 ```bash
-brew uninstall --formula "$LOOM_FORMULA"
-brew install --formula --build-from-source "$LOOM_FORMULA"
+brew uninstall --formula "$CONVEN_FORMULA"
+brew install --formula --build-from-source "$CONVEN_FORMULA"
 ```
 
 Then verify the Formula and binary:
 
 ```bash
-brew test "$LOOM_FORMULA"
-"$(brew --prefix "$LOOM_FORMULA")/bin/loom" --version
-brew info --formula "$LOOM_FORMULA"
-brew deps --formula --include-build "$LOOM_FORMULA"
+brew test "$CONVEN_FORMULA"
+"$(brew --prefix "$CONVEN_FORMULA")/bin/conven" --version
+brew info --formula "$CONVEN_FORMULA"
+brew deps --formula --include-build "$CONVEN_FORMULA"
 ```
 
 Verify all generated completions:
 
 ```bash
-LOOM_BASH_COMPLETION="$(brew --prefix)/etc/bash_completion.d/loom"
-LOOM_ZSH_COMPLETION="$(brew --prefix)/share/zsh/site-functions/_loom"
-LOOM_FISH_COMPLETION="$(brew --prefix)/share/fish/vendor_completions.d/loom.fish"
-test -e "$LOOM_BASH_COMPLETION"
-test -e "$LOOM_ZSH_COMPLETION"
-test -e "$LOOM_FISH_COMPLETION"
-for completion in "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION" "$LOOM_FISH_COMPLETION"; do
+CONVEN_BASH_COMPLETION="$(brew --prefix)/etc/bash_completion.d/conven"
+CONVEN_ZSH_COMPLETION="$(brew --prefix)/share/zsh/site-functions/_conven"
+CONVEN_FISH_COMPLETION="$(brew --prefix)/share/fish/vendor_completions.d/conven.fish"
+test -e "$CONVEN_BASH_COMPLETION"
+test -e "$CONVEN_ZSH_COMPLETION"
+test -e "$CONVEN_FISH_COMPLETION"
+for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION" "$CONVEN_FISH_COMPLETION"; do
   grep -Fq -- "services" "$completion"
 done
 for action in list registry status logs start restart stop stop-all; do
-  for completion in "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"; do
+  for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
-  grep -Fq -- "-l $action" "$LOOM_FISH_COMPLETION"
+  grep -Fq -- "-l $action" "$CONVEN_FISH_COMPLETION"
 done
 for action in edit import reset; do
-  for completion in "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"; do
+  for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
-  grep -Fq -- "-l $action" "$LOOM_FISH_COMPLETION"
+  grep -Fq -- "-l $action" "$CONVEN_FISH_COMPLETION"
 done
 for option in prune tail; do
-  for completion in "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"; do
+  for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$option" "$completion"
   done
-  grep -Fq -- "-l $option" "$LOOM_FISH_COMPLETION"
+  grep -Fq -- "-l $option" "$CONVEN_FISH_COMPLETION"
 done
-! grep -Eq 'compgen -W "[^"]* (discover|start|restart|status|stop|logs|list)( |")' "$LOOM_BASH_COMPLETION"
-! grep -Eq "^[[:space:]]*'(discover|start|restart|status|stop|logs|list):" "$LOOM_ZSH_COMPLETION"
-! grep -Eq ' -a (discover|start|restart|status|stop|logs|list) -d ' "$LOOM_FISH_COMPLETION"
-! grep -Fq -- "--workspace" "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"
-! grep -Fq -- "--config" "$LOOM_BASH_COMPLETION" "$LOOM_ZSH_COMPLETION"
-! grep -Fq -- "-l workspace" "$LOOM_FISH_COMPLETION"
-! grep -Fq -- "-l config" "$LOOM_FISH_COMPLETION"
+! grep -Eq 'compgen -W "[^"]* (discover|start|restart|status|stop|logs|list)( |")' "$CONVEN_BASH_COMPLETION"
+! grep -Eq "^[[:space:]]*'(discover|start|restart|status|stop|logs|list):" "$CONVEN_ZSH_COMPLETION"
+! grep -Eq ' -a (discover|start|restart|status|stop|logs|list) -d ' "$CONVEN_FISH_COMPLETION"
+! grep -Fq -- "--workspace" "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"
+! grep -Fq -- "--config" "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"
+! grep -Fq -- "-l workspace" "$CONVEN_FISH_COMPLETION"
+! grep -Fq -- "-l config" "$CONVEN_FISH_COMPLETION"
 ```
 
 ## 7. Run functional acceptance
 
 Use a disposable development workspace with no strong-match child repository
-for the process checks below. In that case, `loom init` must create the fallback
+for the process checks below. In that case, `conven init` must create the fallback
 manifest at `.loom/loom.yaml` from the bundled `examples/application.yaml`
 template, and a second invocation must leave an existing manifest unchanged.
 Edit that generated manifest and provide the referenced service repositories
@@ -459,7 +456,7 @@ test. Do not run connection or process-recovery tests against production
 infrastructure.
 
 Before running the commands below, prepare
-`.acceptance/import-candidate.yaml` as a complete valid Loom v1 manifest for the
+`.acceptance/import-candidate.yaml` as a complete valid Conven v1 manifest for the
 same disposable service repositories. Make it differ from the `init` result in
 at least `workspace.name`; it must contain no credentials. This exercises a real
 replacement and backup rather than the byte-identical no-op path.
@@ -467,82 +464,82 @@ replacement and backup rather than the byte-identical no-op path.
 At minimum, verify:
 
 ```bash
-LOOM_BIN="$(brew --prefix "$LOOM_FORMULA")/bin/loom"
-LOOM_TEST_KUBECONFIG=/absolute/path/to/disposable/kubeconfig
-test -f "$LOOM_TEST_KUBECONFIG"
-"$LOOM_BIN" init
+CONVEN_BIN="$(brew --prefix "$CONVEN_FORMULA")/bin/conven"
+CONVEN_TEST_KUBECONFIG=/absolute/path/to/disposable/kubeconfig
+test -f "$CONVEN_TEST_KUBECONFIG"
+"$CONVEN_BIN" init
 test -f .loom/loom.yaml
-LOOM_MANIFEST_SHA=$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')
-"$LOOM_BIN" init
-test "$LOOM_MANIFEST_SHA" = "$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')"
+CONVEN_MANIFEST_SHA=$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')
+"$CONVEN_BIN" init
+test "$CONVEN_MANIFEST_SHA" = "$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')"
 mkdir -p .acceptance/descendant
-LOOM_IMPORT_SOURCE=.acceptance/import-candidate.yaml
-LOOM_IMPORT_SOURCE_SHA=$(shasum -a 256 "$LOOM_IMPORT_SOURCE" | awk '{print $1}')
-(cd .acceptance/descendant && "$LOOM_BIN" policy --import ../import-candidate.yaml)
-test "$LOOM_IMPORT_SOURCE_SHA" = "$(shasum -a 256 "$LOOM_IMPORT_SOURCE" | awk '{print $1}')"
-cmp "$LOOM_IMPORT_SOURCE" .loom/loom.yaml
+CONVEN_IMPORT_SOURCE=.acceptance/import-candidate.yaml
+CONVEN_IMPORT_SOURCE_SHA=$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')
+(cd .acceptance/descendant && "$CONVEN_BIN" policy --import ../import-candidate.yaml)
+test "$CONVEN_IMPORT_SOURCE_SHA" = "$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')"
+cmp "$CONVEN_IMPORT_SOURCE" .loom/loom.yaml
 test -n "$(find .loom/backups -type f -name 'loom.yaml-before-import-*.bak' -print -quit)"
-"$LOOM_BIN" config ktctl.path ktctl
-test "$("$LOOM_BIN" config ktctl.path)" = "ktctl"
-"$LOOM_BIN" config ktctl.kubeconfig "$LOOM_TEST_KUBECONFIG"
-test "$("$LOOM_BIN" config ktctl.kubeconfig)" = "$LOOM_TEST_KUBECONFIG"
-"$LOOM_BIN" config --list
-"$LOOM_BIN" doctor
-"$LOOM_BIN" services --start --dry-run user-svc order-svc
-"$LOOM_BIN" services --list
-(cd .acceptance/descendant && "$LOOM_BIN" services --list)
-(cd .acceptance/descendant && "$LOOM_BIN" services --registry)
-LOOM_WORKSPACE=/path/that/is/not/a/workspace "$LOOM_BIN" services --list
+"$CONVEN_BIN" config ktctl.path ktctl
+test "$("$CONVEN_BIN" config ktctl.path)" = "ktctl"
+"$CONVEN_BIN" config ktctl.kubeconfig "$CONVEN_TEST_KUBECONFIG"
+test "$("$CONVEN_BIN" config ktctl.kubeconfig)" = "$CONVEN_TEST_KUBECONFIG"
+"$CONVEN_BIN" config --list
+"$CONVEN_BIN" doctor
+"$CONVEN_BIN" services --start --dry-run user-svc order-svc
+"$CONVEN_BIN" services --list
+(cd .acceptance/descendant && "$CONVEN_BIN" services --list)
+(cd .acceptance/descendant && "$CONVEN_BIN" services --registry)
+LOOM_WORKSPACE=/path/that/is/not/a/workspace "$CONVEN_BIN" services --list
 for command in services doctor; do
   for removed_flag in --workspace --config; do
-    if "$LOOM_BIN" "$command" "$removed_flag" /tmp >/dev/null 2>&1; then
+    if "$CONVEN_BIN" "$command" "$removed_flag" /tmp >/dev/null 2>&1; then
       false
     else
-      LOOM_USAGE_STATUS=$?
-      test "$LOOM_USAGE_STATUS" -eq 2
+      CONVEN_USAGE_STATUS=$?
+      test "$CONVEN_USAGE_STATUS" -eq 2
     fi
   done
 done
-LOOM_HELP_OUTPUT=$(mktemp /tmp/loom-help.XXXXXX)
+CONVEN_HELP_OUTPUT=$(mktemp /tmp/conven-help.XXXXXX)
 for command in services doctor; do
-  "$LOOM_BIN" "$command" --help >"$LOOM_HELP_OUTPUT"
-  ! grep -Fq -- "--workspace" "$LOOM_HELP_OUTPUT"
-  ! grep -Fq -- "--config" "$LOOM_HELP_OUTPUT"
+  "$CONVEN_BIN" "$command" --help >"$CONVEN_HELP_OUTPUT"
+  ! grep -Fq -- "--workspace" "$CONVEN_HELP_OUTPUT"
+  ! grep -Fq -- "--config" "$CONVEN_HELP_OUTPUT"
 done
 for removed_command in discover start restart status stop logs list; do
-  if "$LOOM_BIN" "$removed_command" --help >/dev/null 2>&1; then
+  if "$CONVEN_BIN" "$removed_command" --help >/dev/null 2>&1; then
     false
   else
-    LOOM_USAGE_STATUS=$?
-    test "$LOOM_USAGE_STATUS" -eq 2
+    CONVEN_USAGE_STATUS=$?
+    test "$CONVEN_USAGE_STATUS" -eq 2
   fi
 done
-if "$LOOM_BIN" services --tail --logs user-svc >/dev/null 2>&1; then
+if "$CONVEN_BIN" services --tail --logs user-svc >/dev/null 2>&1; then
   false
 else
-  LOOM_USAGE_STATUS=$?
-  test "$LOOM_USAGE_STATUS" -eq 2
+  CONVEN_USAGE_STATUS=$?
+  test "$CONVEN_USAGE_STATUS" -eq 2
 fi
-rm -f "$LOOM_HELP_OUTPUT"
-"$LOOM_BIN" services --start --dry-run --dev user-svc order-svc
-"$LOOM_BIN" services --start --dry-run user-svc order-svc
-"$LOOM_BIN" services --start user-svc order-svc
-"$LOOM_BIN" services --status
-"$LOOM_BIN" services --logs user-svc order-svc
-LOOM_TAIL_OUTPUT=$(mktemp /tmp/loom-tail.XXXXXX)
-"$LOOM_BIN" services --logs --tail user-svc order-svc >"$LOOM_TAIL_OUTPUT" &
-LOOM_TAIL_PID=$!
+rm -f "$CONVEN_HELP_OUTPUT"
+"$CONVEN_BIN" services --start --dry-run --dev user-svc order-svc
+"$CONVEN_BIN" services --start --dry-run user-svc order-svc
+"$CONVEN_BIN" services --start user-svc order-svc
+"$CONVEN_BIN" services --status
+"$CONVEN_BIN" services --logs user-svc order-svc
+CONVEN_TAIL_OUTPUT=$(mktemp /tmp/conven-tail.XXXXXX)
+"$CONVEN_BIN" services --logs --tail user-svc order-svc >"$CONVEN_TAIL_OUTPUT" &
+CONVEN_TAIL_PID=$!
 sleep 1
-kill -INT "$LOOM_TAIL_PID"
-wait "$LOOM_TAIL_PID"
-grep -Eq '^\[(user-svc|order-svc)\] ' "$LOOM_TAIL_OUTPUT"
-! LC_ALL=C grep -Fq "$(printf '\033[?1049h')" "$LOOM_TAIL_OUTPUT"
-! LC_ALL=C grep -Fq "$(printf '\033[2J')" "$LOOM_TAIL_OUTPUT"
-rm -f "$LOOM_TAIL_OUTPUT"
+kill -INT "$CONVEN_TAIL_PID"
+wait "$CONVEN_TAIL_PID"
+grep -Eq '^\[(user-svc|order-svc)\] ' "$CONVEN_TAIL_OUTPUT"
+! LC_ALL=C grep -Fq "$(printf '\033[?1049h')" "$CONVEN_TAIL_OUTPUT"
+! LC_ALL=C grep -Fq "$(printf '\033[2J')" "$CONVEN_TAIL_OUTPUT"
+rm -f "$CONVEN_TAIL_OUTPUT"
 # Edit a tracked source file in one running service before this automatic check.
-"$LOOM_BIN" services --restart
-"$LOOM_BIN" services --restart user-svc
-"$LOOM_BIN" services --stop-all
+"$CONVEN_BIN" services --restart
+"$CONVEN_BIN" services --restart user-svc
+"$CONVEN_BIN" services --stop-all
 ```
 
 The import check must confirm that the relative path was resolved from
@@ -569,7 +566,7 @@ real business repositories:
   must win without being replaced by `init`; publication is atomic no-replace.
 - After adding a manual port, environment value, dependency, and YAML comment to
   one discovered service, add another strong-match child repository and run
-  `loom services --registry`. The new path is added while the existing service
+  `conven services --registry`. The new path is added while the existing service
   block, including the comment, remains unchanged. Running `services --registry`
   from a workspace descendant scans the same workspace root.
 - Move a previously discovered repository out of the workspace. Plain
@@ -605,15 +602,15 @@ Also exercise the dashboard from a real interactive terminal rather than a
 redirect or pipeline:
 
 ```bash
-"$LOOM_BIN" services --start --tail user-svc order-svc
+"$CONVEN_BIN" services --start --tail user-svc order-svc
 # Resize the window, then press q. Both services must remain running.
-"$LOOM_BIN" services --status
-"$LOOM_BIN" services --restart --tail user-svc
+"$CONVEN_BIN" services --status
+"$CONVEN_BIN" services --restart --tail user-svc
 # Press Ctrl-C. The restarted service and unchanged service must remain running.
-"$LOOM_BIN" services --status
-"$LOOM_BIN" services --logs --tail user-svc order-svc
+"$CONVEN_BIN" services --status
+"$CONVEN_BIN" services --logs --tail user-svc order-svc
 # Press q, then clean up the still-running services.
-"$LOOM_BIN" services --stop --all
+"$CONVEN_BIN" services --stop --all
 ```
 
 For every TTY entry point, confirm that `--tail` behaves as a boolean switch,
@@ -654,13 +651,13 @@ Confirm the following behavior:
   `config` works at a `.loom` boundary while `loom.yaml` is still being prepared.
   The user-wide `~/.loom` directory is always reserved for global settings: it
   must not make the home directory or its descendants a workspace, even if a
-  manifest was created there manually. `loom init` must reject the home directory.
+  manifest was created there manually. `conven init` must reject the home directory.
 - Every launched local service receives the resolved absolute workspace root in
   `LOOM_WORKSPACE`, overriding an inherited value. Treat it as read-only service
   metadata; it is not an input to CLI discovery.
 - Local settings are stored in `.loom/config`, global settings in
   `~/.loom/config`, and local `ktctl.path` and `ktctl.kubeconfig` values override
-  global values. Remove both temporary local values with `loom config --unset`
+  global values. Remove both temporary local values with `conven config --unset`
   after the test.
 - On `services --start` and `doctor`, `--dev` is equivalent to `--env dev` and
   `--test` is equivalent to `--env test`. Add a disposable `test` profile before
@@ -674,10 +671,10 @@ Confirm the following behavior:
 - PathPicker candidates still come only from the manifest. It does not trigger
   repository discovery implicitly.
 - The startup message is exactly
-  `Looming local services: user-svc, order-svc`.
+  `Convening local services: user-svc, order-svc`.
 - `localEnv` is injected for selected dependencies and `remoteEnv` for
   unselected dependencies.
-- Logs from all selected services are available through `loom services --logs`. The
+- Logs from all selected services are available through `conven services --logs`. The
   boolean `--tail` switch provides the TTY dashboard and the non-TTY plain-text
   fallback described above.
 - `services --status` reports saved PID/PGID data, and normal
@@ -730,10 +727,10 @@ removed. Never use
 After stable functional acceptance passes, retain a HEAD smoke test:
 
 ```bash
-brew uninstall --formula "$LOOM_FORMULA"
-brew install --formula --HEAD "$LOOM_FORMULA"
-brew test --HEAD "$LOOM_FORMULA"
-"$(brew --prefix "$LOOM_FORMULA")/bin/loom" --version
+brew uninstall --formula "$CONVEN_FORMULA"
+brew install --formula --HEAD "$CONVEN_FORMULA"
+brew test --HEAD "$CONVEN_FORMULA"
+"$(brew --prefix "$CONVEN_FORMULA")/bin/conven" --version
 ```
 
 `brew reinstall` does not accept `--HEAD`, so the release test machine must
@@ -741,10 +738,10 @@ switch channels with uninstall/install. Restore and verify the stable release
 afterward:
 
 ```bash
-brew uninstall --formula "$LOOM_FORMULA"
-brew install --formula --build-from-source "$LOOM_FORMULA"
-brew test "$LOOM_FORMULA"
-"$(brew --prefix "$LOOM_FORMULA")/bin/loom" --version
+brew uninstall --formula "$CONVEN_FORMULA"
+brew install --formula --build-from-source "$CONVEN_FORMULA"
+brew test "$CONVEN_FORMULA"
+"$(brew --prefix "$CONVEN_FORMULA")/bin/conven" --version
 ```
 
 ## 8. Complete the release

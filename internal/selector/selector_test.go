@@ -34,7 +34,7 @@ func TestReadKeyRecognizesMovement(t *testing.T) {
 	}
 }
 
-func TestRenderConfirmationIncludesLoomingServices(t *testing.T) {
+func TestRenderConfirmationIncludesConveningServices(t *testing.T) {
 	state := selectedPickerState()
 	var output bytes.Buffer
 
@@ -42,7 +42,7 @@ func TestRenderConfirmationIncludesLoomingServices(t *testing.T) {
 		t.Fatalf("render returned an error: %v", err)
 	}
 
-	want := "Looming local services: user-svc"
+	want := "Convening local services: user-svc"
 	if !strings.Contains(output.String(), want) {
 		t.Fatalf("confirmation output %q does not contain %q", output.String(), want)
 	}

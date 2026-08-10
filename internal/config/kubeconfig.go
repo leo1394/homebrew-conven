@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 func ResolveKubeconfig(connection model.Connection, explicit string, configured string) (string, error) {
@@ -45,7 +45,7 @@ func ResolveKubeconfig(connection model.Connection, explicit string, configured 
 func normalizeKubeconfig(value string, source string) (string, error) {
 	paths := filepath.SplitList(strings.TrimSpace(value))
 	if len(paths) > 1 {
-		return "", fmt.Errorf("%s contains multiple kubeconfig files; Loom currently requires a single file", source)
+		return "", fmt.Errorf("%s contains multiple kubeconfig files; Conven currently requires a single file", source)
 	}
 	if len(paths) == 0 || strings.TrimSpace(paths[0]) == "" {
 		return "", fmt.Errorf("%s does not contain a kubeconfig path", source)

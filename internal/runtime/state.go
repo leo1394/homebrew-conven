@@ -86,10 +86,10 @@ func NewStore(workspace string) (*Store, error) {
 func (store *Store) ensureRoot() error {
 	boundaryInfo, err := os.Lstat(store.boundary)
 	if err != nil {
-		return fmt.Errorf("inspect loom workspace boundary %q: %w", store.boundary, err)
+		return fmt.Errorf("inspect Conven workspace boundary %q: %w", store.boundary, err)
 	}
 	if boundaryInfo.Mode()&os.ModeSymlink != 0 || !boundaryInfo.IsDir() {
-		return fmt.Errorf("loom workspace boundary %q must be a real directory", store.boundary)
+		return fmt.Errorf("Conven workspace boundary %q must be a real directory", store.boundary)
 	}
 	rootInfo, err := os.Lstat(store.Root)
 	if os.IsNotExist(err) {
@@ -112,16 +112,16 @@ func (store *Store) ensureIgnored() error {
 	info, err := os.Lstat(path)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("loom gitignore %q must be a regular file, not a symbolic link", path)
+			return fmt.Errorf("Conven gitignore %q must be a regular file, not a symbolic link", path)
 		}
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("inspect loom gitignore: %w", err)
+		return fmt.Errorf("inspect Conven gitignore: %w", err)
 	}
 	var data []byte
 	if err == nil {
 		data, err = os.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("read loom gitignore: %w", err)
+			return fmt.Errorf("read Conven gitignore: %w", err)
 		}
 	}
 	for _, line := range strings.Split(string(data), "\n") {
@@ -135,14 +135,14 @@ func (store *Store) ensureIgnored() error {
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
-		return fmt.Errorf("open loom gitignore: %w", err)
+		return fmt.Errorf("open Conven gitignore: %w", err)
 	}
 	if _, err := file.WriteString(prefix + runtimeIgnoreRule + "\n"); err != nil {
 		file.Close()
-		return fmt.Errorf("update loom gitignore: %w", err)
+		return fmt.Errorf("update Conven gitignore: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close loom gitignore: %w", err)
+		return fmt.Errorf("close Conven gitignore: %w", err)
 	}
 	return nil
 }
@@ -169,7 +169,7 @@ func (store *Store) Lock() (func(), error) {
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		file.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			return nil, fmt.Errorf("another loom command is active for this workspace")
+			return nil, fmt.Errorf("another Conven command is active for this workspace")
 		}
 		return nil, fmt.Errorf("lock workspace state: %w", err)
 	}

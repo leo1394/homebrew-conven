@@ -11,8 +11,8 @@ environments:
       NACOS_ADDR: nacos-headless.default:8848
     connection:
       driver: ktctl
-      # 定制 ktctl 可执行文件：loom config ktctl.path /absolute/path/to/ktctl
-      # 也可用 KTCTL_KUBECONFIG，或执行 loom config ktctl.kubeconfig /secure/dev-kubeconfig
+      # 定制 ktctl 可执行文件：conven config ktctl.path /absolute/path/to/ktctl
+      # 也可用 KTCTL_KUBECONFIG，或执行 conven config ktctl.kubeconfig /secure/dev-kubeconfig
       # sudo: true
       kubeconfigEnv: LOOM_KUBECONFIG
       context: dev-cluster

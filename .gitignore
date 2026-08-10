@@ -2,6 +2,6 @@
 /.loom/
 /bin/
 /dist/
-/loom
+/conven
 *.log
 coverage.out

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 func TestRestartOnlyReloadsChangedServicesAndPreservesLogs(t *testing.T) {
@@ -120,7 +120,7 @@ func TestRestartOnlyReloadsChangedServicesAndPreservesLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(apiLog), "--- loom services --restart ") {
+	if !strings.Contains(string(apiLog), "--- conven services --restart ") {
 		t.Fatalf("api log is missing restart marker: %q", apiLog)
 	}
 

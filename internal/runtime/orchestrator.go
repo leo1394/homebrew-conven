@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leo1394/homebrew-loom/internal/materialize"
-	"github.com/leo1394/homebrew-loom/internal/terminal"
+	"github.com/leo1394/homebrew-conven/internal/materialize"
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
 type StartOptions struct {
@@ -56,15 +56,15 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	if existing != nil {
 		active := activeServices(existing)
 		if len(active) > 0 {
-			return nil, fmt.Errorf("workspace already has running services: %s; use loom services --restart or loom services --stop first", strings.Join(active, ", "))
+			return nil, fmt.Errorf("workspace already has running services: %s; use conven services --restart or conven services --stop first", strings.Join(active, ", "))
 		}
 		for _, process := range existing.Services {
 			if ProcessGroupAlive(process.PGID) {
-				return nil, fmt.Errorf("workspace has an unverified process group for %s; use loom services --stop --all before starting a new session", process.Name)
+				return nil, fmt.Errorf("workspace has an unverified process group for %s; use conven services --stop --all before starting a new session", process.Name)
 			}
 		}
 		if existing.Connection != nil && existing.Connection.Owned && !existing.Connection.Managed && ProcessGroupAlive(existing.Connection.PGID) {
-			return nil, fmt.Errorf("workspace has an active or unverified %s connection; use loom services --stop --all before starting a new session", existing.Connection.Driver)
+			return nil, fmt.Errorf("workspace has an active or unverified %s connection; use conven services --stop --all before starting a new session", existing.Connection.Driver)
 		}
 	}
 	plan, err := BuildPlan(workspace, options.Common, options.Services)
@@ -238,7 +238,7 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	if err := workspace.Store.Save(session); err != nil {
 		return nil, failStartup(workspace, session, connection, output, err)
 	}
-	fmt.Fprintln(output, style.Success("Local services are ready. Use `loom services --logs --tail` to observe them."))
+	fmt.Fprintln(output, style.Success("Local services are ready. Use `conven services --logs --tail` to observe them."))
 	return session, nil
 }
 
@@ -248,7 +248,7 @@ func validateSkipBuild(plan *Plan) error {
 		if len(service.Build) == 0 || !pathWithinDirectory(plan.RunDir, service.Artifact) {
 			continue
 		}
-		return fmt.Errorf("--skip-build cannot reuse %s artifact %s because Loom resets the current runtime directory for a fresh start; set services.%s.runner.artifact to an absolute persistent path or omit --skip-build", name, service.Artifact, name)
+		return fmt.Errorf("--skip-build cannot reuse %s artifact %s because Conven resets the current runtime directory for a fresh start; set services.%s.runner.artifact to an absolute persistent path or omit --skip-build", name, service.Artifact, name)
 	}
 	return nil
 }
@@ -311,7 +311,7 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 		return err
 	}
 	if session == nil {
-		fmt.Fprintln(output, "No loom session found.")
+		fmt.Fprintln(output, "No Conven session found.")
 		if all && force {
 			recovered, err := recoverUnleasedConnections(ctx, workspace.Store.Root, output)
 			if err != nil {
@@ -390,9 +390,9 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 			if session.Connection.Managed {
 				fmt.Fprintf(output, "Releasing %s connection lease...\n", session.Connection.Driver)
 			} else if session.Connection.Owned {
-				fmt.Fprintf(output, "Stopping Loom-owned %s connection...\n", session.Connection.Driver)
+				fmt.Fprintf(output, "Stopping Conven-owned %s connection...\n", session.Connection.Driver)
 			} else {
-				fmt.Fprintf(output, "Leaving external %s connection running; Loom does not own it.\n", session.Connection.Driver)
+				fmt.Fprintf(output, "Leaving external %s connection running; Conven does not own it.\n", session.Connection.Driver)
 			}
 			if err := releaseConnection(ctx, session.Connection, workspace.Store.Root, force, output); err != nil {
 				fmt.Fprintf(output, "Error releasing connection: %v\n", err)
@@ -427,7 +427,7 @@ func Status(ctx context.Context, workspace *WorkspaceData, output io.Writer) err
 		return err
 	}
 	if session == nil {
-		fmt.Fprintln(output, style.Warning("No loom session found."))
+		fmt.Fprintln(output, style.Warning("No Conven session found."))
 		_, err := printSharedConnectionStatus(ctx, output)
 		return err
 	}
@@ -581,7 +581,7 @@ func printPlan(output io.Writer, plan *Plan, dryRun bool) {
 	fmt.Fprintf(output, "%s: %s\n", style.Label("Runtime"), style.Identifier(plan.Workspace.Store.Root))
 	fmt.Fprintf(output, "%s: %s\n", style.Label("Current"), style.Identifier(plan.RunDir))
 	fmt.Fprintf(output, "%s: %s\n", style.Label("Environment"), style.Identifier(plan.EnvironmentName))
-	fmt.Fprintf(output, "%s: %s\n", style.Label("Looming local services"), style.Identifiers(plan.Selected, ", "))
+	fmt.Fprintf(output, "%s: %s\n", style.Label("Convening local services"), style.Identifiers(plan.Selected, ", "))
 	registry := plan.Environment.Registry
 	if registry == "" {
 		registry = "configured registry"

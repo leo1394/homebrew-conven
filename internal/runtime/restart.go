@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/leo1394/homebrew-loom/internal/materialize"
-	"github.com/leo1394/homebrew-loom/internal/terminal"
+	"github.com/leo1394/homebrew-conven/internal/materialize"
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
 type RestartOptions struct {
@@ -36,7 +36,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		return nil, err
 	}
 	if session == nil || len(session.Services) == 0 {
-		return nil, errors.New("no running loom session found; use loom services --start first")
+		return nil, errors.New("no running Conven session found; use conven services --start first")
 	}
 	if err := workspace.Store.InspectCurrent(); err != nil {
 		return nil, fmt.Errorf("inspect current runtime before restart: %w", err)
@@ -186,7 +186,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			return nil, err
 		}
 	}
-	fmt.Fprintln(output, style.Success("Changed local services were restarted. Use `loom services --logs --tail` to observe them."))
+	fmt.Fprintln(output, style.Success("Changed local services were restarted. Use `conven services --logs --tail` to observe them."))
 	return session, nil
 }
 
@@ -216,7 +216,7 @@ func restartTargets(plan *Plan, session *Session, requested []string) ([]string,
 					return nil, nil, nil, fmt.Errorf("inspect %s before restart: %w", name, err)
 				}
 			} else if ProcessGroupAlive(process.PGID) {
-				return nil, nil, nil, fmt.Errorf("refusing to restart %s: leader pid %d exited while process group %d is still active; inspect loom services --status and recover with loom services --stop --force", name, process.PID, process.PGID)
+				return nil, nil, nil, fmt.Errorf("refusing to restart %s: leader pid %d exited while process group %d is still active; inspect conven services --status and recover with conven services --stop --force", name, process.PID, process.PGID)
 			}
 		}
 		if len(requestedSet) > 0 && !requestedSet[name] {
@@ -285,7 +285,7 @@ func appendRestartMarker(path string) error {
 	if err != nil {
 		return err
 	}
-	_, writeErr := fmt.Fprintf(file, "\n--- loom services --restart %s ---\n", time.Now().Format(time.RFC3339))
+	_, writeErr := fmt.Fprintf(file, "\n--- conven services --restart %s ---\n", time.Now().Format(time.RFC3339))
 	closeErr := file.Close()
 	return errors.Join(writeErr, closeErr)
 }

@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/leo1394/homebrew-loom/internal/config"
-	"github.com/leo1394/homebrew-loom/internal/materialize"
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/config"
+	"github.com/leo1394/homebrew-conven/internal/materialize"
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 type PlannedConfig struct {

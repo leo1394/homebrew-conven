@@ -146,7 +146,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 		}
 		for _, activeRecord := range active {
 			if activeRecord.Process.Driver == "ktctl" {
-				return nil, fmt.Errorf("another ktctl connection is active in this Loom state root with fingerprint %s", activeRecord.Fingerprint)
+				return nil, fmt.Errorf("another ktctl connection is active in this Conven state root with fingerprint %s", activeRecord.Fingerprint)
 			}
 		}
 	}
@@ -160,7 +160,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 			return nil, err
 		}
 		if len(pids) > 0 {
-			return nil, fmt.Errorf("an unmanaged ktctl connect process is already running with pid %d; wait for it or stop it before Loom starts another", pids[0])
+			return nil, fmt.Errorf("an unmanaged ktctl connect process is already running with pid %d; wait for it or stop it before Conven starts another", pids[0])
 		}
 	}
 	if config.Sudo {
@@ -718,7 +718,7 @@ func connectionRecordState(record *connectionRecord) (current bool, unverified b
 func unverifiedConnectionError(record *connectionRecord) error {
 	recovery := ""
 	if len(record.Leases) == 0 {
-		recovery = "; after confirming the saved PGID belongs to Loom, run loom services --stop --all --force from a workspace using the same Loom user state root"
+		recovery = "; after confirming the saved PGID belongs to Conven, run conven services --stop --all --force from a workspace using the same Conven user state root"
 	}
 	return fmt.Errorf("managed %s connection state is unverified; fingerprint=%s pid=%d pgid=%d%s", record.Process.Driver, record.Fingerprint, record.Process.PID, record.Process.PGID, recovery)
 }
@@ -995,7 +995,7 @@ func printSharedConnectionStatus(ctx context.Context, output io.Writer) (int, er
 			state = "unverified"
 		}
 		if count == 0 {
-			fmt.Fprintln(output, "Shared connection records in this Loom state root:")
+			fmt.Fprintln(output, "Shared connection records in this Conven state root:")
 		}
 		fmt.Fprintf(output, "connection/%-12s %-10s fingerprint=%s pid=%d pgid=%d effective-leases=%d log=%s\n", record.Process.Driver, state, fingerprint, record.Process.PID, record.Process.PGID, len(preview.Leases), record.Process.LogPath)
 		count++

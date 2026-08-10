@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 func TestRenderDashboardFrameKeepsBannerAndLatestLogs(t *testing.T) {
@@ -33,7 +33,7 @@ func TestRenderDashboardFrameKeepsBannerAndLatestLogs(t *testing.T) {
 	}
 	frame := renderDashboardFrame(info, 80, 8, history)
 	for _, expected := range []string{
-		"LOOM | local-stack | env=dev | LAN=192.168.1.42 (en0)",
+		"CONVEN | local-stack | env=dev | LAN=192.168.1.42 (en0)",
 		"user-svc | ports http=18080, metrics=19090",
 		"order-svc | ports http=18081",
 		"LOGS | q/Ctrl-C detach; services keep running",

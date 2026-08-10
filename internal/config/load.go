@@ -11,14 +11,14 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/leo1394/homebrew-loom/internal/model"
+	"github.com/leo1394/homebrew-conven/internal/model"
 	"gopkg.in/yaml.v3"
 )
 
 func Load(path string) (*model.Manifest, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("open loom manifest %q: %w", path, err)
+		return nil, fmt.Errorf("open Conven manifest %q: %w", path, err)
 	}
 	return decodeManifest(data, path)
 }
@@ -29,21 +29,21 @@ func decodeManifest(data []byte, path string) (*model.Manifest, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(manifest); err != nil {
 		if err == io.EOF {
-			return nil, fmt.Errorf("loom manifest %q is empty", path)
+			return nil, fmt.Errorf("Conven manifest %q is empty", path)
 		}
-		return nil, fmt.Errorf("decode loom manifest %q: %w", path, err)
+		return nil, fmt.Errorf("decode Conven manifest %q: %w", path, err)
 	}
 
 	var extra interface{}
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err != nil {
-			return nil, fmt.Errorf("decode loom manifest %q: %w", path, err)
+			return nil, fmt.Errorf("decode Conven manifest %q: %w", path, err)
 		}
-		return nil, fmt.Errorf("loom manifest %q contains multiple YAML documents", path)
+		return nil, fmt.Errorf("Conven manifest %q contains multiple YAML documents", path)
 	}
 
 	if err := validateManifest(manifest); err != nil {
-		return nil, fmt.Errorf("validate loom manifest %q: %w", path, err)
+		return nil, fmt.Errorf("validate Conven manifest %q: %w", path, err)
 	}
 	return manifest, nil
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 - 2026-08-07
+
+- 将项目、Homebrew tap、Formula 和 CLI 从 `homebrew-loom`/`loom` 改名为
+  `homebrew-conven`/`conven`，并为旧 tap 中的 `loom` Formula 增加跨 tap 迁移映射。
+- 继续兼容既有 `.loom` workspace、`.loom/loom.yaml`、`~/.loom/config`、`LOOM_*`
+  环境变量和用户级 `loom` 状态目录；本次只迁移外部品牌与命令，不迁移持久状态协议。
+
 ## 0.1.1 - 2026-08-07
 
 - 增加磁盘空间检测

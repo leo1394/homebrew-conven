@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/leo1394/homebrew-loom/internal/materialize"
+	"github.com/leo1394/homebrew-conven/internal/materialize"
 )
 
 func TestSourceFingerprintTracksGitContentAndIgnoresIgnoredFiles(t *testing.T) {

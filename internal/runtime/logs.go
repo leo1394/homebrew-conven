@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/leo1394/homebrew-loom/internal/terminal"
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
 const logTailLines = 80
@@ -108,7 +108,7 @@ func startLogStream(ctx context.Context, logs []namedLog) (<-chan logEntry, <-ch
 
 func selectLogs(session *Session, names []string) ([]namedLog, error) {
 	if session == nil {
-		return nil, errors.New("no loom session found")
+		return nil, errors.New("no Conven session found")
 	}
 	available := make(map[string]string)
 	for _, service := range session.Services {

@@ -543,7 +543,7 @@ func TestPublishManifestUpdateRejectsConcurrentLoomWriterLock(t *testing.T) {
 	candidate := []byte(strings.Replace(editablePolicyManifest, "name: test", "name: candidate", 1))
 
 	err = publishManifestUpdate(manifestPath, candidate, source, sourceInfo, "policy edit")
-	if err == nil || !strings.Contains(err.Error(), "another Loom process") {
+	if err == nil || !strings.Contains(err.Error(), "another Conven process") {
 		t.Fatalf("error = %v", err)
 	}
 	assertFileContents(t, manifestPath, editablePolicyManifest)
