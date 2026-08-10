@@ -14,7 +14,7 @@ func TestInitWorkspaceCreatesManifestAndDoesNotOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created || path != filepath.Join(workspace, ".loom", "loom.yaml") {
+	if !created || path != filepath.Join(workspace, ".conven", "conven.yaml") {
 		t.Fatalf("InitWorkspace = (%q, %v)", path, created)
 	}
 	data, err := os.ReadFile(path)
@@ -24,7 +24,7 @@ func TestInitWorkspaceCreatesManifestAndDoesNotOverwrite(t *testing.T) {
 	if string(data) != string(template) {
 		t.Fatalf("manifest = %q", data)
 	}
-	gitignore := filepath.Join(workspace, ".loom", ".gitignore")
+	gitignore := filepath.Join(workspace, ".conven", ".gitignore")
 	ignored, err := os.ReadFile(gitignore)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestInitWorkspaceCreatesManifestAndDoesNotOverwrite(t *testing.T) {
 
 func TestInitWorkspacePreservesExistingRuntimeIgnoreRule(t *testing.T) {
 	workspace := t.TempDir()
-	boundary := filepath.Join(workspace, ".loom")
+	boundary := filepath.Join(workspace, ".conven")
 	if err := os.Mkdir(boundary, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestInitWorkspacePreservesExistingRuntimeIgnoreRule(t *testing.T) {
 
 func TestInitWorkspaceRejectsGitignoreSymlink(t *testing.T) {
 	workspace := t.TempDir()
-	boundary := filepath.Join(workspace, ".loom")
+	boundary := filepath.Join(workspace, ".conven")
 	if err := os.Mkdir(boundary, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -126,15 +126,15 @@ func TestInitWorkspaceRejectsGitignoreSymlink(t *testing.T) {
 
 func TestInitWorkspaceRejectsReadableManifestSymlink(t *testing.T) {
 	workspace := t.TempDir()
-	boundary := filepath.Join(workspace, ".loom")
+	boundary := filepath.Join(workspace, ".conven")
 	if err := os.Mkdir(boundary, 0700); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(t.TempDir(), "loom.yaml")
+	target := filepath.Join(t.TempDir(), "conven.yaml")
 	if err := os.WriteFile(target, []byte("keep\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manifest := filepath.Join(boundary, "loom.yaml")
+	manifest := filepath.Join(boundary, "conven.yaml")
 	if err := os.Symlink(target, manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +152,9 @@ func TestInitWorkspaceRejectsReadableManifestSymlink(t *testing.T) {
 	}
 }
 
-func TestInitWorkspaceRejectsDotLoomFile(t *testing.T) {
+func TestInitWorkspaceRejectsDotConvenFile(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, ".loom"), []byte("file"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, ".conven"), []byte("file"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err := InitWorkspace(workspace, []byte("version: 1\n"))
@@ -171,8 +171,8 @@ func TestInitWorkspaceRejectsUserHome(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "reserved for global configuration") {
 		t.Fatalf("error = %v, want reserved home directory error", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(home, ".loom")); !os.IsNotExist(statErr) {
-		t.Fatalf("home .loom stat error = %v, want directory not created", statErr)
+	if _, statErr := os.Stat(filepath.Join(home, ".conven")); !os.IsNotExist(statErr) {
+		t.Fatalf("home .conven stat error = %v, want directory not created", statErr)
 	}
 }
 
@@ -206,15 +206,15 @@ func TestInitWorkspaceRejectsUserHomeAliases(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "reserved for global configuration") {
 				t.Fatalf("error = %v, want reserved home directory error", err)
 			}
-			if _, statErr := os.Stat(filepath.Join(realHome, ".loom")); !os.IsNotExist(statErr) {
-				t.Fatalf("real home .loom stat error = %v, want directory not created", statErr)
+			if _, statErr := os.Stat(filepath.Join(realHome, ".conven")); !os.IsNotExist(statErr) {
+				t.Fatalf("real home .conven stat error = %v, want directory not created", statErr)
 			}
 		})
 	}
 }
 
 func TestPublishNewManifestDoesNotReplaceConcurrentFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "loom.yaml")
+	path := filepath.Join(t.TempDir(), "conven.yaml")
 	if err := os.WriteFile(path, []byte("concurrent\n"), 0600); err != nil {
 		t.Fatal(err)
 	}

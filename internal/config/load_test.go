@@ -165,7 +165,7 @@ func TestLoadRejectsUnknownNestedPolicyField(t *testing.T) {
 }
 
 func TestLoadRejectsWorkspaceStateDir(t *testing.T) {
-	yaml := strings.Replace(validManifestYAML, "  name: sample", "  name: sample\n  stateDir: ${workspace}/.loom-state", 1)
+	yaml := strings.Replace(validManifestYAML, "  name: sample", "  name: sample\n  stateDir: ${workspace}/.conven-state", 1)
 
 	_, err := Load(writeManifest(t, yaml))
 	if err == nil || !strings.Contains(err.Error(), "field stateDir not found") {
@@ -320,7 +320,7 @@ func TestServiceNamesAndValidateSelection(t *testing.T) {
 
 func writeManifest(t *testing.T, contents string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "loom.yaml")
+	path := filepath.Join(t.TempDir(), "conven.yaml")
 	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}

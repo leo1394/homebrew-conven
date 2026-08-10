@@ -4,7 +4,7 @@
 
 `conven` 是面向本地微服务开发的聚焦启动工具。它只在本机启动当前改动涉及的
 服务，其余依赖继续通过开发环境的注册中心访问，并把本次会话的服务日志集中到
-`<workspace>/.loom/runtime/current`。
+`<workspace>/.conven/runtime/current`。
 
 ```text
 Convening local services: user-svc, order-svc, payment-svc
@@ -23,7 +23,7 @@ Conven 本身使用 Go 编写，但被启动的服务不限语言。每个服务
 - 对已选中的依赖注入 `dependencies.<service>.localEnv`，或按 policy 把对应 YAML
   binding 改为本地地址；对未选中的依赖注入 `remoteEnv`，或保留远程发现配置。
 - 可从业务仓库或 Apollo 读取配置，在只读源码之外生成
-  `.loom/runtime/current/configs/<service>`，再按 policy 叠加服务端口和依赖路由。
+  `.conven/runtime/current/configs/<service>`，再按 policy 叠加服务端口和依赖路由。
 - 可通过 `ktctl connect` 建立“本机访问集群”的连接。
 - 记录进程信息和每个服务的日志，支持后续查看和停止；健康检查只在启动阶段执行，
   不作为持续状态保存。
@@ -40,6 +40,7 @@ Conven 本身使用 Go 编写，但被启动的服务不限语言。每个服务
 - macOS 或 Linux
 - 从源码构建时需要 Go 1.23 或更高版本
 - 通过 Formula 安装时需要 Homebrew
+- 仅在运行 Python 插件时需要 Python 3
 - 仅在使用 `ktctl` connection driver 时需要 `ktctl`
 - 仅在 connection 设置 `connection.sudo: true` 时需要 `sudo`
 
@@ -58,6 +59,13 @@ brew install conven
 brew install --HEAD conven
 ```
 
+完成 tap 后，日常更新稳定版执行：
+
+```bash
+brew update
+brew upgrade conven
+```
+
 如果要直接从 Conven 源码 checkout 构建，请在仓库根目录执行：
 
 ```bash
@@ -68,8 +76,22 @@ go build -o /tmp/conven ./cmd/conven
 Formula 会安装 Bash、Zsh 和 Fish 补全。`__completion` 是 Formula 使用的内部命令，
 通常不需要手工调用。
 
-本次改名只改变产品、可执行文件、仓库和 Formula 名称。为兼容现有 workspace，Conven
-继续使用 `.loom`、`loom.yaml`、`~/.loom/config`、`LOOM_*` 和原有的 `loom` 用户状态子目录。
+Conven 以 `.conven`、`conven.yaml`、`~/.conven`、`CONVEN_*` 和 `conven` 作为
+workspace、用户目录、环境变量与命令的规范命名。不会再在 `.local/state` 或 XDG
+状态目录下创建第二套用户状态根。
+
+所有用户级文件统一位于一个根目录：
+
+```text
+~/.conven/
+├── config
+├── state/
+│   └── connections/
+└── plugins/
+```
+
+connection registry 与插件目录按需创建，并使用仅当前用户可访问的权限。每个项目的
+运行文件仍隔离在各自的 `<workspace>/.conven/runtime` 中。
 
 ## 设计：通用能力 + 声明式项目规则
 
@@ -77,11 +99,11 @@ Conven 把可复用机制与具体项目约定分开：
 
 - 通用能力负责只读仓库分析、服务计划、连接管理、repository/Apollo 配置输入、
   YAML 物化、进程生命周期和日志。
-- 声明式项目规则集中保存在唯一的 `<workspace>/.loom/loom.yaml` 中。`policies`
+- 声明式项目规则集中保存在唯一的 `<workspace>/.conven/conven.yaml` 中。`policies`
   描述公司或技术栈约定，`services` 描述端口、依赖、binding 和 runner，
   `environments` 描述目标环境与连接。
 
-Conven 不存在第二份 `.loom/policy.yaml`。公司约定、端口、字段名或本地/远程路由变化时，
+Conven 不存在第二份 `.conven/policy.yaml`。公司约定、端口、字段名或本地/远程路由变化时，
 通常只需修改声明；只有仓库布局、配置协议或物化语义无法由现有 analyzer、配置源和
 materializer 表达时，才需要扩展代码。
 
@@ -124,18 +146,20 @@ analyzer。
 `init` 是安全的：已有 manifest 只会被报告，不会覆盖。首次发布采用原子的
 no-replace 操作，因此并发创建的 manifest 会保留而不会被覆盖。一级子仓库集合变化
 后使用 `conven services --registry`。首次使用运行目录前，Conven 会在不覆盖已有规则的
-前提下把 `/runtime/` 加入 `.loom/.gitignore`。
+前提下把 `/runtime/` 加入 `.conven/.gitignore`。
 
 初始化严格按以下顺序执行：
 
-1. 解析 workspace 目录并检查 `.loom` 边界。
+1. 解析 workspace 目录并检查 `.conven` 边界。
 2. 只读扫描一级子 Git 仓库。
 3. 对各仓库运行内置 `RepositoryAnalyzer`。
 4. 只记录 analyzer 能证明的 `path`、runner、kind 与 discovery/binding 候选。
-5. 以原子 no-replace 方式创建 `.loom/loom.yaml`；只有 `init` 在零强匹配时可使用
+5. 以原子 no-replace 方式创建 `.conven/conven.yaml`；只有 `init` 在零强匹配时可使用
    embedded example。
-6. 不访问 Apollo、不创建 runtime、不构建或启动服务，也不向子业务仓库写文件。
-7. 通过 `conven policy --edit` 补充扫描无法推断的项目规则，或用
+6. 把缺失的通用内置插件安装到 `~/.conven/plugins`，已有用户副本绝不覆盖；当前内置
+   插件集合为空。
+7. 不访问 Apollo、不创建 runtime、不构建或启动服务，也不向子业务仓库写文件。
+8. 通过 `conven policy --edit` 补充扫描无法推断的项目规则，或用
    `conven policy --import <yaml-file> --edit` 导入项目本地生成器输出的完整候选。
    然后执行 doctor、start dry-run 和实际 start。
 
@@ -157,32 +181,32 @@ conven services --start --dry-run user-svc order-svc
 ## 编辑、导入或重置项目规则
 
 `policy` 是命令名称，不代表另有一份 policy 文件。以下三个主动作都针对完整的唯一规范
-文件 `<workspace>/.loom/loom.yaml`：
+文件 `<workspace>/.conven/conven.yaml`：
 
 ```bash
 conven policy --edit
-conven policy --import ./generated-loom.yaml
-conven policy --import ./generated-loom.yaml --edit
+conven policy --import ./generated-conven.yaml
+conven policy --import ./generated-conven.yaml --edit
 conven policy --reset
 ```
 
-`--edit` 先创建当前 manifest 的私有临时草稿，再依次选择 `LOOM_EDITOR`、`VISUAL`、
+`--edit` 先创建当前 manifest 的私有临时草稿，再依次选择 `CONVEN_EDITOR`、`VISUAL`、
 `EDITOR`，均未配置时使用 `vi`。编辑器命令可以带参数，例如
-`LOOM_EDITOR="code --wait"`；图形编辑器必须等待文件关闭。只有编辑器正常退出、草稿
+`CONVEN_EDITOR="code --wait"`；图形编辑器必须等待文件关闭。只有编辑器正常退出、草稿
 通过严格 schema 和语义校验、且发布前的 best-effort 检查未发现规范源文件 snapshot
 变化时，Conven 才按草稿原始 bytes 原子发布。编辑器失败、YAML 无效、存在未知字段或
 检测到并发编辑时，Conven 不发布该草稿，也不覆盖检测到的并发版本。被拒绝且已变化的
-草稿会以 `0600` 保存在 `.loom/backups/`，Conven 同时把 `/backups/` 非破坏性加入
-`.loom/.gitignore`。
+草稿会以 `0600` 保存在 `.conven/backups/`，Conven 同时把 `/backups/` 非破坏性加入
+`.conven/.gitignore`。
 
 提交阶段会对当前 manifest inode 获取非阻塞 advisory lock，并在 rename 前再次核对
 same-file 身份和源 bytes，从而串行化所有配合该协议的 Conven writer。任意外部工具不必
 遵守该锁，因此与外部 writer 的最后 check→rename 窄窗口仍属于 best-effort 冲突检测。
 
 `--import <yaml-file>` 读取一份完整的本地 Conven v1 manifest，并把它的原始 bytes 作为
-整个 `.loom/loom.yaml` 发布。相对源路径从命令调用时的 cwd 解析，不以 workspace 根目录
+整个 `.conven/conven.yaml` 发布。相对源路径从命令调用时的 cwd 解析，不以 workspace 根目录
 为基准。导入不会编辑或移动源文件，也不会把候选与原有扫描字段或人工字段 merge。
-目标发生变化时，原 manifest 会先以 `0600` 备份到 `.loom/backups/`；内容逐字节相同
+目标发生变化时，原 manifest 会先以 `0600` 备份到 `.conven/backups/`；内容逐字节相同
 时不替换。增加 `--edit` 后，Conven 以导入内容创建私有草稿并打开编辑器，源文件仍保持
 不变；因此也可以先在草稿中修复原本无效的候选。无论是否编辑，只有最终候选通过严格
 schema、语义校验和既有并发检查后才会发布。
@@ -193,8 +217,8 @@ Apollo/Consul endpoint、凭据、源码路径或服务命令在本机可运行�
 
 `--reset` 是显式的破坏性重置操作：它根据当前一级子 Git 仓库的只读分析
 完整重建 manifest，不是回滚、merge 或 `services --registry` 的别名。替换现有
-manifest 前，Conven 会把原始 bytes 以 `0600` 保存到 `.loom/backups/` 并输出备份路径。
-只要真实 `.loom` 边界仍存在，它可以重建缺失或内容损坏的 manifest。若扫描不到任何
+manifest 前，Conven 会把原始 bytes 以 `0600` 保存到 `.conven/backups/` 并输出备份路径。
+只要真实 `.conven` 边界仍存在，它可以重建缺失或内容损坏的 manifest。若扫描不到任何
 受支持仓库，则失败且不发布替换文件，也绝不回退 embedded example。
 
 > **警告：** 扫描重置无法保留或还原 `workspace.policy`、`policies`、`environments`、
@@ -220,7 +244,7 @@ conven services --start --dry-run SERVICE...
 
 ### 哪些字段可生成，哪些必须确认
 
-当前 v1 只有中央 `.loom/loom.yaml`；Conven 不创建或读取分散的 `.loom/service.yaml` 或
+当前 v1 只有中央 `.conven/conven.yaml`；Conven 不创建或读取分散的 `.conven/service.yaml` 或
 独立 Policy Profile 文件。所谓“项目提交标准配置”，是把 service、policy 和 environment
 profile 一起提交在中央 manifest 中。各来源的边界如下：
 
@@ -246,20 +270,20 @@ path、标准 runner、kind 和 binding 候选。生成器可以把这些扫描�
 这类生成器的“一次审阅”流程是：
 
 ```bash
-./generate-project-loom-policy              # 生成完整本地 v1 候选
-conven policy --import ./generated-loom.yaml --edit
+./generate-project-conven-policy              # 生成完整本地 v1 候选
+conven policy --import ./generated-conven.yaml --edit
 conven doctor
 conven services --start --dry-run SERVICE...
 ```
 
-审阅后应提交规范的 `.loom/loom.yaml`，而不是宣称所有字段都可自动推断。只有仓库结构
+审阅后应提交规范的 `.conven/conven.yaml`，而不是宣称所有字段都可自动推断。只有仓库结构
 或项目默认规则变化时，才重新执行生成/import 流程。
 
 导入不做字段级合并，而是：本地完整候选 → 可选 `--edit` 修改 → 严格校验后
 整体发布。如需把 analyzer 元数据补回候选中的空字段，发布后显式执行
 `conven services --registry`；该命令仍只保守补空，不会推导端口或依赖图。
 
-当团队已经审阅并提交标准 `.loom/loom.yaml` 后，“人工确认一次”由项目维护者完成。
+当团队已经审阅并提交标准 `.conven/conven.yaml` 后，“人工确认一次”由项目维护者完成。
 普通开发者不应在每次 clone 后再次导入生成候选，而是只配置
 本机 kubeconfig/凭据，运行 `conven doctor` 和 start；仓库结构或项目规则变化时再由维护者
 重新生成/import，或执行 registry/edit 并提交。
@@ -293,7 +317,7 @@ manifest，应先调整依赖再重试。manifest 不记录条目来自生成还
 紧邻 rename 前，`services --registry` 会以 best-effort 方式重新检查路径仍指向
 same-file，且内容仍等于源 bytes snapshot。已检测到冲突时会中止发布并提示重试；
 这不是针对任意外部 writer 的线性化 compare-and-swap，检查与 rename 之间极窄窗口内
-的编辑仍可能被替换。该动作明确拒绝符号链接形式的 `.loom/loom.yaml`，因为原子替换
+的编辑仍可能被替换。该动作明确拒绝符号链接形式的 `.conven/conven.yaml`，因为原子替换
 会破坏链接本身，而不是更新其目标。
 
 发现功能刻意不推断端口、完整依赖图、`env`、Apollo 凭据、公司 policy 或集群连接
@@ -333,7 +357,7 @@ Convening local services: user-svc, order-svc, payment-svc
 fingerprint 发生变化时才会重启；比较基准是该服务最近一次成功 start 或 restart 时
 记录的 fingerprint。
 在 Git worktree 中，源码 fingerprint 覆盖 service 目录下的 tracked 文件和未被忽略的
-untracked 文件；非 Git 目录则覆盖除 `.git`、`.loom` 外的目录内容。计划 fingerprint
+untracked 文件；非 Git 目录则覆盖除 `.git`、`.conven` 外的目录内容。计划 fingerprint
 覆盖解析后的 prepare/build workdir、run workdir、artifact、声明端口、命令 argv、
 环境变量、健康检查配置，以及解析后的 policy/config materialization 计划。因此只修改
 `runner.runWorkdir` 或 policy 路由也足以让无参数
@@ -349,7 +373,7 @@ conven services --restart user-svc order-svc
 conven services --restart --tail user-svc
 ```
 
-Restart 会复用当前会话的 environment、`.loom/runtime/current`、连接和各 service
+Restart 会复用当前会话的 environment、`.conven/runtime/current`、连接和各 service
 的日志路径，不会重新建立连接，也不会中断未变化的服务。它只为目标服务重新物化
 配置、执行 prepare/build，并在原日志追加新输出前写入 restart 标记；未变化服务的
 artifact、config 和日志保持不动。所有目标的配置物化、prepare 和 build 完成后，Conven
@@ -387,6 +411,9 @@ conven config [--global] [--list|--unset] [key] [value]
 conven policy --edit
 conven policy --import <yaml-file> [--edit]
 conven policy --reset
+conven plugins --install <python-file>
+conven plugins --list
+conven plugins --run <name> [plugin args...]
 conven doctor [flags]
 conven services --list
 conven services --registry [--prune]
@@ -401,7 +428,7 @@ conven --version
 
 `policy` 必须先指定且只能指定一个主动作；`--import` 后的 `--edit`
 是该动作的可选修饰符，不是第二个主动作。Import 必须且只能接受一个源路径，其他动作
-不接受位置参数。它们只要求解析到最近的真实 `.loom` 边界，不要求旧 manifest 先通过
+不接受位置参数。它们只要求解析到最近的真实 `.conven` 边界，不要求旧 manifest 先通过
 解析，因此 edit 可修复无效内容，import 或扫描重置也能重建缺失文件。候选校验
 失败、符号链接或检测到的发布冲突都不会发布替换内容。
 
@@ -441,7 +468,7 @@ conven --version
 `--namespace`，因为它会复用当前会话和连接。
 
 每次 `services --start` 都是全新启动：确认没有活动或身份不可信的已保存进程后，
-Conven 会安全重建 `.loom/runtime/current/{artifacts,configs,logs}`。因此
+Conven 会安全重建 `.conven/runtime/current/{artifacts,configs,logs}`。因此
 `services --start --skip-build` 不会复用默认 `${artifact}`。如果服务声明了非空
 `runner.build`，且 `runner.run` 引用了该默认 artifact，Conven 会在
 建立连接或启动进程前直接报错。需要在 `services --start` 时复用构建产物，请把
@@ -472,14 +499,13 @@ start。
 同时记录为 `Owned=false` 且 `Managed=false` 的外部 ktctl 进程或网络可达性不归 Conven
 所有；两种写法都只清理当前 session 引用，绝不会终止该外部连接。
 
-当 workspace 已无 session 时，`conven services --status` 会列出当前用户、同一有效
-Conven 用户状态根目录中的共享连接 fingerprint、PID/PGID 和有效租约数。确认目标后，
+当 workspace 已无 session 时，`conven services --status` 会列出
+`~/.conven/state/connections` 中的共享连接 fingerprint、PID/PGID 和有效租约数。确认目标后，
 `conven services --stop --all --force` 会检查这些记录，并只强制清理没有活动 workspace
 租约的连接。其他 workspace 的活动租约会保留；普通陈旧租约在固定 5 分钟宽限期后
 回收。
-该路径用于 Conven 异常退出后恢复遗留的连接进程组和记录。有效用户状态根目录由
-`LOOM_STATE_HOME`、`XDG_STATE_HOME` 或默认用户状态目录决定。
-该恢复命令仍须从能发现有效 manifest 的 workspace 中执行。
+该路径用于 Conven 异常退出后恢复遗留的连接进程组和记录。该恢复命令仍须从能发现
+有效 manifest 的 workspace 中执行。
 `services --logs` 可以接收服务名，并支持上文说明的布尔开关 `--tail`。`doctor` 接受
 `--env`、`--dev`、`--test`、`--kubeconfig`、`--context` 和 `--namespace`。
 
@@ -487,13 +513,13 @@ Conven 用户状态根目录中的共享连接 fingerprint、PID/PGID 和有效�
 
 ## Git 风格配置
 
-Conven 把用户级设置保存在 `~/.loom/config`，workspace 设置保存在 `.loom/config`。
+Conven 把用户级设置保存在 `~/.conven/config`，workspace 设置保存在 `.conven/config`。
 不带 `--global` 时，读取和 `--list` 显示“全局+本地”合并后的有效配置，本地值覆盖
 全局值；写入和 `--unset` 只修改本地文件。带 `--global` 时，所有操作都只针对用户级
 文件。
 
 ```bash
-# 显示本地覆盖全局后的有效值；要求当前目录处于 .loom workspace 边界内。
+# 显示本地覆盖全局后的有效值；要求当前目录处于 .conven workspace 边界内。
 conven config --list
 conven config ktctl.path
 conven config ktctl.path /opt/homebrew/bin/ktctl
@@ -514,14 +540,50 @@ conven config --global --unset ktctl.kubeconfig
 `ktctl.kubeconfig`。`ktctl.path` 可以是绝对路径、以 `~/` 开头的路径，或通过 `PATH`
 解析的命令名；相对的 `ktctl.kubeconfig` 从 workspace 解析，也支持绝对路径和 `~/`。
 
+## Python 插件
+
+Conven 保留随版本嵌入通用插件的能力：`conven init` 会安装缺失的内置插件，同时绝不
+覆盖已有用户副本。当前内置插件集合为空，并且 Conven 不打包公司或项目专用插件；
+这类插件需要从本地 Python 文件显式安装，相对源路径按命令执行时的当前目录解析：
+
+```bash
+conven plugins --install ./generate-apollo-consul.py
+conven plugins --list
+```
+
+安装时按源文件 basename 复制到 `~/.conven/plugins`，并把安装副本设为仅当前用户可执行
+的 `0700`。源文件必须是普通、非符号链接、带 Python 3 shebang 的 `.py` 文件。目标已
+存在时绝不覆盖；需要升级时，应先审阅并显式删除旧文件，再重新安装。
+
+在已初始化 workspace 的任意子目录中，可使用不带 `.py` 后缀的文件名运行插件。
+插件名后的全部参数都会原样透传，但 `--workspace` 是 Conven 保留参数：
+
+```bash
+conven plugins --run generate-apollo-consul
+conven plugins --run generate-apollo-consul --output candidate.yaml
+conven plugins --run generate-apollo-consul --check
+```
+
+Conven 以 workspace 作为脚本 cwd，在参数前添加
+`--workspace <workspace绝对路径>`，同时设置
+`CONVEN_WORKSPACE=<workspace绝对路径>`，并转发 stdin、stdout、stderr 和终端。调用方
+传入的 `--workspace` 会被拒绝，不能替换已解析的 workspace。例如，独立维护的
+Apollo/Consul generator 可以在当前 workspace 中写出
+`<workspace-name>-apollo-consul.yaml` 候选文件。Conven 不会自动发布候选；应先审阅，
+再执行 `conven policy --import <file> --edit`。
+
+用户可以把自己的可执行 `*.py` 文件放入 `~/.conven/plugins`。Conven 只列出和运行
+普通、可执行、非符号链接的文件，并拒绝可能越出插件目录的名称。重复执行
+`conven init` 只补齐缺失的通用内置插件，所有已存在的插件文件都会保留。
+
 ## Workspace 边界与 Manifest 查找
 
-唯一识别的 manifest 是 `<workspace>/.loom/loom.yaml`；workspace 根目录的
-`loom.yaml` 和 `.loom` 中的其他文件都不作为 manifest。Conven 从当前目录向上
-查找，并在遇到最近的 `.loom` 目录时停止。该目录是硬 workspace 边界：
-如果其中没有 `loom.yaml`，Conven 会报告 workspace 不完整，不会继续使用
-父级 workspace。如果没有找到 `.loom` 目录，则当前目录不属于 Conven workspace。
-用户级 `~/.loom` 目录专用于全局设置，永远不构成 workspace 边界。因此
+唯一识别的 manifest 是 `<workspace>/.conven/conven.yaml`；workspace 根目录的
+`conven.yaml` 和 `.conven` 中的其他文件都不作为 manifest。Conven 从当前目录向上
+查找，并在遇到最近的 `.conven` 目录时停止。该目录是硬 workspace 边界：
+如果其中没有 `conven.yaml`，Conven 会报告 workspace 不完整，不会继续使用
+父级 workspace。如果没有找到 `.conven` 目录，则当前目录不属于 Conven workspace。
+用户级 `~/.conven` 目录专用于全局设置，永远不构成 workspace 边界。因此
 `conven init` 会拒绝用户 HOME；应改在项目目录中初始化。
 
 CLI 和环境变量都不能覆盖 workspace 发现结果。需要对其他 workspace 执行命令时，
@@ -533,13 +595,13 @@ CLI 和环境变量都不能覆盖 workspace 发现结果。需要对其他 work
 
 每个 workspace 只有一个规范 manifest。环境差异通过 `--env`、`--dev` 或 `--test`
 及对应的 `environments` profile 表达，不通过选择其他 manifest 表达。
-这份 `.loom/loom.yaml` 也是 workspace 的集中式自描述：它统一保存仓库路径、静态分析
+这份 `.conven/conven.yaml` 也是 workspace 的集中式自描述：它统一保存仓库路径、静态分析
 结果、runner、端口、依赖关系、环境连接和可复用 policy。仓库发现产生的 service
-声明只更新这一个文件；`conven init` 还可能在中央 `.loom/.gitignore` 中非破坏性加入
+声明只更新这一个文件；`conven init` 还可能在中央 `.conven/.gitignore` 中非破坏性加入
 `/runtime/`，但不会向任何子业务仓库写入 Conven 配置或运行时副本。
 
-`conven policy` 操作的也是这一个规范文件；Conven 不创建或读取 `.loom/policy.yaml`。
-该命令要求最近的真实 `.loom` 边界，但旧 `loom.yaml` 内容无效时仍可打开、从本地
+`conven policy` 操作的也是这一个规范文件；Conven 不创建或读取 `.conven/policy.yaml`。
+该命令要求最近的真实 `.conven` 边界，但旧 `conven.yaml` 内容无效时仍可打开、从本地
 候选或模板替换，或按扫描重建；边界存在时也可重新创建缺失的 manifest。四个 policy
 主动作都拒绝符号链接形式的边界或 manifest。
 
@@ -547,9 +609,9 @@ CLI 和环境变量都不能覆盖 workspace 发现结果。需要对其他 work
 在 workspace 外，只有
 `help`、`--help`、`--version`、`init`、`config --global` 和内部补全生成可实际
 运行；各子命令的 `--help` 也可以在任意目录查看。不带 `--global` 的 `config` 使用
-最近的 `.loom` 硬边界，并且在 manifest 仍在准备时即可使用。
+最近的 `.conven` 硬边界，并且在 manifest 仍在准备时即可使用。
 
-Conven 会把解析后的 workspace 绝对根目录作为 `LOOM_WORKSPACE` 注入每个本地服务，
+Conven 会把解析后的 workspace 绝对根目录作为 `CONVEN_WORKSPACE` 注入每个本地服务，
 并覆盖继承的同名值。该变量是供服务进程读取的只读元数据；Conven CLI 不会读取
 它来发现或选择 workspace。
 
@@ -631,7 +693,7 @@ Policy 定义、service 选择和环境声明始终位于同一 manifest。使�
 物化结果固定写入：
 
 ```text
-<workspace>/.loom/runtime/current/configs/<service>/
+<workspace>/.conven/runtime/current/configs/<service>/
 ```
 
 业务仓库中的 `resources/application.yaml`、bootstrap 和其他源文件始终只读。对于
@@ -650,7 +712,7 @@ Materializer 只把 policy `config.sourceDir` 的内容复制到 `configs/<servi
 
 完整的公司/项目声明应保存在项目自身的受控仓库中。在那里生成不含凭据的
 候选，通过 `conven policy --import <yaml-file> --edit` 审阅，再提交规范
-`.loom/loom.yaml`。本机 kubeconfig 路径可用 `conven config ktctl.kubeconfig <path>`
+`.conven/conven.yaml`。本机 kubeconfig 路径可用 `conven config ktctl.kubeconfig <path>`
 配置；凭据应留在环境变量或外部凭据系统中。
 
 ### 独立运行目录
@@ -682,7 +744,7 @@ services:
 启动进程前确认它是目录；restart 会先验证所有目标，再停止任何旧目标进程。
 
 建议把生成的 run workdir 放在 `${runDir}` 下；该变量解析为
-`<workspace>/.loom/runtime/current`。如果它位于 service 目录内，应确保
+`<workspace>/.conven/runtime/current`。如果它位于 service 目录内，应确保
 生成文件已被版本控制忽略，否则 source fingerprint 可能让下一次无参数
 `services --restart` 再次选中该服务。
 
@@ -704,10 +766,10 @@ workspace 运行时模板和注入的环境变量具有以下固定含义：
 
 | 模板 / 变量 | 解析路径 |
 | --- | --- |
-| `${stateDir}` / `LOOM_STATE_DIR` | `<workspace>/.loom/runtime` |
-| `${runDir}` / `LOOM_RUN_DIR` | `<workspace>/.loom/runtime/current` |
-| `${artifact}` / `LOOM_ARTIFACT` | 默认是 `current/artifacts/<service>` |
-| `LOOM_CONFIG_DIR` | `current/configs/<service>` |
+| `${stateDir}` / `CONVEN_STATE_DIR` | `<workspace>/.conven/runtime` |
+| `${runDir}` / `CONVEN_RUN_DIR` | `<workspace>/.conven/runtime/current` |
+| `${artifact}` / `CONVEN_ARTIFACT` | 默认是 `current/artifacts/<service>` |
+| `CONVEN_CONFIG_DIR` | `current/configs/<service>` |
 
 `ktctl` driver 会自动在命令末尾添加 `connect`，所以 `connection.args` 只填写附加
 参数，不要再写 `connect`。启用连接时必须配置至少一个 TCP `readiness` 端点；若
@@ -719,6 +781,8 @@ Conven 对自己启动的连接使用当前用户范围的全局锁、持久连�
 可达性，不会取得所有权。需要以 root 启动自定义连接时可设置 `connection.sudo: true`；
 Conven 会先执行交互式 `sudo -v`，再通过 `sudo -n` 启动并跟踪实际连接子进程，而不是
 只记录外层 sudo 进程。停止时如果 sudo 时间戳已过期，Conven 会再次请求授权。
+密码输入始终由 sudo 在终端中安全读取且不会回显；授权成功后 Conven 会输出明确的
+完成提示。
 
 ## 本地与远程路由
 
@@ -738,7 +802,7 @@ Conven 支持两种显式路由契约：
    `127.0.0.1:${dependency.port}`），未选中时使用 `remoteDependency`（通常
    `preserve` 原有 Consul/Apollo 发现配置）。
 
-第二种方式只改运行时副本 `.loom/runtime/current/configs/<service>`，不会修改业务
+第二种方式只改运行时副本 `.conven/runtime/current/configs/<service>`，不会修改业务
 仓库中的 YAML。`environments.<name>.env` 适合放环境级公共配置；
 `services.<name>.env`、`services.<name>.localEnv` 和 dependency 环境变量仍按层级
 覆盖。被选中的依赖必须至少具有
@@ -751,8 +815,8 @@ Conven 支持两种显式路由契约：
 
 使用 `connection.driver: ktctl` 时，Conven 按以下优先级选择 executable：
 
-1. workspace `.loom/config` 中的 `ktctl.path`。
-2. `~/.loom/config` 中的 `ktctl.path`。
+1. workspace `.conven/config` 中的 `ktctl.path`。
+2. `~/.conven/config` 中的 `ktctl.path`。
 3. 当前 environment 的 manifest `connection.command`。
 4. 通过 `PATH` 解析的 `ktctl`。
 
@@ -775,10 +839,10 @@ conven config --global ktctl.path ktctl-custom
 最终 kubeconfig 按以下优先级解析：
 
 1. CLI `--kubeconfig FILE`。
-2. `LOOM_KUBECONFIG`。
+2. `CONVEN_KUBECONFIG`。
 3. `KTCTL_KUBECONFIG`，用于兼容现有脚本。
 4. 当前 environment 的 `connection.kubeconfigEnv` 所指向的环境变量。
-5. 本地 `.loom/config` 覆盖 `~/.loom/config` 后的有效 `ktctl.kubeconfig`。
+5. 本地 `.conven/config` 覆盖 `~/.conven/config` 后的有效 `ktctl.kubeconfig`。
 6. 当前 environment 的 `connection.kubeconfig`。
 7. `KUBECONFIG`。
 8. `$HOME/.kube/config`。
@@ -786,7 +850,7 @@ conven config --global ktctl.path ktctl-custom
 示例：
 
 ```bash
-LOOM_KUBECONFIG=/secure/dev-kubeconfig \
+CONVEN_KUBECONFIG=/secure/dev-kubeconfig \
   conven doctor --env dev --context dev-cluster --namespace dev
 
 # 需要先在 manifest 中声明 environments.test profile。
@@ -814,7 +878,7 @@ v1 要求 kubeconfig 解析结果是单个文件。`KUBECONFIG` 的多文件列�
 workspace 运行状态固定放在 manifest 旁边，不再由 manifest 或用户状态环境变量选择：
 
 ```text
-<workspace>/.loom/runtime/
+<workspace>/.conven/runtime/
 ├── .lock
 ├── session.json
 ├── connection.log
@@ -824,7 +888,7 @@ workspace 运行状态固定放在 manifest 旁边，不再由 manifest 或用�
     └── logs/
 ```
 
-Policy 重置前快照不属于 runtime，而是保留在 `<workspace>/.loom/backups/`；该目录
+Policy 重置前快照不属于 runtime，而是保留在 `<workspace>/.conven/backups/`；该目录
 会被 workspace `.gitignore` 忽略，start、restart、stop 都不会自动删除。确认重置后的
 声明已经审阅并提交或另行备份后，再手工清理。
 
@@ -841,7 +905,7 @@ Policy 重置前快照不属于 runtime，而是保留在 `<workspace>/.loom/bac
 权限，session、lock 和日志文件使用仅当前用户可访问的文件权限。删除或重建
 `current` 前，Conven 会拒绝符号链接、非目录以及超出规范 workspace runtime 的路径。
 
-`doctor`、start dry-run 和 status 都会显示这一固定路径。`.loom` 下的运行时变化不参与
+`doctor`、start dry-run 和 status 都会显示这一固定路径。`.conven` 下的运行时变化不参与
 源码 fingerprint，不会触发 restart。Conven 不创建历史运行目录：restart 复用
 `current`，stop 保留它供排查，下次安全的 `services --start` 再替换它。
 
@@ -849,10 +913,9 @@ manifest schema 已删除 `workspace.stateDir`，继续声明会作为未知字�
 发现、迁移或删除旧版本写入用户状态目录的 workspace 运行数据；只有在确认旧版本
 进程均已退出后，才应手工删除这些数据。
 
-当前用户的共享连接记录仍位于 Conven 用户状态根目录的 `.connections` 下；该根目录
-依次由 `LOOM_STATE_HOME`、`$XDG_STATE_HOME/loom` 或
-`$HOME/.local/state/loom` 决定。这些设置只影响小型的跨 workspace connection registry，
-绝不会迁移 workspace 的 artifact、生成配置、服务日志、锁或 session 状态。
+当前用户的共享连接记录只位于 `~/.conven/state/connections`。Conven 不读取
+`CONVEN_STATE_HOME` 或 `XDG_STATE_HOME`，也不发现或迁移旧的用户状态根。共享 registry
+中不会保存 workspace 的 artifact、生成配置、服务日志、锁或 session 状态。
 
 ## 开发验证
 

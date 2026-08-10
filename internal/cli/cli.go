@@ -53,6 +53,8 @@ func (app App) Run(arguments []string) int {
 		return app.runConfig(arguments[1:])
 	case "policy":
 		return app.runPolicy(arguments[1:])
+	case "plugins":
+		return app.runPlugins(arguments[1:])
 	case "services":
 		return app.runServices(arguments[1:])
 	case "doctor":
@@ -503,11 +505,13 @@ func (app App) printUsage(output io.Writer) {
   conven init
   conven config [--global] [--list|--unset] [key] [value]
   conven policy ACTION
+  conven plugins ACTION
   conven services ACTION [flags] [service...]
   conven doctor [flags]
   conven --version
 
 Run "conven policy --help" for policy actions,
+"conven plugins --help" for plugin actions,
 "conven services --help" for service actions, and
 "conven services --start --help" for startup flags. Without service arguments,
 Conven opens an interactive PathPicker-style selector and requires confirmation.

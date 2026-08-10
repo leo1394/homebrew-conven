@@ -65,7 +65,7 @@ func TestSourceFingerprintFallsBackOutsideGit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtimeLog := filepath.Join(directory, ".loom", "runtime", "current", "logs", "api.log")
+	runtimeLog := filepath.Join(directory, ".conven", "runtime", "current", "logs", "api.log")
 	if err := os.MkdirAll(filepath.Dir(runtimeLog), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestSourceFingerprintFallsBackOutsideGit(t *testing.T) {
 func TestSourceFingerprintIgnoresWorkspaceRuntimeInGitRepository(t *testing.T) {
 	repository := t.TempDir()
 	runGit(t, repository, "init")
-	boundary := filepath.Join(repository, ".loom")
+	boundary := filepath.Join(repository, ".conven")
 	if err := os.Mkdir(boundary, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestSourceFingerprintIgnoresWorkspaceRuntimeInGitRepository(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repository, "service.txt"), []byte("one\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, repository, "add", ".loom/.gitignore", "service.txt")
+	runGit(t, repository, "add", ".conven/.gitignore", "service.txt")
 	first, err := SourceFingerprint(repository)
 	if err != nil {
 		t.Fatal(err)
@@ -232,8 +232,8 @@ func TestPlanFingerprintTracksResolvedConfigPolicy(t *testing.T) {
 				Driver:       materialize.DriverYAMLOverlay,
 				SourceDriver: materialize.SourceRepository,
 				SourceDir:    "/workspace/api/resources",
-				ConfigRoot:   "/workspace/.loom/runtime/current/configs",
-				TargetDir:    "/workspace/.loom/runtime/current/configs/api",
+				ConfigRoot:   "/workspace/.conven/runtime/current/configs",
+				TargetDir:    "/workspace/.conven/runtime/current/configs/api",
 				Application:  "application.yaml",
 				Patches: []materialize.Patch{
 					{File: "application.yaml", Path: "port", Value: 18080},

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.1 - 2026-08-07
+
+- 破坏性变更：将 workspace、manifest、配置和运行时环境变量完整迁移为 `.conven`、
+  `.conven/conven.yaml`、`~/.conven/config` 和 `CONVEN_*`；旧命名不再作为运行协议使用。
+- 将用户级配置、共享连接 registry 和插件统一收敛到
+  `~/.conven/{config,state/connections,plugins}`，不再读取 `CONVEN_STATE_HOME`、
+  `XDG_STATE_HOME` 或创建 `$HOME/.local/state/conven`，也不迁移旧用户状态目录；连接
+  状态路径逐层拒绝符号链接并强制使用 `0700` 权限。
+- 新增 `conven plugins --install <python-file>|--list|--run`，从本地文件以非覆盖方式
+  安装用户插件；保留通用内置插件的嵌入与 `init` 安装机制，但不在 Conven 仓库或
+  二进制中打包项目专用脚本。执行时传入规范 workspace 路径并原样转发插件参数和
+  终端输入输出，`--workspace` 保留给 Conven 且不可被覆盖。
+- 重排 services 运行输出：绿色 `==>` 只标识阶段，二级详情使用无色缩进，青色只标识
+  服务名和关键值，黄色与红色分别专用于告警和失败。
+- 修复交互式 `sudo -v` 被放入后台进程组后密码明文回显且无法完成认证的问题，并增加
+  密码隐藏提示与认证完成反馈。
+
 ## 0.2.0 - 2026-08-07
 
 - 将项目、Homebrew tap、Formula 和 CLI 从 `homebrew-loom`/`loom` 改名为

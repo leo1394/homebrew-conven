@@ -77,7 +77,7 @@ func fingerprintDirectory(directory string) (string, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if path != directory && entry.IsDir() && (entry.Name() == ".git" || entry.Name() == ".loom") {
+		if path != directory && entry.IsDir() && (entry.Name() == ".git" || entry.Name() == ".conven") {
 			return filepath.SkipDir
 		}
 		if entry.IsDir() {

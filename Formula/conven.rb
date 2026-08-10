@@ -14,34 +14,55 @@ class Conven < Formula
   end
 
   test do
-    assert_equal "conven 0.2.0\n", shell_output("#{bin}/conven --version")
+    ENV["HOME"] = testpath.to_s
+    assert_equal "conven 0.2.1\n", shell_output("#{bin}/conven --version")
     assert_predicate bin/"conven", :executable?
 
-    manifest = testpath/".loom/loom.yaml"
-    system bin/"conven", "init"
-    assert_path_exists manifest
-    manifest.write("#{manifest.read}\n# preserve this line\n")
-    expected_manifest = manifest.read
-    system bin/"conven", "init"
-    assert_equal expected_manifest, manifest.read
+    workspace = testpath/"workspace"
+    workspace.mkpath
+    Dir.chdir(workspace) do
+      workspace_state = workspace/(build.head? ? ".conven" : ".loom")
+      manifest = workspace_state/(build.head? ? "conven.yaml" : "loom.yaml")
+      system bin/"conven", "init"
+      assert_path_exists manifest
+      if build.head?
+        plugin_directory = testpath/".conven/plugins"
+        assert_predicate plugin_directory, :directory?
+        assert_empty plugin_directory.children
+        plugin_source = testpath/"formula-plugin.py"
+        plugin_source.write("#!/usr/bin/env python3\nprint('formula plugin')\n")
+        plugin_source.chmod(0700)
+        system bin/"conven", "plugins", "--install", plugin_source
+        plugin = plugin_directory/"formula-plugin.py"
+        assert_path_exists plugin
+        assert_predicate plugin, :executable?
+        assert_includes shell_output("#{bin}/conven plugins --list").lines, "formula-plugin\n"
+      end
+      manifest.write("#{manifest.read}\n# preserve this line\n")
+      expected_manifest = manifest.read
+      system bin/"conven", "init"
+      assert_equal expected_manifest, manifest.read
 
-    imported_policy = testpath/"imported-policy.yaml"
-    imported_manifest = expected_manifest.sub(/^  name: .+$/, "  name: formula-import")
-    refute_equal expected_manifest, imported_manifest
-    imported_policy.write(imported_manifest)
-    system bin/"conven", "policy", "--import", imported_policy
-    assert_equal imported_manifest, manifest.read
-    assert_predicate testpath/".loom/backups", :directory?
-    import_backups = (testpath/".loom/backups").children
-    assert_equal 1, import_backups.length
-    assert_equal expected_manifest, import_backups.first.read
+      imported_policy = workspace/"imported-policy.yaml"
+      imported_manifest = expected_manifest.sub(/^  name: .+$/, "  name: formula-import")
+      refute_equal expected_manifest, imported_manifest
+      imported_policy.write(imported_manifest)
+      system bin/"conven", "policy", "--import", imported_policy
+      assert_equal imported_manifest, manifest.read
+      assert_predicate workspace_state/"backups", :directory?
+      import_backups = (workspace_state/"backups").children
+      assert_equal 1, import_backups.length
+      assert_equal expected_manifest, import_backups.first.read
+    end
 
     assert_path_exists bash_completion/"conven"
     assert_path_exists zsh_completion/"_conven"
     assert_path_exists fish_completion/"conven.fish"
     top_level_commands = %w[init services config policy doctor help version]
+    top_level_commands.insert(4, "plugins") if build.head?
     service_actions = %w[list registry status logs start restart stop stop-all]
     policy_actions = %w[edit import reset]
+    plugin_actions = build.head? ? %w[install list run] : []
     removed_top_level_commands = %w[discover list status logs start restart stop]
     %w[bash zsh fish].each do |shell|
       completion = shell_output("#{bin}/conven __completion #{shell}")
@@ -79,6 +100,13 @@ class Conven < Formula
         end
       end
       policy_actions.each do |action|
+        if shell == "fish"
+          assert_includes completion, "-l #{action}"
+        else
+          assert_includes completion, "--#{action}"
+        end
+      end
+      plugin_actions.each do |action|
         if shell == "fish"
           assert_includes completion, "-l #{action}"
         else

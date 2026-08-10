@@ -13,7 +13,7 @@ func TestResolveKubeconfigPriority(t *testing.T) {
 	tests := []struct {
 		name       string
 		explicit   string
-		loom       string
+		conven       string
 		ktctl      string
 		profile    string
 		configured string
@@ -24,7 +24,7 @@ func TestResolveKubeconfigPriority(t *testing.T) {
 		{
 			name:       "explicit",
 			explicit:   "/config/explicit",
-			loom:       "/config/loom",
+			conven:       "/config/conven",
 			ktctl:      "/config/ktctl",
 			profile:    "/config/profile",
 			configured: "/config/configured",
@@ -33,14 +33,14 @@ func TestResolveKubeconfigPriority(t *testing.T) {
 			want:       "/config/explicit",
 		},
 		{
-			name:       "loom environment",
-			loom:       "/config/loom",
+			name:       "conven environment",
+			conven:       "/config/conven",
 			ktctl:      "/config/ktctl",
 			profile:    "/config/profile",
 			configured: "/config/configured",
 			manifest:   "/config/manifest",
 			kubernetes: "/config/kubernetes",
-			want:       "/config/loom",
+			want:       "/config/conven",
 		},
 		{
 			name:       "legacy ktctl environment",
@@ -82,7 +82,7 @@ func TestResolveKubeconfigPriority(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			clearKubeconfigEnvironment(t)
-			t.Setenv("LOOM_KUBECONFIG", test.loom)
+			t.Setenv("CONVEN_KUBECONFIG", test.conven)
 			t.Setenv("KTCTL_KUBECONFIG", test.ktctl)
 			t.Setenv("PROFILE_KUBECONFIG", test.profile)
 			t.Setenv("KUBECONFIG", test.kubernetes)
@@ -144,7 +144,7 @@ func TestResolveKubeconfigRejectsMultipleFiles(t *testing.T) {
 
 func clearKubeconfigEnvironment(t *testing.T) {
 	t.Helper()
-	t.Setenv("LOOM_KUBECONFIG", "")
+	t.Setenv("CONVEN_KUBECONFIG", "")
 	t.Setenv("KTCTL_KUBECONFIG", "")
 	t.Setenv("PROFILE_KUBECONFIG", "")
 	t.Setenv("KUBECONFIG", "")

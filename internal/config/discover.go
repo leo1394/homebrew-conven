@@ -522,7 +522,7 @@ func saveManifestDocument(path string, document *yaml.Node, source []byte, sourc
 
 func publishManifestUpdate(path string, data []byte, source []byte, sourceInfo os.FileInfo, operation string) error {
 	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, ".loom-manifest-*")
+	temporary, err := os.CreateTemp(directory, ".conven-manifest-*")
 	if err != nil {
 		return fmt.Errorf("create temporary Conven manifest: %w", err)
 	}

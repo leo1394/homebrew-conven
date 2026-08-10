@@ -77,7 +77,7 @@ Choose a semantic version before preflight and reuse these release-specific
 variables throughout the procedure. The value below is an example:
 
 ```bash
-CONVEN_RELEASE_VERSION=0.1.1
+CONVEN_RELEASE_VERSION=X.Y.Z
 CONVEN_RELEASE_TAG="v$CONVEN_RELEASE_VERSION"
 CONVEN_ARCHIVE_URL="https://github.com/leo1394/homebrew-conven/archive/refs/tags/$CONVEN_RELEASE_TAG.tar.gz"
 CONVEN_ARCHIVE_PATH="/tmp/homebrew-conven-$CONVEN_RELEASE_VERSION.tar.gz"
@@ -157,6 +157,9 @@ go build -o /tmp/conven-release ./cmd/conven
 /tmp/conven-release --version
 test -f examples/application.yaml
 test ! -e examples/loom.yaml
+test ! -e examples/conven.yaml
+test -f internal/plugins/builtin/README.md
+test ! -e internal/plugins/builtin/generate-apollo-consul.py
 
 ruby -c Formula/conven.rb
 brew style Formula/conven.rb
@@ -169,7 +172,7 @@ git status --short
 The built binary must print the intended version, for example:
 
 ```text
-conven 0.1.1
+conven X.Y.Z
 ```
 
 Review the diff rather than relying only on automated checks. In particular,
@@ -413,6 +416,7 @@ test -e "$CONVEN_ZSH_COMPLETION"
 test -e "$CONVEN_FISH_COMPLETION"
 for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION" "$CONVEN_FISH_COMPLETION"; do
   grep -Fq -- "services" "$completion"
+  grep -Fq -- "plugins" "$completion"
 done
 for action in list registry status logs start restart stop stop-all; do
   for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
@@ -421,6 +425,12 @@ for action in list registry status logs start restart stop stop-all; do
   grep -Fq -- "-l $action" "$CONVEN_FISH_COMPLETION"
 done
 for action in edit import reset; do
+  for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
+    grep -Fq -- "--$action" "$completion"
+  done
+  grep -Fq -- "-l $action" "$CONVEN_FISH_COMPLETION"
+done
+for action in install list run; do
   for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
@@ -445,7 +455,7 @@ done
 
 Use a disposable development workspace with no strong-match child repository
 for the process checks below. In that case, `conven init` must create the fallback
-manifest at `.loom/loom.yaml` from the bundled `examples/application.yaml`
+manifest at `.conven/conven.yaml` from the bundled `examples/application.yaml`
 template, and a second invocation must leave an existing manifest unchanged.
 Edit that generated manifest and provide the referenced service repositories
 before starting services. Make at least one selected acceptance service emit a
@@ -468,17 +478,17 @@ CONVEN_BIN="$(brew --prefix "$CONVEN_FORMULA")/bin/conven"
 CONVEN_TEST_KUBECONFIG=/absolute/path/to/disposable/kubeconfig
 test -f "$CONVEN_TEST_KUBECONFIG"
 "$CONVEN_BIN" init
-test -f .loom/loom.yaml
-CONVEN_MANIFEST_SHA=$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')
+test -f .conven/conven.yaml
+CONVEN_MANIFEST_SHA=$(shasum -a 256 .conven/conven.yaml | awk '{print $1}')
 "$CONVEN_BIN" init
-test "$CONVEN_MANIFEST_SHA" = "$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')"
+test "$CONVEN_MANIFEST_SHA" = "$(shasum -a 256 .conven/conven.yaml | awk '{print $1}')"
 mkdir -p .acceptance/descendant
 CONVEN_IMPORT_SOURCE=.acceptance/import-candidate.yaml
 CONVEN_IMPORT_SOURCE_SHA=$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')
 (cd .acceptance/descendant && "$CONVEN_BIN" policy --import ../import-candidate.yaml)
 test "$CONVEN_IMPORT_SOURCE_SHA" = "$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')"
-cmp "$CONVEN_IMPORT_SOURCE" .loom/loom.yaml
-test -n "$(find .loom/backups -type f -name 'loom.yaml-before-import-*.bak' -print -quit)"
+cmp "$CONVEN_IMPORT_SOURCE" .conven/conven.yaml
+test -n "$(find .conven/backups -type f -name 'conven.yaml-before-import-*.bak' -print -quit)"
 "$CONVEN_BIN" config ktctl.path ktctl
 test "$("$CONVEN_BIN" config ktctl.path)" = "ktctl"
 "$CONVEN_BIN" config ktctl.kubeconfig "$CONVEN_TEST_KUBECONFIG"
@@ -489,7 +499,7 @@ test "$("$CONVEN_BIN" config ktctl.kubeconfig)" = "$CONVEN_TEST_KUBECONFIG"
 "$CONVEN_BIN" services --list
 (cd .acceptance/descendant && "$CONVEN_BIN" services --list)
 (cd .acceptance/descendant && "$CONVEN_BIN" services --registry)
-LOOM_WORKSPACE=/path/that/is/not/a/workspace "$CONVEN_BIN" services --list
+CONVEN_WORKSPACE=/path/that/is/not/a/workspace "$CONVEN_BIN" services --list
 for command in services doctor; do
   for removed_flag in --workspace --config; do
     if "$CONVEN_BIN" "$command" "$removed_flag" /tmp >/dev/null 2>&1; then
@@ -590,7 +600,7 @@ real business repositories:
   manifest unchanged and asks the user to retry. Acceptance must not describe
   this as a linearizable compare-and-swap against arbitrary external writers;
   the narrow check/rename interval remains a best-effort limitation. A
-  symbolic-link `.loom/loom.yaml` must also be rejected rather than replaced.
+  symbolic-link `.conven/conven.yaml` must also be rejected rather than replaced.
 
 The redirected `services --logs --tail` invocation above is the non-TTY
 acceptance path. It must remain a continuous `[service]`-prefixed plain-text
@@ -628,9 +638,9 @@ that an endpoint is bound or reachable.
 
 Confirm the following behavior:
 
-- `services` and `doctor` resolve only the nearest `.loom/loom.yaml` by walking
-  upward from the current directory. A root-level `loom.yaml` and alternate
-  files inside `.loom` are ignored. A nested `.loom` without `loom.yaml` is an
+- `services` and `doctor` resolve only the nearest `.conven/conven.yaml` by walking
+  upward from the current directory. A root-level `conven.yaml` and alternate
+  files inside `.conven` are ignored. A nested `.conven` without `conven.yaml` is an
   incomplete hard boundary
   and must fail instead of falling back to a valid parent workspace. Repository
   discovery always scans immediate children of the resolved workspace root,
@@ -642,21 +652,21 @@ Confirm the following behavior:
   candidates.
 - The removed workspace and manifest flags return usage status 2 for every
   workspace command and are absent from command help and all generated
-  completions. Setting `LOOM_WORKSPACE` cannot change CLI discovery: a command
+  completions. Setting `CONVEN_WORKSPACE` cannot change CLI discovery: a command
   inside a workspace still uses that workspace, and a command outside one still
   fails.
 - Outside a workspace, `init`, `config --global`, help, version, command-specific
   help, and internal completion generation remain available. Workspace-local
   `config` and service commands fail with a clear initialization error. Local
-  `config` works at a `.loom` boundary while `loom.yaml` is still being prepared.
-  The user-wide `~/.loom` directory is always reserved for global settings: it
+  `config` works at a `.conven` boundary while `conven.yaml` is still being prepared.
+  The user-wide `~/.conven` directory is always reserved for global settings: it
   must not make the home directory or its descendants a workspace, even if a
   manifest was created there manually. `conven init` must reject the home directory.
 - Every launched local service receives the resolved absolute workspace root in
-  `LOOM_WORKSPACE`, overriding an inherited value. Treat it as read-only service
+  `CONVEN_WORKSPACE`, overriding an inherited value. Treat it as read-only service
   metadata; it is not an input to CLI discovery.
-- Local settings are stored in `.loom/config`, global settings in
-  `~/.loom/config`, and local `ktctl.path` and `ktctl.kubeconfig` values override
+- Local settings are stored in `.conven/config`, global settings in
+  `~/.conven/config`, and local `ktctl.path` and `ktctl.kubeconfig` values override
   global values. Remove both temporary local values with `conven config --unset`
   after the test.
 - On `services --start` and `doctor`, `--dev` is equivalent to `--env dev` and

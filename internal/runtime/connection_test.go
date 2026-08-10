@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -80,23 +82,147 @@ func TestBuildCommandConnection(t *testing.T) {
 	}
 }
 
+func TestEnsureConnectionKeepsInteractiveSudoInForegroundAndReportsAuthorization(t *testing.T) {
+	directory := t.TempDir()
+	fakeSudo := filepath.Join(directory, "sudo")
+	pgidPath := filepath.Join(directory, "sudo-auth-pgid")
+	script := `#!/bin/sh
+if [ "$1" = "-n" ] && [ "$2" = "-v" ]; then
+  exit 0
+fi
+if [ "$1" = "-v" ]; then
+  ps -o pgid= -p "$$" | tr -d ' ' > "$CONVEN_TEST_SUDO_AUTH_PGID"
+  exit 0
+fi
+if [ "$1" = "-n" ]; then
+  shift
+  "$@" &
+  child=$!
+  wait "$child"
+  exit $?
+fi
+exit 1
+`
+	if err := os.WriteFile(fakeSudo, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CONVEN_TEST_SUDO_AUTH_PGID", pgidPath)
+	t.Setenv("HOME", t.TempDir())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+	t.Setenv("CONVEN_CONNECTION_HELPER", "1")
+	t.Setenv("CONVEN_CONNECTION_HELPER_ADDRESS", address)
+	var output bytes.Buffer
+	process, err := EnsureConnection(context.Background(), ConnectionConfig{
+		Driver:  "command",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=^TestConnectionHelperProcess$"},
+		Sudo:    true,
+		Timeout: 2 * time.Second,
+		Readiness: []ConnectionEndpoint{
+			{Name: "helper", Address: address},
+		},
+	}, filepath.Join(directory, "connection.log"), "sudo-auth-workspace", &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = stopConnection(process, true)
+		_ = removeConnectionRecord(process.Fingerprint)
+	}()
+	data, err := os.ReadFile(pgidPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizationPGID, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foregroundPGID, err := syscall.Getpgid(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorizationPGID != foregroundPGID {
+		t.Fatalf("interactive sudo process group = %d, want foreground process group %d", authorizationPGID, foregroundPGID)
+	}
+	if !strings.Contains(output.String(), "password input is hidden") {
+		t.Fatalf("authorization output does not explain hidden password input: %q", output.String())
+	}
+	if !strings.Contains(output.String(), "Sudo authorization confirmed.") {
+		t.Fatalf("authorization output does not confirm completion: %q", output.String())
+	}
+}
+
+func TestAuthorizeSudoReturnsOnContextCancellation(t *testing.T) {
+	directory := t.TempDir()
+	fakeSudo := filepath.Join(directory, "sudo")
+	startedPath := filepath.Join(directory, "sudo-auth-started")
+	script := `#!/bin/sh
+if [ "$1" = "-v" ]; then
+  : > "$CONVEN_TEST_SUDO_STARTED"
+  while :; do :; done
+fi
+exit 1
+`
+	if err := os.WriteFile(fakeSudo, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("CONVEN_TEST_SUDO_STARTED", startedPath)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- authorizeSudo(ctx, &output)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(startedPath); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("interactive sudo command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("authorization error = %v, want context cancellation", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("interactive sudo command did not stop after context cancellation")
+	}
+	if strings.Contains(output.String(), "Sudo authorization confirmed.") {
+		t.Fatalf("cancelled authorization reported success: %q", output.String())
+	}
+}
+
 func TestConnectionLogPathLivesDirectlyUnderWorkspaceRuntime(t *testing.T) {
-	runtimeDir := filepath.Join(t.TempDir(), ".loom", "runtime")
+	runtimeDir := filepath.Join(t.TempDir(), ".conven", "runtime")
 	want := filepath.Join(runtimeDir, "connection.log")
 	if got := ConnectionLogPath(runtimeDir); got != want {
 		t.Fatalf("connection log path = %q, want %q", got, want)
 	}
 }
 
-func TestConnectionStateDirectoryUsesLoomStateHome(t *testing.T) {
-	stateHome := t.TempDir()
-	t.Setenv("LOOM_STATE_HOME", stateHome)
-	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "ignored"))
+func TestConnectionStateDirectoryUsesConvenHome(t *testing.T) {
+	convenHome := t.TempDir()
+	t.Setenv("HOME", convenHome)
 	directory, err := connectionStateDirectory()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(stateHome, ".connections")
+	want := filepath.Join(convenHome, ".conven", "state", "connections")
 	if directory != want {
 		t.Fatalf("connection state directory = %q, want %q", directory, want)
 	}
@@ -109,45 +235,87 @@ func TestConnectionStateDirectoryUsesLoomStateHome(t *testing.T) {
 	}
 }
 
-func TestConnectionStateDirectoryUsesXDGStateHome(t *testing.T) {
-	xdgStateHome := t.TempDir()
-	t.Setenv("LOOM_STATE_HOME", "")
-	t.Setenv("XDG_STATE_HOME", xdgStateHome)
-	directory, err := connectionStateDirectory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := filepath.Join(xdgStateHome, "loom", ".connections")
-	if directory != want {
-		t.Fatalf("connection state directory = %q, want %q", directory, want)
-	}
-}
-
-func TestConnectionStateDirectoryUsesDefaultUserStateHome(t *testing.T) {
+func TestConnectionStateDirectoryIgnoresXDGStateHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("LOOM_STATE_HOME", "")
-	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "ignored"))
 	directory, err := connectionStateDirectory()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".local", "state", "loom", ".connections")
+	want := filepath.Join(home, ".conven", "state", "connections")
 	if directory != want {
 		t.Fatalf("connection state directory = %q, want %q", directory, want)
 	}
 }
 
-func TestConnectionStateDirectoryRejectsRelativeUserStateHome(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", "relative-state")
-	_, err := connectionStateDirectory()
-	if err == nil || !strings.Contains(err.Error(), "LOOM_STATE_HOME must be an absolute path") {
-		t.Fatalf("error = %v, want absolute path validation", err)
+func TestConnectionStateDirectoryProtectsExistingDirectories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".conven")
+	state := filepath.Join(root, "state")
+	directory := filepath.Join(state, "connections")
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{root, state, directory} {
+		if err := os.Chmod(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := connectionStateDirectory(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{root, state, directory} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0700 {
+			t.Fatalf("directory %q permissions = %o, want 700", path, info.Mode().Perm())
+		}
+	}
+}
+
+func TestConnectionStateDirectoryRejectsSymlinkComponents(t *testing.T) {
+	for _, component := range []string{"home", "state", "connections"} {
+		t.Run(component, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			root := filepath.Join(home, ".conven")
+			state := filepath.Join(root, "state")
+			directory := filepath.Join(state, "connections")
+			target := t.TempDir()
+			switch component {
+			case "home":
+				if err := os.Symlink(target, root); err != nil {
+					t.Fatal(err)
+				}
+			case "state":
+				if err := os.Mkdir(root, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, state); err != nil {
+					t.Fatal(err)
+				}
+			case "connections":
+				if err := os.MkdirAll(state, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, directory); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := connectionStateDirectory()
+			if err == nil || !strings.Contains(err.Error(), "symbolic links are not allowed") {
+				t.Fatalf("error = %v, want symbolic link rejection", err)
+			}
+		})
 	}
 }
 
 func TestEnsureConnectionTimeoutStopsOwnedProcessGroup(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +407,7 @@ if [ "$1" = "-n" ] && [ "$2" = "-v" ]; then
   exit 1
 fi
 if [ "$1" = "-v" ]; then
-  : > "$LOOM_SUDO_MARKER"
+  : > "$CONVEN_SUDO_MARKER"
   exit 0
 fi
 if [ "$1" = "-n" ] && [ "$2" = "/bin/kill" ]; then
@@ -252,7 +420,7 @@ exit 1
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("LOOM_SUDO_MARKER", marker)
+	t.Setenv("CONVEN_SUDO_MARKER", marker)
 	argv := []string{"sleep", "600"}
 	process, err := startConnection(context.Background(), "command", argv, argv, filepath.Join(directory, "connection.log"), "sudo-refresh", false)
 	if err != nil {
@@ -275,15 +443,15 @@ exit 1
 }
 
 func TestManagedConnectionLeasesPreventEarlyStop(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	address := listener.Addr().String()
 	listener.Close()
-	t.Setenv("LOOM_CONNECTION_HELPER", "1")
-	t.Setenv("LOOM_CONNECTION_HELPER_ADDRESS", address)
+	t.Setenv("CONVEN_CONNECTION_HELPER", "1")
+	t.Setenv("CONVEN_CONNECTION_HELPER_ADDRESS", address)
 	config := ConnectionConfig{
 		Driver:     "command",
 		Command:    os.Args[0],
@@ -336,15 +504,15 @@ func TestManagedConnectionLeasesPreventEarlyStop(t *testing.T) {
 }
 
 func TestManagedConnectionSecondLeasePreservesOriginalLog(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	address := listener.Addr().String()
 	listener.Close()
-	t.Setenv("LOOM_CONNECTION_HELPER", "1")
-	t.Setenv("LOOM_CONNECTION_HELPER_ADDRESS", address)
+	t.Setenv("CONVEN_CONNECTION_HELPER", "1")
+	t.Setenv("CONVEN_CONNECTION_HELPER_ADDRESS", address)
 	config := ConnectionConfig{
 		Driver:     "command",
 		Command:    os.Args[0],
@@ -404,7 +572,7 @@ func TestManagedConnectionSecondLeasePreservesOriginalLog(t *testing.T) {
 }
 
 func TestKtctlRegistryRejectsSecondStateRootConnection(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	directory := t.TempDir()
 	service, err := StartService("existing-ktctl", []string{"sleep", "600"}, directory, CommandEnvironment(), filepath.Join(directory, "existing.log"))
 	if err != nil {
@@ -450,7 +618,7 @@ func TestKtctlRegistryRejectsSecondStateRootConnection(t *testing.T) {
 }
 
 func TestKtctlRegistryIgnoresManagedCommandConnection(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	directory := t.TempDir()
 	service, err := StartService("existing-command", []string{"sleep", "600"}, directory, CommandEnvironment(), filepath.Join(directory, "existing.log"))
 	if err != nil {
@@ -515,15 +683,15 @@ func TestPruneConnectionLeasesRemovesOldMissingWorkspaceSession(t *testing.T) {
 }
 
 func TestActiveConnectionRecordsRetiresStaleUnleasedProcess(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	address := listener.Addr().String()
 	listener.Close()
-	t.Setenv("LOOM_CONNECTION_HELPER", "1")
-	t.Setenv("LOOM_CONNECTION_HELPER_ADDRESS", address)
+	t.Setenv("CONVEN_CONNECTION_HELPER", "1")
+	t.Setenv("CONVEN_CONNECTION_HELPER_ADDRESS", address)
 	directory := t.TempDir()
 	process, err := EnsureConnection(context.Background(), ConnectionConfig{
 		Driver:     "command",
@@ -608,10 +776,10 @@ func TestParseProcessTreeLinePreservesRepeatedCommandWhitespace(t *testing.T) {
 }
 
 func TestConnectionHelperProcess(t *testing.T) {
-	if os.Getenv("LOOM_CONNECTION_HELPER") != "1" {
+	if os.Getenv("CONVEN_CONNECTION_HELPER") != "1" {
 		return
 	}
-	listener, err := net.Listen("tcp", os.Getenv("LOOM_CONNECTION_HELPER_ADDRESS"))
+	listener, err := net.Listen("tcp", os.Getenv("CONVEN_CONNECTION_HELPER_ADDRESS"))
 	if err != nil {
 		t.Fatal(err)
 	}

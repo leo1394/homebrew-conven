@@ -282,14 +282,14 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 		}
 	}
 	mergeValues(environmentValues, map[string]string{
-		"LOOM_WORKSPACE":         plan.Workspace.Root,
-		"LOOM_SERVICE":           name,
-		"LOOM_ENV":               plan.EnvironmentName,
-		"LOOM_STATE_DIR":         plan.Workspace.Store.Root,
-		"LOOM_RUN_DIR":           plan.RunDir,
-		"LOOM_CONFIG_DIR":        filepath.Join(plan.RunDir, "configs", name),
-		"LOOM_ARTIFACT":          baseContext.Artifact,
-		"LOOM_SELECTED_SERVICES": strings.Join(plan.Selected, ","),
+		"CONVEN_WORKSPACE":         plan.Workspace.Root,
+		"CONVEN_SERVICE":           name,
+		"CONVEN_ENV":               plan.EnvironmentName,
+		"CONVEN_STATE_DIR":         plan.Workspace.Store.Root,
+		"CONVEN_RUN_DIR":           plan.RunDir,
+		"CONVEN_CONFIG_DIR":        filepath.Join(plan.RunDir, "configs", name),
+		"CONVEN_ARTIFACT":          baseContext.Artifact,
+		"CONVEN_SELECTED_SERVICES": strings.Join(plan.Selected, ","),
 	})
 	expandedValues, err := expandValues(environmentValues, baseContext)
 	if err != nil {

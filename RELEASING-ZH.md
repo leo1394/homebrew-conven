@@ -66,7 +66,7 @@ git push -u origin master
 在预检前选择语义化版本，并在整个流程中复用以下发布专用变量。下面的值只是示例：
 
 ```bash
-CONVEN_RELEASE_VERSION=0.1.1
+CONVEN_RELEASE_VERSION=X.Y.Z
 CONVEN_RELEASE_TAG="v$CONVEN_RELEASE_VERSION"
 CONVEN_ARCHIVE_URL="https://github.com/leo1394/homebrew-conven/archive/refs/tags/$CONVEN_RELEASE_TAG.tar.gz"
 CONVEN_ARCHIVE_PATH="/tmp/homebrew-conven-$CONVEN_RELEASE_VERSION.tar.gz"
@@ -142,6 +142,9 @@ go build -o /tmp/conven-release ./cmd/conven
 /tmp/conven-release --version
 test -f examples/application.yaml
 test ! -e examples/loom.yaml
+test ! -e examples/conven.yaml
+test -f internal/plugins/builtin/README.md
+test ! -e internal/plugins/builtin/generate-apollo-consul.py
 
 ruby -c Formula/conven.rb
 brew style Formula/conven.rb
@@ -154,7 +157,7 @@ git status --short
 构建出的程序必须输出目标版本，例如：
 
 ```text
-conven 0.1.1
+conven X.Y.Z
 ```
 
 不能只依赖自动检查，还要人工审阅 diff，确认其中没有凭据、运行状态、日志或无关文件。
@@ -375,6 +378,7 @@ test -e "$CONVEN_ZSH_COMPLETION"
 test -e "$CONVEN_FISH_COMPLETION"
 for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION" "$CONVEN_FISH_COMPLETION"; do
   grep -Fq -- "services" "$completion"
+  grep -Fq -- "plugins" "$completion"
 done
 for action in list registry status logs start restart stop stop-all; do
   for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
@@ -383,6 +387,12 @@ for action in list registry status logs start restart stop stop-all; do
   grep -Fq -- "-l $action" "$CONVEN_FISH_COMPLETION"
 done
 for action in edit import reset; do
+  for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
+    grep -Fq -- "--$action" "$completion"
+  done
+  grep -Fq -- "-l $action" "$CONVEN_FISH_COMPLETION"
+done
+for action in install list run; do
   for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
@@ -407,7 +417,7 @@ done
 
 下面的进程验收使用没有强匹配一级子仓库的一次性开发 workspace。此时 `conven init`
 必须根据内置的 `examples/application.yaml` 模板创建回退 manifest
-`.loom/loom.yaml`，再次执行时必须保留已有 manifest。启动服务前，应编辑生成的
+`.conven/conven.yaml`，再次执行时必须保留已有 manifest。启动服务前，应编辑生成的
 manifest，并准备其中引用的服务仓库。至少让一个选中的验收服务在启动时输出一条
 确定且不带 ANSI 的日志，使重定向 tail 断言拥有已知 fixture。仓库发现应另用通用的
 一次性 Git 仓库验收，不要把公司业务服务栈写成自动测试。不要对生产基础设施执行
@@ -425,17 +435,17 @@ CONVEN_BIN="$(brew --prefix "$CONVEN_FORMULA")/bin/conven"
 CONVEN_TEST_KUBECONFIG=/absolute/path/to/disposable/kubeconfig
 test -f "$CONVEN_TEST_KUBECONFIG"
 "$CONVEN_BIN" init
-test -f .loom/loom.yaml
-CONVEN_MANIFEST_SHA=$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')
+test -f .conven/conven.yaml
+CONVEN_MANIFEST_SHA=$(shasum -a 256 .conven/conven.yaml | awk '{print $1}')
 "$CONVEN_BIN" init
-test "$CONVEN_MANIFEST_SHA" = "$(shasum -a 256 .loom/loom.yaml | awk '{print $1}')"
+test "$CONVEN_MANIFEST_SHA" = "$(shasum -a 256 .conven/conven.yaml | awk '{print $1}')"
 mkdir -p .acceptance/descendant
 CONVEN_IMPORT_SOURCE=.acceptance/import-candidate.yaml
 CONVEN_IMPORT_SOURCE_SHA=$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')
 (cd .acceptance/descendant && "$CONVEN_BIN" policy --import ../import-candidate.yaml)
 test "$CONVEN_IMPORT_SOURCE_SHA" = "$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')"
-cmp "$CONVEN_IMPORT_SOURCE" .loom/loom.yaml
-test -n "$(find .loom/backups -type f -name 'loom.yaml-before-import-*.bak' -print -quit)"
+cmp "$CONVEN_IMPORT_SOURCE" .conven/conven.yaml
+test -n "$(find .conven/backups -type f -name 'conven.yaml-before-import-*.bak' -print -quit)"
 "$CONVEN_BIN" config ktctl.path ktctl
 test "$("$CONVEN_BIN" config ktctl.path)" = "ktctl"
 "$CONVEN_BIN" config ktctl.kubeconfig "$CONVEN_TEST_KUBECONFIG"
@@ -446,7 +456,7 @@ test "$("$CONVEN_BIN" config ktctl.kubeconfig)" = "$CONVEN_TEST_KUBECONFIG"
 "$CONVEN_BIN" services --list
 (cd .acceptance/descendant && "$CONVEN_BIN" services --list)
 (cd .acceptance/descendant && "$CONVEN_BIN" services --registry)
-LOOM_WORKSPACE=/path/that/is/not/a/workspace "$CONVEN_BIN" services --list
+CONVEN_WORKSPACE=/path/that/is/not/a/workspace "$CONVEN_BIN" services --list
 for command in services doctor; do
   for removed_flag in --workspace --config; do
     if "$CONVEN_BIN" "$command" "$removed_flag" /tmp >/dev/null 2>&1; then
@@ -532,7 +542,7 @@ Schema 校验通过不是运行门禁，实际启动前仍必须通过上面的 
 - 紧邻 rename 前，discovery 必须执行文档约定的 best-effort same-file 和源 bytes
   检查。此处检测到冲突时，应保持当前 manifest 不变并提示重试。验收不能把它描述为
   针对任意外部 writer 的线性化 compare-and-swap；极窄的 check/rename 间隔仍是
-  best-effort 限制。符号链接形式的 `.loom/loom.yaml` 也必须拒绝，不能替换链接本身。
+  best-effort 限制。符号链接形式的 `.conven/conven.yaml` 也必须拒绝，不能替换链接本身。
 
 上面的重定向 `services --logs --tail` 是非 TTY 验收路径。它必须保持为持续输出、带
 `[service]` 前缀的普通文本流，并且不能输出 Dashboard 控制序列。服务自身写出的
@@ -562,25 +572,25 @@ LAN 地址与端口同时显示，本身不能证明 endpoint 已绑定或可达
 
 确认以下行为：
 
-- `services` 和 `doctor` 只从当前目录向上解析最近的 `.loom/loom.yaml`。根目录的
-  `loom.yaml` 和 `.loom`
-  中的其他文件都被忽略。嵌套 `.loom` 若没有 `loom.yaml`，必须作为不完整的硬边界
+- `services` 和 `doctor` 只从当前目录向上解析最近的 `.conven/conven.yaml`。根目录的
+  `conven.yaml` 和 `.conven`
+  中的其他文件都被忽略。嵌套 `.conven` 若没有 `conven.yaml`，必须作为不完整的硬边界
   报错，不能回退到有效的父级 workspace。仓库发现始终扫描解析出的 workspace 根目录
   的一级子目录，不能扫描命令调用目录的子目录。
 - `services` 的动作参数必须位于其后的第一个参数，并且必须且只能指定 `--list`、
   `--registry`、`--status`、`--logs`、`--start`、`--restart`、`--stop`、`--stop-all`
   之一。原顶层服务命令必须以用法错误状态 2 退出，并从 help 和补全顶层候选中消失。
 - 已移除的 workspace 和 manifest 参数在每个 workspace 命令中都必须以用法错误
-  状态 2 退出，并且不出现在命令 help 或任何补全中。设置 `LOOM_WORKSPACE` 不能
+  状态 2 退出，并且不出现在命令 help 或任何补全中。设置 `CONVEN_WORKSPACE` 不能
   改变 CLI 发现：位于 workspace 内时仍选择当前 workspace，位于 workspace 外时仍失败。
 - workspace 外仍可使用 `init`、`config --global`、help、version、各命令的 help 和内部补全
-  生成；本地 `config` 及服务命令必须给出清晰的初始化错误。不完整 `.loom`
-  边界中的本地 `config` 在 `loom.yaml` 仍在准备时即可使用。
-  用户级 `~/.loom` 始终专用于全局设置：即使其中被手工放入 manifest，也不得把
+  生成；本地 `config` 及服务命令必须给出清晰的初始化错误。不完整 `.conven`
+  边界中的本地 `config` 在 `conven.yaml` 仍在准备时即可使用。
+  用户级 `~/.conven` 始终专用于全局设置：即使其中被手工放入 manifest，也不得把
   HOME 或其子目录识别为 workspace；`conven init` 必须拒绝 HOME。
-- 每个启动的本地服务都会在 `LOOM_WORKSPACE` 中收到解析后的 workspace 绝对根目录，
+- 每个启动的本地服务都会在 `CONVEN_WORKSPACE` 中收到解析后的 workspace 绝对根目录，
   并覆盖继承值。它是只读的服务元数据，不作为 CLI 发现的输入。
-- 本地配置保存在 `.loom/config`，全局配置保存在 `~/.loom/config`；本地
+- 本地配置保存在 `.conven/config`，全局配置保存在 `~/.conven/config`；本地
   `ktctl.path` 和 `ktctl.kubeconfig` 均优先于全局值。测试后分别使用
   `conven config --unset` 删除两个临时本地值。
 - `services --start` 和 `doctor` 中，`--dev` 等效于 `--env dev`，`--test` 等效于

@@ -17,8 +17,23 @@ func TestStyleUsesANSIForTerminal(t *testing.T) {
 	defer file.Close()
 	style := newStyle(file, func(int) bool { return true })
 
+	if got := style.Stage("Building"); got != boldGreen+"==> Building"+reset {
+		t.Fatalf("stage style = %q", got)
+	}
+	if got := style.Detail("Environment: dev"); got != "  - Environment: dev" {
+		t.Fatalf("detail style = %q", got)
+	}
+	if got := style.Label("Workspace"); got != "Workspace" {
+		t.Fatalf("label style = %q", got)
+	}
 	if got := style.Identifier("api-service"); got != boldCyan+"api-service"+reset {
 		t.Fatalf("identifier style = %q", got)
+	}
+	if got := style.Success("ready"); got != boldGreen+"ready"+reset {
+		t.Fatalf("success style = %q", got)
+	}
+	if got := style.Warning("warning"); got != boldYellow+"warning"+reset {
+		t.Fatalf("warning style = %q", got)
 	}
 	if got := style.Failure("failed"); got != boldRed+"failed"+reset {
 		t.Fatalf("failure style = %q", got)
@@ -70,8 +85,8 @@ func TestStyleDisablesANSIForDumbTerminal(t *testing.T) {
 	}
 	defer file.Close()
 	style := newStyle(file, func(int) bool { return true })
-	if got := style.Label("Workspace"); got != "Workspace" {
-		t.Fatalf("dumb terminal label style = %q", got)
+	if got := style.Stage("Workspace"); got != "==> Workspace" {
+		t.Fatalf("dumb terminal stage style = %q", got)
 	}
 }
 
@@ -94,12 +109,14 @@ func TestStyleMethodsDoNotAlterPlainText(t *testing.T) {
 	style := Style{}
 	values := []string{
 		style.Label("Workspace"),
+		style.Stage("Building"),
+		style.Detail("Environment: dev"),
 		style.Identifier("api-service"),
 		style.Warning("warning"),
 		style.Failure("failed"),
 		style.Success("ready"),
 	}
-	if got := strings.Join(values, "|"); got != "Workspace|api-service|warning|failed|ready" {
+	if got := strings.Join(values, "|"); got != "Workspace|==> Building|  - Environment: dev|api-service|warning|failed|ready" {
 		t.Fatalf("plain styles = %q", got)
 	}
 }

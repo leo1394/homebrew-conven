@@ -6,10 +6,10 @@ func Completion(shell string) (string, error) {
 	switch shell {
 	case "bash":
 		return `_conven() {
-    local cur subcommand action options i source_set
+    local cur subcommand action options i source_set candidate
     cur="${COMP_WORDS[COMP_CWORD]}"
     if [ "$COMP_CWORD" -eq 1 ]; then
-        COMPREPLY=( $(compgen -W "init services config policy doctor help version" -- "$cur") )
+        COMPREPLY=( $(compgen -W "init services config policy plugins doctor help version" -- "$cur") )
         return
     fi
     subcommand="${COMP_WORDS[1]}"
@@ -81,6 +81,25 @@ func Completion(shell string) (string, error) {
         COMPREPLY=( $(compgen -W "$options" -- "$cur") )
         return
     fi
+    if [ "$subcommand" = "plugins" ]; then
+        action="${COMP_WORDS[2]}"
+        if [ "$COMP_CWORD" -eq 2 ]; then
+            options="--install --list --run --help"
+        elif [ "$action" = "--install" ] && [ "$COMP_CWORD" -eq 3 ]; then
+            compopt -o filenames 2>/dev/null
+            COMPREPLY=()
+            while IFS= read -r candidate; do
+                if [ -d "$candidate" ] || [[ "$candidate" = *.py ]]; then
+                    COMPREPLY+=("$candidate")
+                fi
+            done < <(compgen -f -- "$cur")
+            return
+        else
+            options=""
+        fi
+        COMPREPLY=( $(compgen -W "$options" -- "$cur") )
+        return
+    fi
     case "$subcommand" in
         init)
             options="--help"
@@ -113,6 +132,7 @@ _conven() {
         'services:manage workspace services'
         'config:read or write Conven configuration'
         'policy:edit, import, or rebuild the workspace policy manifest'
+        'plugins:install, list, or run Conven plugins'
         'doctor:validate workspace and connection configuration'
         'help:show conven usage'
         'version:show conven version'
@@ -241,6 +261,39 @@ _conven() {
                     ;;
             esac
             ;;
+        plugins)
+            action=''
+            if (( CURRENT > 3 )); then
+                action=$words[3]
+                words=($words[1] $words[4,-1])
+                (( CURRENT -= 2 ))
+            fi
+            case $action in
+                --install)
+                    _arguments \
+                        '1:Python plugin file:_files -g "*.py"'
+                    ;;
+                --list)
+                    _message 'this plugin action does not accept arguments'
+                    ;;
+                --run)
+                    _arguments \
+                        '1:plugin:' \
+                        '*:plugin argument:'
+                    ;;
+                *)
+                    if (( CURRENT == 3 )); then
+                        _arguments \
+                            '--install[install a Python plugin]:Python plugin file:_files -g "*.py"' \
+                            '--list[list installed plugins]' \
+                            '--run[run an installed plugin]:plugin:' \
+                            '--help[show command help]'
+                    else
+                        _message 'unknown conven plugins action'
+                    fi
+                    ;;
+            esac
+            ;;
         doctor)
             _arguments \
                 '--env[environment profile]:environment:' \
@@ -287,6 +340,12 @@ function __conven_policy_without_action
     test "$tokens[2]" = policy; or return 1
 end
 
+function __conven_plugins_without_action
+    set -l tokens (commandline -opc)
+    test (count $tokens) -eq 2; or return 1
+    test "$tokens[2]" = plugins; or return 1
+end
+
 function __conven_policy_action
     set -l tokens (commandline -opc)
     test (count $tokens) -ge 3; or return 1
@@ -313,10 +372,11 @@ complete -c conven -f -n '__fish_use_subcommand' -a init -d 'Initialize a Conven
 complete -c conven -f -n '__fish_use_subcommand' -a services -d 'Manage workspace services'
 complete -c conven -f -n '__fish_use_subcommand' -a config -d 'Read or write Conven configuration'
 complete -c conven -f -n '__fish_use_subcommand' -a policy -d 'Edit, import, or rebuild the workspace policy manifest'
+complete -c conven -f -n '__fish_use_subcommand' -a plugins -d 'Install, list, or run Conven plugins'
 complete -c conven -f -n '__fish_use_subcommand' -a doctor -d 'Validate workspace configuration'
 complete -c conven -f -n '__fish_use_subcommand' -a help -d 'Show conven usage'
 complete -c conven -f -n '__fish_use_subcommand' -a version -d 'Show conven version'
-complete -c conven -n '__conven_using_subcommand init services config policy doctor' -s h -l help -d 'Show command help'
+complete -c conven -n '__conven_using_subcommand init services config policy plugins doctor' -s h -l help -d 'Show command help'
 complete -c conven -n '__conven_using_subcommand config' -l global -d 'Use the current user global config'
 complete -c conven -n '__conven_using_subcommand config' -l list -d 'List configuration values'
 complete -c conven -n '__conven_using_subcommand config' -l unset -d 'Remove one configuration value'
@@ -325,6 +385,9 @@ complete -c conven -n '__conven_using_subcommand policy; and __conven_policy_wit
 complete -c conven -n '__conven_using_subcommand policy; and __conven_policy_without_action' -l reset -d 'Destructively reset the manifest to scanned facts'
 complete -c conven -n '__conven_policy_action_without_edit --import' -l edit -d 'Edit the private import draft before publication'
 complete -c conven -n '__conven_policy_import_without_source' -F
+complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l install -r -a '(__fish_complete_suffix .py)' -d 'Install a Python plugin'
+complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l list -d 'List installed plugins'
+complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l run -r -d 'Run an installed plugin'
 complete -c conven -n '__conven_using_subcommand doctor' -l env -r -d 'Environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l dev -d 'Use the dev environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l test -d 'Use the test environment profile'

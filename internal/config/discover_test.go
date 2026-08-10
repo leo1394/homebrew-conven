@@ -48,7 +48,7 @@ func TestScanServicesFindsSupportedDirectChildRepositories(t *testing.T) {
 	}
 }
 
-func TestInitStoresDiscoveredDescriptionOnlyInWorkspaceLoomDirectory(t *testing.T) {
+func TestInitStoresDiscoveredDescriptionOnlyInWorkspaceConvenDirectory(t *testing.T) {
 	workspace := t.TempDir()
 	writeGoServiceRepository(t, workspace, "api-service", false, "example.com/api-service", "main")
 	repository := filepath.Join(workspace, "api-service")
@@ -83,8 +83,8 @@ type Config struct {
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("source repository changed during init:\nbefore=%#v\nafter=%#v", before, after)
 	}
-	if _, err := os.Stat(filepath.Join(repository, ".loom")); !os.IsNotExist(err) {
-		t.Fatalf("init created a source repository .loom directory: %v", err)
+	if _, err := os.Stat(filepath.Join(repository, ".conven")); !os.IsNotExist(err) {
+		t.Fatalf("init created a source repository .conven directory: %v", err)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestDiscoverWorkspaceAddsByPathAndPreservesManualConfiguration(t *testing.T
 	workspace := t.TempDir()
 	writeGoServiceRepository(t, workspace, "account-service", false, "example.com/account-service", "main")
 	writeGoServiceRepository(t, workspace, "new-service", false, "example.com/new-service", "main")
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, `# keep top comment
 version: 1
 workspace:
@@ -210,7 +210,7 @@ type Config struct {
 	Partner zrpc.RpcClientConf `+"`yaml:\"partnerRpc\"`"+`
 }
 `)
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, `version: 1
 workspace:
   name: test
@@ -262,14 +262,14 @@ services:
 	if repositoryAfter := analyzerRepositorySnapshot(t, repository); !reflect.DeepEqual(repositoryAfter, repositoryBefore) {
 		t.Fatalf("source repository changed during registry:\nbefore=%#v\nafter=%#v", repositoryBefore, repositoryAfter)
 	}
-	if _, err := os.Stat(filepath.Join(repository, ".loom")); !os.IsNotExist(err) {
-		t.Fatalf("registry created a source repository .loom directory: %v", err)
+	if _, err := os.Stat(filepath.Join(repository, ".conven")); !os.IsNotExist(err) {
+		t.Fatalf("registry created a source repository .conven directory: %v", err)
 	}
 }
 
 func TestDiscoverWorkspaceRejectsPruneWithRemainingDependency(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, `version: 1
 workspace:
   name: test
@@ -309,7 +309,7 @@ func TestDiscoverWorkspacePrunePreservesExistingUnsupportedRepository(t *testing
 	workspace := t.TempDir()
 	mustMkdirAll(t, filepath.Join(workspace, "java-service", ".git"))
 	mustMkdirAll(t, filepath.Join(workspace, "java-service", "src"))
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, `version: 1
 workspace:
   name: test
@@ -343,7 +343,7 @@ services:
 func TestDiscoverWorkspaceRejectsNamePathConflictsWithoutWriting(t *testing.T) {
 	workspace := t.TempDir()
 	writeGoServiceRepository(t, workspace, "alpha-service", false, "example.com/alpha-service", "main")
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, `version: 1
 workspace:
   name: test
@@ -377,7 +377,7 @@ services:
 
 func TestDiscoverWorkspaceRejectsPruneThatLeavesDanglingYAMLAlias(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, `version: 1
 workspace:
   name: test
@@ -420,7 +420,7 @@ services:
     runner:
       run: [retained]
 `)
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	mustMkdirAll(t, filepath.Dir(manifestPath))
 	if err := os.Symlink(target, manifestPath); err != nil {
 		t.Fatal(err)
@@ -441,7 +441,7 @@ services:
 
 func TestSaveManifestDocumentRejectsConcurrentEdit(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, `version: 1
 workspace:
   name: test
@@ -483,7 +483,7 @@ services:
 
 func TestDiscoverWorkspaceRejectsPruneHiddenByYAMLMerge(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, `version: 1
 workspace:
   name: test

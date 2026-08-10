@@ -232,7 +232,7 @@ func TestPlanServiceSnapshotsPorts(t *testing.T) {
 func TestPlanServiceUsesPrepareCreatedRunWorkdir(t *testing.T) {
 	plan := dependencyEnvironmentPlan(t, "false", "false")
 	manifestService := plan.Workspace.Manifest.Services["api"]
-	manifestService.Runner.Prepare = []string{"sh", "-c", "mkdir -p \"$LOOM_CONFIG_DIR/go\""}
+	manifestService.Runner.Prepare = []string{"sh", "-c", "mkdir -p \"$CONVEN_CONFIG_DIR/go\""}
 	manifestService.Runner.RunWorkdir = "${runDir}/configs/${service}/go"
 	manifestService.Health = model.Health{Type: "command", Command: []string{"test", "-f", "ready"}}
 	plan.Workspace.Manifest.Services["api"] = manifestService
@@ -316,30 +316,30 @@ func TestPlanServiceRejectsMissingRunWorkdirWithoutPrepare(t *testing.T) {
 }
 
 func TestPlanServiceInjectsResolvedWorkspaceOverUserValue(t *testing.T) {
-	t.Setenv("LOOM_WORKSPACE", "/user/workspace")
+	t.Setenv("CONVEN_WORKSPACE", "/user/workspace")
 	plan := dependencyEnvironmentPlan(t, "false", "false")
 	manifestService := plan.Workspace.Manifest.Services["api"]
-	manifestService.Env = map[string]string{"LOOM_WORKSPACE": "/service/workspace"}
+	manifestService.Env = map[string]string{"CONVEN_WORKSPACE": "/service/workspace"}
 	plan.Workspace.Manifest.Services["api"] = manifestService
 
 	service, err := planService(plan, "api", map[string]bool{"api": true, "a-svc": true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "LOOM_WORKSPACE=" + plan.Workspace.Root
+	want := "CONVEN_WORKSPACE=" + plan.Workspace.Root
 	for _, value := range service.Environment {
-		if strings.HasPrefix(value, "LOOM_WORKSPACE=") {
+		if strings.HasPrefix(value, "CONVEN_WORKSPACE=") {
 			if value != want {
-				t.Fatalf("LOOM_WORKSPACE = %q, want %q", value, want)
+				t.Fatalf("CONVEN_WORKSPACE = %q, want %q", value, want)
 			}
 			return
 		}
 	}
-	t.Fatalf("LOOM_WORKSPACE was not injected: %#v", service.Environment)
+	t.Fatalf("CONVEN_WORKSPACE was not injected: %#v", service.Environment)
 }
 
 func TestBuildPlanUsesFixedWorkspaceRuntimePaths(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
 		t.Fatal(err)
@@ -371,7 +371,7 @@ func TestBuildPlanUsesFixedWorkspaceRuntimePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantStateDir := filepath.Join(canonicalRoot, ".loom", "runtime")
+	wantStateDir := filepath.Join(canonicalRoot, ".conven", "runtime")
 	wantRunDir := filepath.Join(wantStateDir, "current")
 	wantArtifact := filepath.Join(wantRunDir, "artifacts", "api")
 	wantConfigDir := filepath.Join(wantRunDir, "configs", "api")
@@ -387,10 +387,10 @@ func TestBuildPlanUsesFixedWorkspaceRuntimePaths(t *testing.T) {
 	}
 	environment := plannedEnvironment(service.Environment)
 	wantEnvironment := map[string]string{
-		"LOOM_STATE_DIR":    wantStateDir,
-		"LOOM_RUN_DIR":      wantRunDir,
-		"LOOM_ARTIFACT":     wantArtifact,
-		"LOOM_CONFIG_DIR":   wantConfigDir,
+		"CONVEN_STATE_DIR":    wantStateDir,
+		"CONVEN_RUN_DIR":      wantRunDir,
+		"CONVEN_ARTIFACT":     wantArtifact,
+		"CONVEN_CONFIG_DIR":   wantConfigDir,
 		"EXPANDED_STATE":    wantStateDir,
 		"EXPANDED_RUN":      wantRunDir,
 		"EXPANDED_ARTIFACT": wantArtifact,
@@ -479,7 +479,7 @@ func TestPlanConnectionUsesConfiguredKtctlPathBeforeManifestCommand(t *testing.T
 }
 
 func TestPlanConnectionUsesConfiguredKtctlKubeconfig(t *testing.T) {
-	t.Setenv("LOOM_KUBECONFIG", "")
+	t.Setenv("CONVEN_KUBECONFIG", "")
 	t.Setenv("KTCTL_KUBECONFIG", "")
 	t.Setenv("PROFILE_KUBECONFIG", "")
 	t.Setenv("KUBECONFIG", "")

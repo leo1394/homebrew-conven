@@ -72,7 +72,7 @@ func NewStore(workspace string) (*Store, error) {
 		return nil, fmt.Errorf("canonicalize workspace for state: %w", err)
 	}
 	canonical = filepath.Clean(canonical)
-	boundary := filepath.Join(canonical, ".loom")
+	boundary := filepath.Join(canonical, ".conven")
 	workspaceRoot := filepath.Join(boundary, "runtime")
 	return &Store{
 		Root:        workspaceRoot,

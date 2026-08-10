@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidateBuildDiskSpaceThreshold(t *testing.T) {
-	path := "/workspace/.loom/runtime"
+	path := "/workspace/.conven/runtime"
 	below := minimumBuildDiskSpace - 1
 	if err := validateBuildDiskSpace(path, below); err == nil {
 		t.Fatal("space below the hard threshold unexpectedly passed")
@@ -20,7 +20,7 @@ func TestValidateBuildDiskSpaceThreshold(t *testing.T) {
 }
 
 func TestBuildDiskSpaceWarningThreshold(t *testing.T) {
-	path := "/workspace/.loom/runtime"
+	path := "/workspace/.conven/runtime"
 	tests := []struct {
 		name      string
 		available uint64

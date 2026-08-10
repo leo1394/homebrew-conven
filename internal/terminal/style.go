@@ -10,7 +10,6 @@ import (
 
 const (
 	reset      = "\x1b[0m"
-	boldBlue   = "\x1b[1;34m"
 	boldCyan   = "\x1b[1;36m"
 	boldYellow = "\x1b[1;33m"
 	boldRed    = "\x1b[1;31m"
@@ -40,7 +39,15 @@ func newStyle(output io.Writer, isTerminal func(int) bool) Style {
 }
 
 func (style Style) Label(value string) string {
-	return style.wrap(boldBlue, value)
+	return value
+}
+
+func (style Style) Stage(value string) string {
+	return style.wrap(boldGreen, "==> "+value)
+}
+
+func (style Style) Detail(value string) string {
+	return "  - " + value
 }
 
 func (style Style) Identifier(value string) string {

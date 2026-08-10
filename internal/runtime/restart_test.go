@@ -12,7 +12,7 @@ import (
 )
 
 func TestRestartOnlyReloadsChangedServicesAndPreservesLogs(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	for _, name := range []string{"api", "order"} {
 		directory := filepath.Join(workspaceRoot, name)
@@ -224,7 +224,7 @@ func TestRestartDoesNotRematerializeUnchangedServiceConfig(t *testing.T) {
 }
 
 func TestRestartUsesPrepareCreatedRunWorkdir(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	serviceDirectory := filepath.Join(workspaceRoot, "api")
 	if err := os.Mkdir(serviceDirectory, 0700); err != nil {
@@ -241,7 +241,7 @@ func TestRestartUsesPrepareCreatedRunWorkdir(t *testing.T) {
 			"api": {
 				Path: "api",
 				Runner: model.Runner{
-					Prepare:    []string{"sh", "-c", `mkdir -p "$LOOM_CONFIG_DIR/go" && printf 'prepared\n' > "$LOOM_CONFIG_DIR/go/ready"`},
+					Prepare:    []string{"sh", "-c", `mkdir -p "$CONVEN_CONFIG_DIR/go" && printf 'prepared\n' > "$CONVEN_CONFIG_DIR/go/ready"`},
 					RunWorkdir: "${runDir}/configs/${service}/go",
 					Run:        []string{"sh", "-c", "pwd; test -f ready; while :; do sleep 1; done"},
 				},
@@ -284,7 +284,7 @@ func TestRestartUsesPrepareCreatedRunWorkdir(t *testing.T) {
 }
 
 func TestRestartChecksRunWorkdirBeforeStoppingOldProcess(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	serviceDirectory := filepath.Join(workspaceRoot, "api")
 	if err := os.Mkdir(serviceDirectory, 0700); err != nil {
@@ -301,7 +301,7 @@ func TestRestartChecksRunWorkdirBeforeStoppingOldProcess(t *testing.T) {
 			"api": {
 				Path: "api",
 				Runner: model.Runner{
-					Prepare:    []string{"sh", "-c", `mkdir -p "$LOOM_CONFIG_DIR/go"`},
+					Prepare:    []string{"sh", "-c", `mkdir -p "$CONVEN_CONFIG_DIR/go"`},
 					RunWorkdir: "${runDir}/configs/${service}/go",
 					Run:        []string{"sleep", "600"},
 				},
@@ -339,7 +339,7 @@ func TestRestartChecksRunWorkdirBeforeStoppingOldProcess(t *testing.T) {
 }
 
 func TestRestartSkipBuildReusesCurrentRunArtifact(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	serviceDirectory := filepath.Join(workspaceRoot, "api")
 	if err := os.Mkdir(serviceDirectory, 0700); err != nil {
@@ -440,7 +440,7 @@ func TestRestartRejectsSymlinkedCurrentSubdirectory(t *testing.T) {
 }
 
 func TestStartDoesNotConsumeSourceChangesMadeDuringBuild(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	workspace, sourcePath, markerPath, gatePath := blockingBuildWorkspace(t, workspaceRoot)
 	var output strings.Builder
@@ -485,7 +485,7 @@ func TestStartDoesNotConsumeSourceChangesMadeDuringBuild(t *testing.T) {
 }
 
 func TestRestartDoesNotConsumeSourceChangesMadeDuringBuild(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	workspace, sourcePath, markerPath, gatePath := blockingBuildWorkspace(t, workspaceRoot)
 	if err := os.WriteFile(gatePath, []byte("initial start\n"), 0600); err != nil {

@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/leo1394/homebrew-conven/internal/convenhome"
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 	"golang.org/x/sys/unix"
 )
 
@@ -53,6 +55,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	style := terminal.New(output)
 	if len(config.Readiness) == 0 {
 		return nil, errors.New("connection readiness must contain at least one TCP endpoint")
 	}
@@ -125,10 +128,10 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 			process := record.Process
 			process.Owned = false
 			process.Managed = true
-			fmt.Fprintln(output, "Remote endpoints are reachable through a managed shared connection; lease added.")
+			fmt.Fprintln(output, style.Success("✓ Remote endpoints are reachable through a managed shared connection; lease added."))
 			return &process, nil
 		}
-		fmt.Fprintln(output, "Remote endpoints are already reachable; reusing the external connection.")
+		fmt.Fprintln(output, style.Success("✓ Remote endpoints are already reachable; reusing the external connection."))
 		return &ConnectionProcess{
 			Driver:      config.Driver,
 			Owned:       false,
@@ -164,15 +167,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 		}
 	}
 	if config.Sudo {
-		validation := exec.Command("sudo", "-v")
-		validation.Stdin = os.Stdin
-		validation.Stdout = output
-		validation.Stderr = output
-		validation.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		if err := validation.Start(); err != nil {
-			return nil, fmt.Errorf("sudo authorization failed: %w", err)
-		}
-		if err := waitCommandContext(ctx, validation, syscall.SIGTERM, time.Second); err != nil {
+		if err := authorizeSudo(ctx, output); err != nil {
 			return nil, fmt.Errorf("sudo authorization failed: %w", err)
 		}
 	}
@@ -183,7 +178,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 	if config.Timeout <= 0 {
 		config.Timeout = 60 * time.Second
 	}
-	fmt.Fprintf(output, "Waiting for %s connection readiness...\n", config.Driver)
+	fmt.Fprintf(output, "%s %s\n", style.Stage("Waiting for connection readiness"), style.Identifier(config.Driver))
 	waitContext, cancel := context.WithTimeout(ctx, config.Timeout)
 	defer cancel()
 	for {
@@ -217,7 +212,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 				}
 				return nil, err
 			}
-			fmt.Fprintf(output, "%s connection is ready.\n", config.Driver)
+			fmt.Fprintf(output, "%s %s\n", style.Success("✓ Connection ready:"), style.Identifier(config.Driver))
 			return process, nil
 		}
 		timer := time.NewTimer(500 * time.Millisecond)
@@ -610,13 +605,26 @@ func authorizeElevatedConnectionStop() error {
 	if err := exec.Command("sudo", "-n", "-v").Run(); err == nil {
 		return nil
 	}
-	validation := exec.Command("sudo", "-v")
-	validation.Stdin = os.Stdin
-	validation.Stdout = os.Stderr
-	validation.Stderr = os.Stderr
-	if err := validation.Run(); err != nil {
+	if err := authorizeSudo(context.Background(), os.Stderr); err != nil {
 		return fmt.Errorf("sudo authorization required to stop elevated connection: %w", err)
 	}
+	return nil
+}
+
+func authorizeSudo(ctx context.Context, output io.Writer) error {
+	style := terminal.New(output)
+	fmt.Fprintln(output, style.Warning("Sudo authorization required; password input is hidden."))
+	validation := exec.CommandContext(ctx, "sudo", "-v")
+	validation.Stdin = os.Stdin
+	validation.Stdout = output
+	validation.Stderr = output
+	if err := validation.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
+		return err
+	}
+	fmt.Fprintln(output, style.Success("✓ Sudo authorization confirmed."))
 	return nil
 }
 
@@ -640,6 +648,7 @@ func releaseConnection(ctx context.Context, process *ConnectionProcess, lease st
 	if process == nil {
 		return nil
 	}
+	style := terminal.New(output)
 	if !process.Managed {
 		return stopConnection(process, force)
 	}
@@ -655,7 +664,7 @@ func releaseConnection(ctx context.Context, process *ConnectionProcess, lease st
 	if record == nil {
 		current, unverified := connectionRecordState(&connectionRecord{Process: *process})
 		if !current && !unverified {
-			fmt.Fprintf(output, "Shared %s connection record is already absent and its saved process group has exited.\n", process.Driver)
+			fmt.Fprintf(output, "%s %s connection record is already absent and its saved process group has exited.\n", style.Success("✓ Shared"), style.Identifier(process.Driver))
 			return nil
 		}
 		if force {
@@ -664,7 +673,7 @@ func releaseConnection(ctx context.Context, process *ConnectionProcess, lease st
 			if err := stopConnection(&recovery, true); err != nil {
 				return err
 			}
-			fmt.Fprintf(output, "Recovered %s connection from its saved process group after the shared record was lost.\n", process.Driver)
+			fmt.Fprintf(output, "%s %s connection from its saved process group after the shared record was lost.\n", style.Success("✓ Recovered"), style.Identifier(process.Driver))
 			return nil
 		}
 		return fmt.Errorf("managed connection record %s is missing while its saved process group %d is still active", process.Fingerprint, process.PGID)
@@ -675,7 +684,7 @@ func releaseConnection(ctx context.Context, process *ConnectionProcess, lease st
 		if err := saveConnectionRecord(record); err != nil {
 			return err
 		}
-		fmt.Fprintf(output, "Shared %s connection kept for %d other workspace lease(s).\n", record.Process.Driver, len(record.Leases))
+		fmt.Fprintf(output, "%s %s connection kept for %d other workspace lease(s).\n", style.Success("✓ Shared"), style.Identifier(record.Process.Driver), len(record.Leases))
 		return nil
 	}
 	current, unverified := connectionRecordState(record)
@@ -693,7 +702,7 @@ func releaseConnection(ctx context.Context, process *ConnectionProcess, lease st
 	if err := removeConnectionRecord(process.Fingerprint); err != nil {
 		return err
 	}
-	fmt.Fprintf(output, "Shared %s connection stopped after its final workspace lease was released.\n", record.Process.Driver)
+	fmt.Fprintf(output, "%s %s connection stopped after its final workspace lease was released.\n", style.Success("✓ Shared"), style.Identifier(record.Process.Driver))
 	return nil
 }
 
@@ -724,35 +733,45 @@ func unverifiedConnectionError(record *connectionRecord) error {
 }
 
 func connectionStateDirectory() (string, error) {
-	root, err := userConnectionStateBase()
+	root, err := convenhome.Root("")
 	if err != nil {
 		return "", err
 	}
-	directory := filepath.Join(root, ".connections")
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		return "", fmt.Errorf("create connection state directory: %w", err)
+	state := filepath.Join(root, "state")
+	directory := filepath.Join(root, "state", "connections")
+	for _, item := range []struct {
+		path  string
+		label string
+	}{
+		{path: root, label: "Conven home"},
+		{path: state, label: "Conven state directory"},
+		{path: directory, label: "Conven connection state directory"},
+	} {
+		if err := ensurePrivateConnectionDirectory(item.path, item.label); err != nil {
+			return "", err
+		}
 	}
 	return directory, nil
 }
 
-func userConnectionStateBase() (string, error) {
-	if value := os.Getenv("LOOM_STATE_HOME"); value != "" {
-		if !filepath.IsAbs(value) {
-			return "", errors.New("LOOM_STATE_HOME must be an absolute path")
+func ensurePrivateConnectionDirectory(path string, label string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if mkdirErr := os.Mkdir(path, 0700); mkdirErr != nil && !os.IsExist(mkdirErr) {
+			return fmt.Errorf("create %s %q: %w", label, path, mkdirErr)
 		}
-		return filepath.Clean(value), nil
+		info, err = os.Lstat(path)
 	}
-	if value := os.Getenv("XDG_STATE_HOME"); value != "" {
-		if !filepath.IsAbs(value) {
-			return "", errors.New("XDG_STATE_HOME must be an absolute path")
-		}
-		return filepath.Join(filepath.Clean(value), "loom"), nil
-	}
-	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
+		return fmt.Errorf("inspect %s %q: %w", label, path, err)
 	}
-	return filepath.Join(home, ".local", "state", "loom"), nil
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("%s %q must be a directory; symbolic links are not allowed", label, path)
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		return fmt.Errorf("protect %s %q: %w", label, path, err)
+	}
+	return nil
 }
 
 func connectionRecordPath(fingerprint string) (string, error) {
@@ -958,6 +977,7 @@ func activeConnectionRecords(currentLease string, driver string) ([]connectionRe
 }
 
 func printSharedConnectionStatus(ctx context.Context, output io.Writer) (int, error) {
+	style := terminal.New(output)
 	unlock, err := acquireConnectionLock(ctx)
 	if err != nil {
 		return 0, err
@@ -995,15 +1015,16 @@ func printSharedConnectionStatus(ctx context.Context, output io.Writer) (int, er
 			state = "unverified"
 		}
 		if count == 0 {
-			fmt.Fprintln(output, "Shared connection records in this Conven state root:")
+			fmt.Fprintln(output, style.Stage("Shared connection records in this Conven state root:"))
 		}
-		fmt.Fprintf(output, "connection/%-12s %-10s fingerprint=%s pid=%d pgid=%d effective-leases=%d log=%s\n", record.Process.Driver, state, fingerprint, record.Process.PID, record.Process.PGID, len(preview.Leases), record.Process.LogPath)
+		fmt.Fprintln(output, style.Detail(fmt.Sprintf("%s: %s, fingerprint=%s pid=%d pgid=%d effective-leases=%d log=%s", style.Identifier("connection/"+record.Process.Driver), styledProcessState(style, state, 0), fingerprint, record.Process.PID, record.Process.PGID, len(preview.Leases), record.Process.LogPath)))
 		count++
 	}
 	return count, nil
 }
 
 func recoverUnleasedConnections(ctx context.Context, currentLease string, output io.Writer) (int, error) {
+	style := terminal.New(output)
 	unlock, err := acquireConnectionLock(ctx)
 	if err != nil {
 		return 0, err
@@ -1040,7 +1061,8 @@ func recoverUnleasedConnections(ctx context.Context, currentLease string, output
 		}
 		current, unverified := connectionRecordState(record)
 		if current || unverified {
-			fmt.Fprintf(output, "Force recovering unleased %s connection fingerprint %s process group %d...\n", record.Process.Driver, fingerprint, record.Process.PGID)
+			fmt.Fprintf(output, "%s %s\n", style.Stage("Force recovering unleased connection"), style.Identifier(record.Process.Driver))
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("Fingerprint: %s, process group: %d", fingerprint, record.Process.PGID)))
 			if err := stopConnection(&record.Process, true); err != nil {
 				if saveErr := saveConnectionRecord(record); saveErr != nil {
 					return recovered, errors.Join(err, saveErr)

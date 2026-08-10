@@ -19,6 +19,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Check project plugins are not bundled
+        run: test ! -e internal/plugins/builtin/generate-apollo-consul.py
       - name: Test
         run: go test ./...
       - name: Vet
@@ -34,7 +36,7 @@ jobs:
         run: |
           ruby -c Formula/conven.rb
           brew style Formula/conven.rb
-      - name: Install and test HEAD Formula from checkout
+      - name: Install and test stable and HEAD Formula from checkout
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1
         run: |
@@ -46,6 +48,9 @@ jobs:
           cp Formula/conven.rb "$formula"
           ruby -pi -e 'url = "file://" + ENV.fetch("GITHUB_WORKSPACE"); $_ = $_.sub(/^  head .*$/, "  head #{url.inspect}, using: :git")' "$formula"
           grep -F "head \"file://$GITHUB_WORKSPACE\", using: :git" "$formula"
+          brew install "$tap/conven"
+          brew test "$tap/conven"
+          brew uninstall "$tap/conven"
           brew install --HEAD "$tap/conven"
           brew test "$tap/conven"
 
@@ -59,7 +64,7 @@ jobs:
           grep -Fq "#compdef conven" "$completion_dir/_conven"
           grep -Fq "complete -c conven" "$completion_dir/conven.fish"
           bash_top="$(grep -m 1 -F 'compgen -W "' "$completion_dir/conven.bash" | sed -E 's/.*compgen -W "([^"]+)".*/\1/')"
-          for command in init services config policy doctor help version; do
+          for command in init services config policy plugins doctor help version; do
             case " $bash_top " in
               *" $command "*) ;;
               *) echo "missing bash top-level completion: $command" >&2; exit 1 ;;
@@ -80,6 +85,11 @@ jobs:
             grep -Fq -- "-l $action" "$completion_dir/conven.fish"
           done
           for action in edit import reset; do
+            grep -Fq -- "--$action" "$completion_dir/conven.bash"
+            grep -Fq -- "--$action" "$completion_dir/_conven"
+            grep -Fq -- "-l $action" "$completion_dir/conven.fish"
+          done
+          for action in install list run; do
             grep -Fq -- "--$action" "$completion_dir/conven.bash"
             grep -Fq -- "--$action" "$completion_dir/_conven"
             grep -Fq -- "-l $action" "$completion_dir/conven.fish"

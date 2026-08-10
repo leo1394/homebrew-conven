@@ -13,8 +13,8 @@ func ResolveKubeconfig(connection model.Connection, explicit string, configured 
 	if value := strings.TrimSpace(explicit); value != "" {
 		return normalizeKubeconfig(value, "command line")
 	}
-	if value := strings.TrimSpace(os.Getenv("LOOM_KUBECONFIG")); value != "" {
-		return normalizeKubeconfig(value, "LOOM_KUBECONFIG")
+	if value := strings.TrimSpace(os.Getenv("CONVEN_KUBECONFIG")); value != "" {
+		return normalizeKubeconfig(value, "CONVEN_KUBECONFIG")
 	}
 	if value := strings.TrimSpace(os.Getenv("KTCTL_KUBECONFIG")); value != "" {
 		return normalizeKubeconfig(value, "KTCTL_KUBECONFIG")

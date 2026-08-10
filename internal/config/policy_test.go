@@ -35,7 +35,7 @@ services:
 
 func TestEditWorkspacePolicyPublishesExactValidatedDraft(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	nested := filepath.Join(workspace, "nested", "directory")
 	mustMkdirAll(t, nested)
@@ -43,7 +43,7 @@ func TestEditWorkspacePolicyPublishesExactValidatedDraft(t *testing.T) {
 	candidate = strings.Replace(candidate, "name: test", "name: edited", 1)
 
 	result, err := EditWorkspacePolicy(nested, func(path string) error {
-		if filepath.Dir(path) != filepath.Join(workspace, ".loom", "backups") {
+		if filepath.Dir(path) != filepath.Join(workspace, ".conven", "backups") {
 			t.Fatalf("draft path = %q", path)
 		}
 		info, err := os.Stat(path)
@@ -68,7 +68,7 @@ func TestEditWorkspacePolicyPublishesExactValidatedDraft(t *testing.T) {
 	if string(data) != candidate {
 		t.Fatalf("manifest was re-encoded:\n%s", data)
 	}
-	backupDirectory := filepath.Join(workspace, ".loom", "backups")
+	backupDirectory := filepath.Join(workspace, ".conven", "backups")
 	entries, err := os.ReadDir(backupDirectory)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestEditWorkspacePolicyPublishesExactValidatedDraft(t *testing.T) {
 	if info.Mode().Perm() != 0700 {
 		t.Fatalf("backup directory mode = %o", info.Mode().Perm())
 	}
-	ignore, err := os.ReadFile(filepath.Join(workspace, ".loom", ".gitignore"))
+	ignore, err := os.ReadFile(filepath.Join(workspace, ".conven", ".gitignore"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestEditWorkspacePolicyPublishesExactValidatedDraft(t *testing.T) {
 
 func TestEditWorkspacePolicyNoChangeDoesNotReplaceManifest(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	before, err := os.Stat(manifestPath)
 	if err != nil {
@@ -119,7 +119,7 @@ func TestEditWorkspacePolicyNoChangeDoesNotReplaceManifest(t *testing.T) {
 
 func TestEditWorkspacePolicyRejectsInvalidDraftAndPreservesIt(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 
 	result, err := EditWorkspacePolicy(workspace, func(path string) error {
@@ -128,7 +128,7 @@ func TestEditWorkspacePolicyRejectsInvalidDraftAndPreservesIt(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "edited policy manifest is invalid") || !strings.Contains(err.Error(), "is kept") {
 		t.Fatalf("error = %v", err)
 	}
-	if result.DraftPath == "" || filepath.Dir(result.DraftPath) != filepath.Join(workspace, ".loom", "backups") {
+	if result.DraftPath == "" || filepath.Dir(result.DraftPath) != filepath.Join(workspace, ".conven", "backups") {
 		t.Fatalf("result = %#v", result)
 	}
 	draft, readErr := os.ReadFile(result.DraftPath)
@@ -139,7 +139,7 @@ func TestEditWorkspacePolicyRejectsInvalidDraftAndPreservesIt(t *testing.T) {
 		t.Fatalf("preserved draft = %q", draft)
 	}
 	assertFileContents(t, manifestPath, editablePolicyManifest)
-	ignore, err := os.ReadFile(filepath.Join(workspace, ".loom", ".gitignore"))
+	ignore, err := os.ReadFile(filepath.Join(workspace, ".conven", ".gitignore"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestEditWorkspacePolicyRejectsInvalidDraftAndPreservesIt(t *testing.T) {
 
 func TestEditWorkspacePolicyRejectsConcurrentManifestEdit(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	concurrent := strings.Replace(editablePolicyManifest, "# original comment", "# concurrent edit", 1)
 	candidate := strings.Replace(editablePolicyManifest, "# original comment", "# draft edit", 1)
@@ -176,7 +176,7 @@ func TestEditWorkspacePolicyRejectsConcurrentManifestEdit(t *testing.T) {
 
 func TestEditWorkspacePolicyNoOpRejectsConcurrentManifestEdit(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	concurrent := strings.Replace(editablePolicyManifest, "# original comment", "# concurrent edit", 1)
 
@@ -194,7 +194,7 @@ func TestEditWorkspacePolicyNoOpRejectsConcurrentManifestEdit(t *testing.T) {
 
 func TestEditWorkspacePolicyCanRepairInvalidManifest(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, "broken: [\n")
 
 	result, err := EditWorkspacePolicy(workspace, func(path string) error {
@@ -213,7 +213,7 @@ func TestEditWorkspacePolicyCanRepairInvalidManifest(t *testing.T) {
 
 func TestEditWorkspacePolicyMissingManifestSuggestsReset(t *testing.T) {
 	workspace := t.TempDir()
-	mustMkdirAll(t, filepath.Join(workspace, ".loom"))
+	mustMkdirAll(t, filepath.Join(workspace, ".conven"))
 	_, err := EditWorkspacePolicy(workspace, func(string) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "policy --reset") {
 		t.Fatalf("error = %v", err)
@@ -222,7 +222,7 @@ func TestEditWorkspacePolicyMissingManifestSuggestsReset(t *testing.T) {
 
 func TestImportWorkspacePolicyCopiesLocalFileAndBacksUpManifest(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	importDirectory := t.TempDir()
 	importPath := filepath.Join(importDirectory, "reusable-policy.yaml")
@@ -240,14 +240,14 @@ func TestImportWorkspacePolicyCopiesLocalFileAndBacksUpManifest(t *testing.T) {
 	assertFileContents(t, manifestPath, templatePolicyManifest)
 	assertFileContents(t, importPath, templatePolicyManifest)
 	assertFileContents(t, result.BackupPath, editablePolicyManifest)
-	if !strings.HasPrefix(filepath.Base(result.BackupPath), "loom.yaml-before-import-") {
+	if !strings.HasPrefix(filepath.Base(result.BackupPath), "conven.yaml-before-import-") {
 		t.Fatalf("backup path = %q", result.BackupPath)
 	}
 }
 
 func TestImportWorkspacePolicyNoOpPreservesManifestAndCreatesNoBackup(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	before, err := os.Stat(manifestPath)
 	if err != nil {
@@ -272,14 +272,14 @@ func TestImportWorkspacePolicyNoOpPreservesManifestAndCreatesNoBackup(t *testing
 	if !os.SameFile(before, after) {
 		t.Fatal("no-op import replaced the manifest inode")
 	}
-	if _, err := os.Stat(filepath.Join(workspace, ".loom", "backups")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(workspace, ".conven", "backups")); !os.IsNotExist(err) {
 		t.Fatalf("no-op import created backups: %v", err)
 	}
 }
 
 func TestImportWorkspacePolicyCreatesMissingPrivateManifest(t *testing.T) {
 	workspace := t.TempDir()
-	boundary := filepath.Join(workspace, ".loom")
+	boundary := filepath.Join(workspace, ".conven")
 	if err := os.Mkdir(boundary, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestImportWorkspacePolicyCreatesMissingPrivateManifest(t *testing.T) {
 
 func TestImportWorkspacePolicyResolvesRelativePathFromInvocationDirectory(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	nested := filepath.Join(workspace, "nested")
 	mustMkdirAll(t, nested)
@@ -328,7 +328,7 @@ func TestImportWorkspacePolicyResolvesRelativePathFromInvocationDirectory(t *tes
 
 func TestImportWorkspacePolicyEditsImportSeedBeforePublishing(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	importPath := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(importPath, []byte(templatePolicyManifest), 0600); err != nil {
@@ -357,7 +357,7 @@ func TestImportWorkspacePolicyEditsImportSeedBeforePublishing(t *testing.T) {
 
 func TestImportWorkspacePolicyRejectsInvalidFileWithoutWriting(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	importPath := filepath.Join(t.TempDir(), "invalid.yaml")
 	if err := os.WriteFile(importPath, []byte("version: 1\nunknown: true\n"), 0600); err != nil {
@@ -372,14 +372,14 @@ func TestImportWorkspacePolicyRejectsInvalidFileWithoutWriting(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	assertFileContents(t, manifestPath, editablePolicyManifest)
-	if _, err := os.Stat(filepath.Join(workspace, ".loom", "backups")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(workspace, ".conven", "backups")); !os.IsNotExist(err) {
 		t.Fatalf("invalid import created backups: %v", err)
 	}
 }
 
 func TestImportWorkspacePolicyRejectsMissingOrDirectorySource(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 
 	if _, err := ImportWorkspacePolicy(workspace, "missing.yaml", nil); err == nil || !strings.Contains(err.Error(), "inspect policy import") {
@@ -393,7 +393,7 @@ func TestImportWorkspacePolicyRejectsMissingOrDirectorySource(t *testing.T) {
 
 func TestImportWorkspacePolicyRejectsFIFOAndOversizeSource(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	importDirectory := t.TempDir()
 	fifoPath := filepath.Join(importDirectory, "policy.fifo")
@@ -415,7 +415,7 @@ func TestImportWorkspacePolicyRejectsFIFOAndOversizeSource(t *testing.T) {
 
 func TestImportWorkspacePolicyEditCanRepairInvalidSource(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	importPath := filepath.Join(t.TempDir(), "invalid.yaml")
 	if err := os.WriteFile(importPath, []byte("version: [\n"), 0600); err != nil {
@@ -438,7 +438,7 @@ func TestImportWorkspacePolicyEditCanRepairInvalidSource(t *testing.T) {
 
 func TestImportWorkspacePolicyRejectsSymlinkAndCurrentManifestSource(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	importDirectory := t.TempDir()
 	importPath := filepath.Join(importDirectory, "policy.yaml")
@@ -468,14 +468,14 @@ func TestImportWorkspacePolicyRejectsSymlinkAndCurrentManifestSource(t *testing.
 
 func TestPolicyCommandsRejectSymbolicLinkWorkspaceBoundary(t *testing.T) {
 	workspace := t.TempDir()
-	target := filepath.Join(t.TempDir(), ".loom")
+	target := filepath.Join(t.TempDir(), ".conven")
 	mustMkdirAll(t, target)
-	writeDiscoveryFile(t, filepath.Join(target, "loom.yaml"), editablePolicyManifest)
+	writeDiscoveryFile(t, filepath.Join(target, "conven.yaml"), editablePolicyManifest)
 	importPath := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(importPath, []byte(templatePolicyManifest), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(workspace, ".loom")); err != nil {
+	if err := os.Symlink(target, filepath.Join(workspace, ".conven")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := EditWorkspacePolicy(workspace, func(string) error { return nil }); err == nil || !strings.Contains(err.Error(), "real directory") {
@@ -494,9 +494,9 @@ func TestPolicyCommandsRejectSymbolicLinkManifest(t *testing.T) {
 	writeGoServiceRepository(t, workspace, "api-service", false, "example.com/api-service", "main")
 	target := filepath.Join(workspace, "manifest-target.yaml")
 	writeDiscoveryFile(t, target, editablePolicyManifest)
-	boundary := filepath.Join(workspace, ".loom")
+	boundary := filepath.Join(workspace, ".conven")
 	mustMkdirAll(t, boundary)
-	manifestPath := filepath.Join(boundary, "loom.yaml")
+	manifestPath := filepath.Join(boundary, "conven.yaml")
 	if err := os.Symlink(target, manifestPath); err != nil {
 		t.Fatal(err)
 	}
@@ -523,9 +523,9 @@ func TestPolicyCommandsRejectSymbolicLinkManifest(t *testing.T) {
 	}
 }
 
-func TestPublishManifestUpdateRejectsConcurrentLoomWriterLock(t *testing.T) {
+func TestPublishManifestUpdateRejectsConcurrentConvenWriterLock(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	source, sourceInfo, err := readManifestForUpdate(manifestPath)
 	if err != nil {
@@ -554,7 +554,7 @@ func TestResetWorkspacePolicyFromScanBacksUpAndRebuildsManifest(t *testing.T) {
 	writeGoServiceRepository(t, workspace, "api-service", false, "example.com/api-service", "main")
 	repository := filepath.Join(workspace, "api-service")
 	beforeRepository := analyzerRepositorySnapshot(t, repository)
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	original := `# manual configuration
 version: 1
 workspace:
@@ -609,10 +609,10 @@ services:
 	if afterRepository := analyzerRepositorySnapshot(t, repository); !reflect.DeepEqual(afterRepository, beforeRepository) {
 		t.Fatalf("source repository changed during restore:\nbefore=%#v\nafter=%#v", beforeRepository, afterRepository)
 	}
-	if _, err := os.Stat(filepath.Join(repository, ".loom")); !os.IsNotExist(err) {
-		t.Fatalf("restore created a source repository .loom directory: %v", err)
+	if _, err := os.Stat(filepath.Join(repository, ".conven")); !os.IsNotExist(err) {
+		t.Fatalf("restore created a source repository .conven directory: %v", err)
 	}
-	ignore, err := os.ReadFile(filepath.Join(workspace, ".loom", ".gitignore"))
+	ignore, err := os.ReadFile(filepath.Join(workspace, ".conven", ".gitignore"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +624,7 @@ services:
 func TestResetWorkspacePolicyFromScanRepairsInvalidManifest(t *testing.T) {
 	workspace := t.TempDir()
 	writeGoServiceRepository(t, workspace, "api-service", false, "example.com/api-service", "main")
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	original := "invalid: [\n"
 	writeDiscoveryFile(t, manifestPath, original)
 
@@ -641,7 +641,7 @@ func TestResetWorkspacePolicyFromScanRepairsInvalidManifest(t *testing.T) {
 func TestResetWorkspacePolicyFromScanCreatesMissingManifest(t *testing.T) {
 	workspace := t.TempDir()
 	writeGoServiceRepository(t, workspace, "api-service", false, "example.com/api-service", "main")
-	mustMkdirAll(t, filepath.Join(workspace, ".loom"))
+	mustMkdirAll(t, filepath.Join(workspace, ".conven"))
 	nested := filepath.Join(workspace, "api-service", "go")
 
 	result, err := ResetWorkspacePolicyFromScan(nested)
@@ -651,14 +651,14 @@ func TestResetWorkspacePolicyFromScanCreatesMissingManifest(t *testing.T) {
 	if !result.Created || !result.Changed || result.BackupPath != "" {
 		t.Fatalf("result = %#v", result)
 	}
-	if _, err := Load(filepath.Join(workspace, ".loom", "loom.yaml")); err != nil {
+	if _, err := Load(filepath.Join(workspace, ".conven", "conven.yaml")); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestResetWorkspacePolicyFromScanRejectsEmptyScanWithoutWriting(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 
 	result, err := ResetWorkspacePolicyFromScan(workspace)
@@ -669,7 +669,7 @@ func TestResetWorkspacePolicyFromScanRejectsEmptyScanWithoutWriting(t *testing.T
 		t.Fatalf("result = %#v", result)
 	}
 	assertFileContents(t, manifestPath, editablePolicyManifest)
-	if _, err := os.Stat(filepath.Join(workspace, ".loom", "backups")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(workspace, ".conven", "backups")); !os.IsNotExist(err) {
 		t.Fatalf("empty scan created backups: %v", err)
 	}
 }
@@ -677,10 +677,10 @@ func TestResetWorkspacePolicyFromScanRejectsEmptyScanWithoutWriting(t *testing.T
 func TestResetWorkspacePolicyFromScanRejectsBackupSymlink(t *testing.T) {
 	workspace := t.TempDir()
 	writeGoServiceRepository(t, workspace, "api-service", false, "example.com/api-service", "main")
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	target := t.TempDir()
-	if err := os.Symlink(target, filepath.Join(workspace, ".loom", "backups")); err != nil {
+	if err := os.Symlink(target, filepath.Join(workspace, ".conven", "backups")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -700,7 +700,7 @@ func TestResetWorkspacePolicyFromScanRejectsBackupSymlink(t *testing.T) {
 
 func TestEditWorkspacePolicyPreservesChangedDraftOnEditorError(t *testing.T) {
 	workspace := t.TempDir()
-	manifestPath := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	candidate := strings.Replace(editablePolicyManifest, "name: test", "name: candidate", 1)
 

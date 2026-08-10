@@ -30,9 +30,9 @@ func InitWorkspaceDetails(cwd string, application []byte) (InitResult, error) {
 		return result, err
 	}
 	if sameDirectory(workspace, resolvedUserHome()) {
-		return result, fmt.Errorf("cannot initialize a Conven workspace in the user home directory %q: ~/.loom is reserved for global configuration", workspace)
+		return result, fmt.Errorf("cannot initialize a Conven workspace in the user home directory %q: ~/.conven is reserved for global configuration", workspace)
 	}
-	boundary := filepath.Join(workspace, ".loom")
+	boundary := filepath.Join(workspace, ".conven")
 	info, err := os.Lstat(boundary)
 	if err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
 		return result, fmt.Errorf("Conven workspace boundary %q is not a directory; symbolic links are not allowed", boundary)
@@ -86,14 +86,14 @@ func InitWorkspaceDetails(cwd string, application []byte) (InitResult, error) {
 }
 
 func ensureRuntimeIgnored(boundary string) error {
-	return ensureLoomPathIgnored(boundary, runtimeIgnoreRule)
+	return ensureConvenPathIgnored(boundary, runtimeIgnoreRule)
 }
 
 func ensureBackupsIgnored(boundary string) error {
-	return ensureLoomPathIgnored(boundary, backupsIgnoreRule)
+	return ensureConvenPathIgnored(boundary, backupsIgnoreRule)
 }
 
-func ensureLoomPathIgnored(boundary string, rule string) error {
+func ensureConvenPathIgnored(boundary string, rule string) error {
 	path := filepath.Join(boundary, ".gitignore")
 	info, err := os.Lstat(path)
 	if err == nil {
@@ -134,7 +134,7 @@ func ensureLoomPathIgnored(boundary string, rule string) error {
 }
 
 func publishNewManifest(path string, data []byte) (bool, error) {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".loom-init-*")
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".conven-init-*")
 	if err != nil {
 		return false, fmt.Errorf("create temporary Conven manifest: %w", err)
 	}

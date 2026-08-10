@@ -9,7 +9,7 @@ import (
 
 func TestResolvePathDiscoversWorkspaceRoot(t *testing.T) {
 	workspace := t.TempDir()
-	manifest := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifest := filepath.Join(workspace, ".conven", "conven.yaml")
 	mustWriteFile(t, manifest)
 
 	configPath, resolvedWorkspace, err := ResolvePath(workspace)
@@ -21,16 +21,16 @@ func TestResolvePathDiscoversWorkspaceRoot(t *testing.T) {
 	}
 }
 
-func TestResolvePathIgnoresLoomWorkspaceEnvironment(t *testing.T) {
+func TestResolvePathIgnoresConvenWorkspaceEnvironment(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "workspace")
 	otherWorkspace := filepath.Join(root, "other")
 	cwd := filepath.Join(workspace, "services", "api")
-	manifest := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifest := filepath.Join(workspace, ".conven", "conven.yaml")
 	mustWriteFile(t, manifest)
-	mustWriteFile(t, filepath.Join(otherWorkspace, ".loom", "loom.yaml"))
+	mustWriteFile(t, filepath.Join(otherWorkspace, ".conven", "conven.yaml"))
 	mustMkdirAll(t, cwd)
-	t.Setenv("LOOM_WORKSPACE", otherWorkspace)
+	t.Setenv("CONVEN_WORKSPACE", otherWorkspace)
 
 	configPath, resolvedWorkspace, err := ResolvePath(cwd)
 	if err != nil {
@@ -41,13 +41,13 @@ func TestResolvePathIgnoresLoomWorkspaceEnvironment(t *testing.T) {
 	}
 }
 
-func TestResolvePathDoesNotUseLoomWorkspaceEnvironmentOutsideWorkspace(t *testing.T) {
+func TestResolvePathDoesNotUseConvenWorkspaceEnvironmentOutsideWorkspace(t *testing.T) {
 	root := t.TempDir()
 	cwd := filepath.Join(root, "outside")
 	workspace := filepath.Join(root, "workspace")
 	mustMkdirAll(t, cwd)
-	mustWriteFile(t, filepath.Join(workspace, ".loom", "loom.yaml"))
-	t.Setenv("LOOM_WORKSPACE", workspace)
+	mustWriteFile(t, filepath.Join(workspace, ".conven", "conven.yaml"))
+	t.Setenv("CONVEN_WORKSPACE", workspace)
 
 	_, _, err := ResolvePath(cwd)
 	if err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
@@ -55,9 +55,9 @@ func TestResolvePathDoesNotUseLoomWorkspaceEnvironmentOutsideWorkspace(t *testin
 	}
 }
 
-func TestResolvePathDiscoversNearestDotLoomUpward(t *testing.T) {
+func TestResolvePathDiscoversNearestDotConvenUpward(t *testing.T) {
 	workspace := t.TempDir()
-	manifest := filepath.Join(workspace, ".loom", "loom.yaml")
+	manifest := filepath.Join(workspace, ".conven", "conven.yaml")
 	cwd := filepath.Join(workspace, "services", "api")
 	mustWriteFile(t, manifest)
 	mustMkdirAll(t, cwd)
@@ -75,8 +75,8 @@ func TestResolvePathChoosesNearestNestedWorkspace(t *testing.T) {
 	root := t.TempDir()
 	nested := filepath.Join(root, "nested")
 	cwd := filepath.Join(nested, "services", "api")
-	manifest := filepath.Join(nested, ".loom", "loom.yaml")
-	mustWriteFile(t, filepath.Join(root, ".loom", "loom.yaml"))
+	manifest := filepath.Join(nested, ".conven", "conven.yaml")
+	mustWriteFile(t, filepath.Join(root, ".conven", "conven.yaml"))
 	mustWriteFile(t, manifest)
 	mustMkdirAll(t, cwd)
 
@@ -89,9 +89,9 @@ func TestResolvePathChoosesNearestNestedWorkspace(t *testing.T) {
 	}
 }
 
-func TestResolvePathRejectsRootManifestWithoutDotLoom(t *testing.T) {
+func TestResolvePathRejectsRootManifestWithoutDotConven(t *testing.T) {
 	root := t.TempDir()
-	mustWriteFile(t, filepath.Join(root, "loom.yaml"))
+	mustWriteFile(t, filepath.Join(root, "conven.yaml"))
 
 	_, _, err := ResolvePath(root)
 	if err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
@@ -102,11 +102,11 @@ func TestResolvePathRejectsRootManifestWithoutDotLoom(t *testing.T) {
 func TestResolvePathStopsAtIncompleteBoundary(t *testing.T) {
 	root := t.TempDir()
 	nested := filepath.Join(root, "nested")
-	mustWriteFile(t, filepath.Join(root, ".loom", "loom.yaml"))
-	mustMkdirAll(t, filepath.Join(nested, ".loom"))
+	mustWriteFile(t, filepath.Join(root, ".conven", "conven.yaml"))
+	mustMkdirAll(t, filepath.Join(nested, ".conven"))
 
 	_, _, err := ResolvePath(nested)
-	if err == nil || !strings.Contains(err.Error(), "does not contain loom.yaml") {
+	if err == nil || !strings.Contains(err.Error(), "does not contain conven.yaml") {
 		t.Fatalf("error = %v, want incomplete boundary error", err)
 	}
 }
@@ -114,11 +114,11 @@ func TestResolvePathStopsAtIncompleteBoundary(t *testing.T) {
 func TestResolvePathRejectsAlternativeManifestAtNearestBoundary(t *testing.T) {
 	root := t.TempDir()
 	nested := filepath.Join(root, "nested")
-	mustWriteFile(t, filepath.Join(root, ".loom", "loom.yaml"))
-	mustWriteFile(t, filepath.Join(nested, ".loom", "custom.yaml"))
+	mustWriteFile(t, filepath.Join(root, ".conven", "conven.yaml"))
+	mustWriteFile(t, filepath.Join(nested, ".conven", "custom.yaml"))
 
 	_, _, err := ResolvePath(nested)
-	if err == nil || !strings.Contains(err.Error(), "does not contain loom.yaml") {
+	if err == nil || !strings.Contains(err.Error(), "does not contain conven.yaml") {
 		t.Fatalf("error = %v, want canonical manifest error", err)
 	}
 }
@@ -127,14 +127,14 @@ func TestGlobalConfigDirectoryIsNotWorkspaceBoundary(t *testing.T) {
 	home := t.TempDir()
 	cwd := filepath.Join(home, "projects", "outside")
 	t.Setenv("HOME", home)
-	mustWriteFile(t, filepath.Join(home, ".loom", "config"))
+	mustWriteFile(t, filepath.Join(home, ".conven", "config"))
 	mustMkdirAll(t, cwd)
 
 	_, _, err := ResolvePath(cwd)
 	if err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 		t.Fatalf("ResolvePath error = %v, want outside-workspace error", err)
 	}
-	if strings.Contains(err.Error(), "does not contain loom.yaml") {
+	if strings.Contains(err.Error(), "does not contain conven.yaml") {
 		t.Fatalf("ResolvePath treated global config as an incomplete workspace: %v", err)
 	}
 
@@ -148,8 +148,8 @@ func TestHomeDirectoryIsReservedForGlobalSettings(t *testing.T) {
 	home := t.TempDir()
 	cwd := filepath.Join(home, "services", "api")
 	t.Setenv("HOME", home)
-	mustWriteFile(t, filepath.Join(home, ".loom", "config"))
-	mustWriteFile(t, filepath.Join(home, ".loom", "loom.yaml"))
+	mustWriteFile(t, filepath.Join(home, ".conven", "config"))
+	mustWriteFile(t, filepath.Join(home, ".conven", "conven.yaml"))
 	mustMkdirAll(t, cwd)
 
 	if _, _, err := ResolvePath(cwd); err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
@@ -183,8 +183,8 @@ func TestHomeDirectoryAliasesAreReservedForGlobalSettings(t *testing.T) {
 				cwd = realHome
 			}
 			t.Setenv("HOME", home)
-			mustWriteFile(t, filepath.Join(realHome, ".loom", "config"))
-			mustWriteFile(t, filepath.Join(realHome, ".loom", "loom.yaml"))
+			mustWriteFile(t, filepath.Join(realHome, ".conven", "config"))
+			mustWriteFile(t, filepath.Join(realHome, ".conven", "conven.yaml"))
 
 			if _, _, err := ResolvePath(cwd); err == nil || !strings.Contains(err.Error(), "not a Conven workspace") {
 				t.Fatalf("ResolvePath error = %v, want outside-workspace error", err)
@@ -199,7 +199,7 @@ func TestHomeDirectoryAliasesAreReservedForGlobalSettings(t *testing.T) {
 func TestFindWorkspaceAllowsLocalConfigBeforeManifestExists(t *testing.T) {
 	workspace := t.TempDir()
 	cwd := filepath.Join(workspace, "services", "api")
-	mustMkdirAll(t, filepath.Join(workspace, ".loom"))
+	mustMkdirAll(t, filepath.Join(workspace, ".conven"))
 	mustMkdirAll(t, cwd)
 
 	resolved, err := FindWorkspace(cwd)
@@ -208,6 +208,20 @@ func TestFindWorkspaceAllowsLocalConfigBeforeManifestExists(t *testing.T) {
 	}
 	if resolved != workspace {
 		t.Fatalf("workspace = %q, want %q", resolved, workspace)
+	}
+}
+
+func TestGlobalSettingsPathUsesUnifiedConvenHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path, err := GlobalSettingsPath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".conven", "config")
+	if path != want {
+		t.Fatalf("global settings path = %q, want %q", path, want)
 	}
 }
 

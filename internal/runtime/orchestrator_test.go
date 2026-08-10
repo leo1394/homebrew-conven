@@ -16,9 +16,9 @@ import (
 
 func TestStartStartsOnlySelectedAndRoutesDependencies(t *testing.T) {
 	stateHome := t.TempDir()
-	t.Setenv("LOOM_STATE_HOME", stateHome)
+	t.Setenv("HOME", stateHome)
 	workspaceRoot := t.TempDir()
-	if err := os.Mkdir(filepath.Join(workspaceRoot, ".loom"), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(workspaceRoot, ".conven"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"user-svc", "order-svc", "payment-svc"} {
@@ -68,7 +68,7 @@ func TestStartStartsOnlySelectedAndRoutesDependencies(t *testing.T) {
 	}
 	workspace := &WorkspaceData{
 		Root:       workspaceRoot,
-		ConfigPath: filepath.Join(workspaceRoot, ".loom", "loom.yaml"),
+		ConfigPath: filepath.Join(workspaceRoot, ".conven", "conven.yaml"),
 		Manifest:   manifest,
 		Store:      store,
 	}
@@ -111,7 +111,7 @@ func TestStartStartsOnlySelectedAndRoutesDependencies(t *testing.T) {
 }
 
 func TestStartRunsFromPrepareCreatedRunWorkdir(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestStartRunsFromPrepareCreatedRunWorkdir(t *testing.T) {
 			"api": {
 				Path: "api",
 				Runner: model.Runner{
-					Prepare:    []string{"sh", "-c", `mkdir -p "$LOOM_CONFIG_DIR/go" && printf 'prepared\n' > "$LOOM_CONFIG_DIR/go/ready"`},
+					Prepare:    []string{"sh", "-c", `mkdir -p "$CONVEN_CONFIG_DIR/go" && printf 'prepared\n' > "$CONVEN_CONFIG_DIR/go/ready"`},
 					RunWorkdir: "${runDir}/configs/${service}/go",
 					Run:        []string{"sh", "-c", "pwd; while :; do sleep 1; done"},
 				},
@@ -182,7 +182,7 @@ func TestStartMaterializesConfigBeforePrepareWithoutWritingSource(t *testing.T) 
 				Kind:  "http",
 				Ports: map[string]int{"http": 18080},
 				Runner: model.Runner{
-					Prepare: []string{"sh", "-c", `grep -q 'port: 18080' "$LOOM_CONFIG_DIR/application.yaml"`},
+					Prepare: []string{"sh", "-c", `grep -q 'port: 18080' "$CONVEN_CONFIG_DIR/application.yaml"`},
 					Run:     []string{"sh", "-c", "while :; do sleep 1; done"},
 				},
 			},
@@ -260,7 +260,7 @@ func TestStartDryRunDoesNotFetchOrMaterializeApolloConfig(t *testing.T) {
 }
 
 func TestStartDryRunDoesNotCreateRunWorkdir(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestStartDryRunDoesNotCreateRunWorkdir(t *testing.T) {
 			"api": {
 				Path: "api",
 				Runner: model.Runner{
-					Prepare:    []string{"sh", "-c", `mkdir -p "$LOOM_CONFIG_DIR/go"`},
+					Prepare:    []string{"sh", "-c", `mkdir -p "$CONVEN_CONFIG_DIR/go"`},
 					RunWorkdir: "${runDir}/configs/${service}/go",
 					Run:        []string{"sleep", "600"},
 				},
@@ -405,7 +405,7 @@ func TestStartFailureRetainsPartialCurrentAndClearsSession(t *testing.T) {
 			"api": {
 				Path: "api",
 				Runner: model.Runner{
-					Prepare: []string{"sh", "-c", `printf 'partial\n' > "$LOOM_CONFIG_DIR/partial"; exit 7`},
+					Prepare: []string{"sh", "-c", `printf 'partial\n' > "$CONVEN_CONFIG_DIR/partial"; exit 7`},
 					Run:     []string{"sleep", "600"},
 				},
 			},
@@ -470,7 +470,7 @@ func TestStopPreservesCurrent(t *testing.T) {
 }
 
 func TestStartRejectsMissingRunWorkdirAfterPrepare(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
 		t.Fatal(err)
@@ -508,7 +508,7 @@ func TestStartRejectsMissingRunWorkdirAfterPrepare(t *testing.T) {
 }
 
 func TestDoctorAllowsPrepareCreatedRunWorkdirAndChecksHealthCommand(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
 		t.Fatal(err)
@@ -547,7 +547,7 @@ func TestDoctorAllowsPrepareCreatedRunWorkdirAndChecksHealthCommand(t *testing.T
 }
 
 func TestStartStartsCycleBeforeCheckingGroupHealth(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	for _, name := range []string{"api", "worker"} {
 		if err := os.Mkdir(filepath.Join(workspaceRoot, name), 0700); err != nil {
@@ -618,7 +618,7 @@ func TestValidateSkipBuildRejectsDefaultPerRunArtifact(t *testing.T) {
 
 func TestValidateSkipBuildAllowsPersistentArtifact(t *testing.T) {
 	root := t.TempDir()
-	current := filepath.Join(root, ".loom", "runtime", "current")
+	current := filepath.Join(root, ".conven", "runtime", "current")
 	artifact := filepath.Join(root, "api", "bin", "api")
 	plan := &Plan{
 		RunDir: current,
@@ -642,7 +642,7 @@ func TestValidateSkipBuildRejectsRelativeCustomCurrentArtifact(t *testing.T) {
 			"api": {
 				Artifact: artifact,
 				Build:    []string{"sh", "-c", "build"},
-				Run:      []string{"sh", "-c", `exec "$LOOM_ARTIFACT"`},
+				Run:      []string{"sh", "-c", `exec "$CONVEN_ARTIFACT"`},
 			},
 		},
 	}
@@ -652,7 +652,7 @@ func TestValidateSkipBuildRejectsRelativeCustomCurrentArtifact(t *testing.T) {
 }
 
 func TestStartCancellationDuringPrepareDoesNotStartService(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	serviceDir := filepath.Join(workspaceRoot, "api")
 	if err := os.Mkdir(serviceDir, 0700); err != nil {
@@ -705,15 +705,15 @@ func TestStartCancellationDuringPrepareDoesNotStartService(t *testing.T) {
 }
 
 func TestStartReleasesPreviousConnectionBeforeReplacingStaleSession(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	address := listener.Addr().String()
 	listener.Close()
-	t.Setenv("LOOM_CONNECTION_HELPER", "1")
-	t.Setenv("LOOM_CONNECTION_HELPER_ADDRESS", address)
+	t.Setenv("CONVEN_CONNECTION_HELPER", "1")
+	t.Setenv("CONVEN_CONNECTION_HELPER_ADDRESS", address)
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
 		t.Fatal(err)
@@ -770,7 +770,7 @@ func TestStartReleasesPreviousConnectionBeforeReplacingStaleSession(t *testing.T
 }
 
 func TestStartRollbackStopsExecServiceAndClearsState(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
 		t.Fatal(err)
@@ -804,7 +804,7 @@ func TestStartRollbackStopsExecServiceAndClearsState(t *testing.T) {
 }
 
 func TestStartPreservesStateWhenRollbackCannotVerifyOrphanGroup(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
 		t.Fatal(err)
@@ -855,7 +855,7 @@ func TestStartPreservesStateWhenRollbackCannotVerifyOrphanGroup(t *testing.T) {
 }
 
 func TestForceStopAllRecoversUnleasedSharedConnectionWithoutSession(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{})
 	directory := t.TempDir()
@@ -903,7 +903,7 @@ func TestForceStopAllRecoversUnleasedSharedConnectionWithoutSession(t *testing.T
 }
 
 func TestStopAllStopsFinalManagedConnection(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{})
 	service, err := StartService("connection/ktctl", []string{"sleep", "600"}, workspaceRoot, CommandEnvironment(), filepath.Join(t.TempDir(), "connection.log"))
@@ -964,7 +964,7 @@ func TestStopAllStopsFinalManagedConnection(t *testing.T) {
 }
 
 func TestStopAllKeepsManagedConnectionWithAnotherLease(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{})
 	service, err := StartService("connection/ktctl", []string{"sleep", "600"}, workspaceRoot, CommandEnvironment(), filepath.Join(t.TempDir(), "connection.log"))
@@ -1027,7 +1027,7 @@ func TestStopAllKeepsManagedConnectionWithAnotherLease(t *testing.T) {
 }
 
 func TestStopAllLeavesExternalConnectionRunning(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{})
 	service, err := StartService("external/ktctl", []string{"sleep", "600"}, workspaceRoot, CommandEnvironment(), filepath.Join(t.TempDir(), "connection.log"))
@@ -1068,7 +1068,7 @@ func TestStopAllLeavesExternalConnectionRunning(t *testing.T) {
 }
 
 func TestStatusShowsSavedProcessGroupIdentifiers(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{})
 	if err := workspace.Store.Save(&Session{
@@ -1106,7 +1106,7 @@ func TestStatusShowsSavedProcessGroupIdentifiers(t *testing.T) {
 }
 
 func TestStopClearsSessionWhenDeadSharedConnectionRecordIsAlreadyAbsent(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{})
 	if err := workspace.Store.Save(&Session{
@@ -1138,7 +1138,7 @@ func TestStopClearsSessionWhenDeadSharedConnectionRecordIsAlreadyAbsent(t *testi
 }
 
 func TestStatusWithoutSessionShowsSharedConnectionRecoveryIdentifiers(t *testing.T) {
-	t.Setenv("LOOM_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
 	workspaceRoot := t.TempDir()
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{})
 	record := &connectionRecord{
@@ -1175,7 +1175,7 @@ func TestStatusWithoutSessionShowsSharedConnectionRecoveryIdentifiers(t *testing
 
 func testWorkspace(t *testing.T, root string, manifest *model.Manifest) *WorkspaceData {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(root, ".loom"), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".conven"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	store, err := NewStore(root)
@@ -1184,7 +1184,7 @@ func testWorkspace(t *testing.T, root string, manifest *model.Manifest) *Workspa
 	}
 	return &WorkspaceData{
 		Root:       root,
-		ConfigPath: filepath.Join(root, ".loom", "loom.yaml"),
+		ConfigPath: filepath.Join(root, ".conven", "conven.yaml"),
 		Manifest:   manifest,
 		Store:      store,
 	}

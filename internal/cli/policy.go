@@ -46,7 +46,7 @@ func (app App) runPolicyImport(arguments []string) int {
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --import <yaml-file> [--edit]")
 		flags.PrintDefaults()
-		fmt.Fprintln(flags.Output(), "\nImports the YAML file as the entire .loom/loom.yaml for the workspace resolved from cwd.")
+		fmt.Fprintln(flags.Output(), "\nImports the YAML file as the entire .conven/conven.yaml for the workspace resolved from cwd.")
 		fmt.Fprintln(flags.Output(), "This is a whole-file replacement, not a merge with repository scan results.")
 		fmt.Fprintln(flags.Output(), "An existing manifest is backed up before replacement; --edit opens a private import-seeded draft before publication.")
 	}
@@ -113,7 +113,7 @@ func (app App) runPolicyReset(arguments []string) int {
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --reset")
 		flags.PrintDefaults()
-		fmt.Fprintln(flags.Output(), "\nDestructive: rebuilds the entire loom.yaml from read-only repository analysis.")
+		fmt.Fprintln(flags.Output(), "\nDestructive: rebuilds the entire conven.yaml from read-only repository analysis.")
 		fmt.Fprintln(flags.Output(), "Company policies, environments, ports, dependencies, patches, manual runner changes, and comments cannot be recovered by scanning.")
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
@@ -155,7 +155,7 @@ func (app App) printPolicyUsage(output io.Writer) {
   conven policy --import <yaml-file> [--edit]
   conven policy --reset
 
---edit opens a temporary copy of the workspace's sole .loom/loom.yaml and
+--edit opens a temporary copy of the workspace's sole .conven/conven.yaml and
 publishes it only after strict validation. --import installs an arbitrary local
 YAML file as that entire manifest without merging repository scan results;
 schema validation does not prove that its service paths or infrastructure work.
@@ -166,7 +166,7 @@ can prove.
 
 func launchPolicyEditor(ctx context.Context, input *os.File, output io.Writer, errorOutput io.Writer, path string) error {
 	editor := ""
-	for _, name := range []string{"LOOM_EDITOR", "VISUAL", "EDITOR"} {
+	for _, name := range []string{"CONVEN_EDITOR", "VISUAL", "EDITOR"} {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 			editor = value
 			break

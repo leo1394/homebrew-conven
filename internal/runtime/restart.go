@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/leo1394/homebrew-conven/internal/materialize"
@@ -64,7 +65,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		return nil, err
 	}
 	if len(targets) == 0 {
-		fmt.Fprintln(output, style.Success("No changed local services to restart."))
+		fmt.Fprintln(output, style.Success("✓ No changed local services to restart."))
 		return session, nil
 	}
 	if servicesNeedBuildDiskSpace(plan, targets, options.SkipBuild) {
@@ -72,7 +73,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			return nil, err
 		}
 	}
-	fmt.Fprintf(output, "%s: %s\n", style.Label("Restarting local services"), style.Identifiers(targets, ", "))
+	fmt.Fprintf(output, "%s: %s\n", style.Stage("Restarting local services"), style.Identifier(strings.Join(targets, ", ")))
 
 	targetSet := make(map[string]bool, len(targets))
 	for _, name := range targets {
@@ -83,13 +84,14 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			return nil, fmt.Errorf("create %s runtime config directory: %w", name, err)
 		}
 		if service.Config != nil {
-			fmt.Fprintf(output, "%s %s config with %s/%s...\n", style.Label("Materializing"), style.Identifier(name), style.Identifier(string(service.Config.Plan.SourceDriver)), style.Identifier(string(service.Config.Plan.Driver)))
+			fmt.Fprintf(output, "%s %s config\n", style.Stage("Materializing"), style.Identifier(name))
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("Drivers: %s -> %s", service.Config.Plan.SourceDriver, service.Config.Plan.Driver)))
 			if err := materialize.Materialize(ctx, service.Config.Plan); err != nil {
 				return nil, fmt.Errorf("materialize %s config: %w", name, err)
 			}
 		}
 		if len(service.Prepare) > 0 {
-			fmt.Fprintf(output, "%s %s...\n", style.Label("Preparing"), style.Identifier(name))
+			fmt.Fprintf(output, "%s %s\n", style.Stage("Preparing"), style.Identifier(name))
 			if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
 				return nil, fmt.Errorf("prepare %s: %w", name, err)
 			}
@@ -99,7 +101,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			}
 		}
 		if !options.SkipBuild && len(service.Build) > 0 {
-			fmt.Fprintf(output, "%s %s...\n", style.Label("Building"), style.Identifier(name))
+			fmt.Fprintf(output, "%s %s\n", style.Stage("Building"), style.Identifier(name))
 			if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
 				return nil, fmt.Errorf("build %s: %w", name, err)
 			}
@@ -121,7 +123,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(output, "%s %s for restart...\n", style.Label("Stopping"), style.Identifier(name))
+		fmt.Fprintf(output, "%s %s for restart\n", style.Stage("Stopping"), style.Identifier(name))
 		if err := StopProcess(processes[name], 10*time.Second); err != nil {
 			return nil, fmt.Errorf("stop %s for restart: %w", name, err)
 		}
@@ -138,7 +140,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			continue
 		}
 		if len(groupTargets) > 1 {
-			fmt.Fprintf(output, "%s: %s\n", style.Label("Restarting dependency cycle together"), style.Identifiers(groupTargets, ", "))
+			fmt.Fprintf(output, "%s: %s\n", style.Stage("Restarting dependency cycle together"), style.Identifier(strings.Join(groupTargets, ", ")))
 		}
 		started := make([]string, 0, len(groupTargets))
 		for _, name := range groupTargets {
@@ -150,7 +152,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			if err := appendRestartMarker(service.LogPath); err != nil {
 				return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
 			}
-			fmt.Fprintf(output, "%s %s...\n", style.Label("Starting"), style.Identifier(name))
+			fmt.Fprintf(output, "%s %s\n", style.Stage("Starting"), style.Identifier(name))
 			process, err := StartService(name, service.Run, service.RunWorkdir, service.Environment, service.LogPath)
 			if err != nil {
 				return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
@@ -169,11 +171,11 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 				service := plan.Services[name]
 				process := sessionProcess(session, name)
 				if err := WaitHealthy(ctx, process, service.Health); err != nil {
-					fmt.Fprintf(output, "%s %s log lines:\n", style.Label("Last"), style.Identifier(name))
+					fmt.Fprintf(output, "%s %s; last log lines:\n", style.Failure("✗ Health check failed:"), style.Identifier(name))
 					ShowLogs(context.Background(), session, []string{name}, false, output)
 					return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
 				}
-				fmt.Fprintf(output, "%s %s\n", style.Identifier(name), style.Success("is healthy."))
+				fmt.Fprintf(output, "%s %s\n", style.Success("✓ Healthy:"), style.Identifier(name))
 			}
 		}
 		for _, name := range groupTargets {
@@ -186,7 +188,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			return nil, err
 		}
 	}
-	fmt.Fprintln(output, style.Success("Changed local services were restarted. Use `conven services --logs --tail` to observe them."))
+	fmt.Fprintln(output, style.Success("✓ Changed local services were restarted. Use `conven services --logs --tail` to observe them."))
 	return session, nil
 }
 

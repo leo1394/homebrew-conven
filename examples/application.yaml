@@ -14,7 +14,7 @@ environments:
       # 定制 ktctl 可执行文件：conven config ktctl.path /absolute/path/to/ktctl
       # 也可用 KTCTL_KUBECONFIG，或执行 conven config ktctl.kubeconfig /secure/dev-kubeconfig
       # sudo: true
-      kubeconfigEnv: LOOM_KUBECONFIG
+      kubeconfigEnv: CONVEN_KUBECONFIG
       context: dev-cluster
       namespace: dev
       timeout: 30s

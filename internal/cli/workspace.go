@@ -8,6 +8,7 @@ import (
 
 	"github.com/leo1394/homebrew-conven/examples"
 	"github.com/leo1394/homebrew-conven/internal/config"
+	"github.com/leo1394/homebrew-conven/internal/plugins"
 	convenruntime "github.com/leo1394/homebrew-conven/internal/runtime"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
@@ -38,6 +39,9 @@ func (app App) runInit(arguments []string) int {
 		}
 	} else {
 		fmt.Fprintf(app.Output, "%s %s; manifest was not overwritten.\n", style.Label("Reinitialized existing Conven workspace in"), style.Identifier(result.Path))
+	}
+	if err := plugins.InstallBuiltins(); err != nil {
+		return app.fail(fmt.Errorf("install built-in plugins: %w", err))
 	}
 	return 0
 }
@@ -101,7 +105,7 @@ func (app App) runDiscover(arguments []string) int {
 func (app App) runConfig(arguments []string) int {
 	flags := flag.NewFlagSet("config", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
-	global := flags.Bool("global", false, "use the current user's ~/.loom/config")
+	global := flags.Bool("global", false, "use the current user's ~/.conven/config")
 	list := flags.Bool("list", false, "list configuration values")
 	unset := flags.Bool("unset", false, "remove one configuration value")
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {

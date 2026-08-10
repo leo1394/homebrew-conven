@@ -5,7 +5,7 @@
 `conven` is a focused launcher for local microservice development. It starts only
 the services involved in the current change, keeps the remaining dependencies
 reachable through the development registry, and collects the local session logs
-under `<workspace>/.loom/runtime/current`.
+under `<workspace>/.conven/runtime/current`.
 
 ```text
 Convening local services: user-svc, order-svc, payment-svc
@@ -28,7 +28,7 @@ declared manually in the manifest.
   binding to a local address for selected dependencies. For unselected
   dependencies it injects `remoteEnv` or preserves remote discovery settings.
 - Can read configuration from a service repository or Apollo, generate
-  `.loom/runtime/current/configs/<service>` outside the source tree, and overlay
+  `.conven/runtime/current/configs/<service>` outside the source tree, and overlay
   server-port and dependency-routing patches from a policy.
 - Can establish local-to-cluster connectivity through `ktctl connect`.
 - Records process metadata and per-service logs for later inspection and
@@ -52,6 +52,7 @@ locally.
 - macOS or Linux
 - Go 1.23 or later when building from source
 - Homebrew when installing the Formula
+- Python 3 only when running Python plugins
 - `ktctl` only when using the `ktctl` connection driver
 - `sudo` only when a connection sets `connection.sudo: true`
 
@@ -71,6 +72,14 @@ tag, use:
 brew install --HEAD conven
 ```
 
+After the tap has been added, update Homebrew metadata and upgrade the stable
+Formula with:
+
+```bash
+brew update
+brew upgrade conven
+```
+
 To build directly from a Conven source checkout:
 
 ```bash
@@ -82,9 +91,23 @@ The Formula installs Bash, Zsh, and Fish completions. `__completion` is an
 internal command used by the Formula and normally does not need to be invoked
 directly.
 
-The rename changes the product, executable, repository, and Formula names. For
-workspace compatibility, Conven continues to use `.loom`, `loom.yaml`,
-`~/.loom/config`, `LOOM_*`, and the existing `loom` user-state subdirectory.
+Conven uses `.conven`, `conven.yaml`, `~/.conven`, `CONVEN_*`, and `conven` as
+its canonical workspace, user-home, environment, and command names. It does not
+create a second user-state root under `.local/state` or XDG state directories.
+
+All user-wide files share one root:
+
+```text
+~/.conven/
+├── config
+├── state/
+│   └── connections/
+└── plugins/
+```
+
+The connection registry and plugin directory are created lazily with
+user-only permissions. Project runtime files remain isolated in each
+`<workspace>/.conven/runtime`.
 
 ## Design: generic capabilities and declarative project rules
 
@@ -94,11 +117,11 @@ Conven separates reusable mechanics from project-specific conventions:
   connection management, repository or Apollo configuration input, YAML
   materialization, process lifecycle, and logs.
 - Declarative project rules live in the workspace's sole canonical manifest,
-  `<workspace>/.loom/loom.yaml`. `policies` describe company or framework
+  `<workspace>/.conven/conven.yaml`. `policies` describe company or framework
   conventions, `services` describe ports, dependencies, bindings, and runners,
   and `environments` describe target environments and connections.
 
-There is no separate `.loom/policy.yaml`. Most changes to company conventions,
+There is no separate `.conven/policy.yaml`. Most changes to company conventions,
 ports, field names, or local/remote routing should change declarations. A code
 extension is needed only when a repository layout, configuration protocol, or
 materialization behavior cannot be expressed by the existing analyzer,
@@ -148,20 +171,22 @@ again is safe: an existing manifest is reported but never overwritten. Initial
 publication is atomic and no-replace, so a manifest created concurrently wins
 instead of being overwritten. Use `conven services --registry` after the set of
 child repositories changes. Before first runtime use, Conven adds `/runtime/` to
-`.loom/.gitignore` without replacing existing ignore rules.
+`.conven/.gitignore` without replacing existing ignore rules.
 
 Initialization follows a deliberately narrow sequence:
 
-1. Resolve the workspace directory and validate its `.loom` boundary.
+1. Resolve the workspace directory and validate its `.conven` boundary.
 2. Read only immediate child Git repositories.
 3. Run the built-in `RepositoryAnalyzer` implementations.
 4. Record only facts the analyzers can prove: path, runner, kind, and discovery
    or binding candidates.
-5. Atomically create `.loom/loom.yaml` without replacing a concurrent file. Only
+5. Atomically create `.conven/conven.yaml` without replacing a concurrent file. Only
    `init` may use the embedded example when no repository is a strong match.
-6. Do not contact Apollo, create runtime state, build or start services, or write
+6. Install any missing generic built-in plugins into `~/.conven/plugins` without
+   overwriting an existing user copy. The current built-in set is empty.
+7. Do not contact Apollo, create runtime state, build or start services, or write
    into child repositories.
-7. Use `conven policy --edit` to declare project rules scanning cannot infer, or
+8. Use `conven policy --edit` to declare project rules scanning cannot infer, or
    import a complete candidate from a project-local generator with
    `conven policy --import <yaml-file> --edit`. Then run `doctor`, a start dry-run,
    and the actual start.
@@ -185,26 +210,26 @@ conven services --start --dry-run user-svc order-svc
 ## Editing, importing, or resetting project rules
 
 `policy` is a command name, not a second policy file. All three primary actions
-target the complete canonical `<workspace>/.loom/loom.yaml`:
+target the complete canonical `<workspace>/.conven/conven.yaml`:
 
 ```bash
 conven policy --edit
-conven policy --import ./generated-loom.yaml
-conven policy --import ./generated-loom.yaml --edit
+conven policy --import ./generated-conven.yaml
+conven policy --import ./generated-conven.yaml --edit
 conven policy --reset
 ```
 
 `--edit` copies the current manifest to a private temporary draft and opens the
-first configured editor from `LOOM_EDITOR`, `VISUAL`, or `EDITOR`, falling back
+first configured editor from `CONVEN_EDITOR`, `VISUAL`, or `EDITOR`, falling back
 to `vi`. Editor commands may contain arguments, for example
-`LOOM_EDITOR="code --wait"`; graphical editors must wait for the file to close.
+`CONVEN_EDITOR="code --wait"`; graphical editors must wait for the file to close.
 Conven publishes the draft's exact bytes only after the editor exits successfully,
 strict schema and semantic validation pass, and a best-effort pre-publication
 check detects no change to the canonical source snapshot. On an editor failure,
 invalid YAML, unknown field, or detected concurrent edit, Conven does not publish
 the draft or overwrite the concurrently observed manifest. A rejected changed
-draft is kept with mode `0600` under `.loom/backups/`, which Conven adds to
-`.loom/.gitignore` as `/backups/`.
+draft is kept with mode `0600` under `.conven/backups/`, which Conven adds to
+`.conven/.gitignore` as `/backups/`.
 
 The commit step takes a non-blocking advisory lock on the current manifest
 inode, then rechecks same-file identity and source bytes before rename. This
@@ -213,11 +238,11 @@ to honor that lock, so conflict detection against other tools remains
 best-effort across the final check-to-rename interval.
 
 `--import <yaml-file>` reads a complete local Conven v1 manifest and publishes its
-exact bytes as the entire `.loom/loom.yaml`. A relative source path is resolved
+exact bytes as the entire `.conven/conven.yaml`. A relative source path is resolved
 from the invocation cwd, not from the workspace root. Import never edits or
 moves the source file, and it does not merge the candidate with existing scan or
 manual fields. A changed existing target is first backed up with mode `0600`
-under `.loom/backups/`; byte-identical content is a no-op. With `--edit`, Conven
+under `.conven/backups/`; byte-identical content is a no-op. With `--edit`, Conven
 seeds a private draft from the imported bytes, opens the editor, and leaves the
 source untouched. This also allows an editor to repair an initially invalid
 candidate before publication. In either mode, only the final candidate is
@@ -234,8 +259,8 @@ follow an import with `conven doctor` and
 the entire manifest from current read-only analysis of immediate child Git
 repositories. It is not a rollback, merge, or alias for `services --registry`.
 Before replacing an existing manifest, Conven saves its exact bytes with mode
-`0600` under `.loom/backups/` and prints the backup path. It can rebuild a
-missing or invalid manifest when the real `.loom` workspace boundary still
+`0600` under `.conven/backups/` and prints the backup path. It can rebuild a
+missing or invalid manifest when the real `.conven` workspace boundary still
 exists. If no supported repository is found, it fails without changing the
 canonical manifest and never falls back to the embedded example.
 
@@ -263,8 +288,8 @@ conven services --start --dry-run SERVICE...
 
 ### Generated and manually confirmed fields
 
-v1 has only the central `.loom/loom.yaml`; Conven does not create or read distributed
-`.loom/service.yaml` or a separate Policy Profile file. A standardized project
+v1 has only the central `.conven/conven.yaml`; Conven does not create or read distributed
+`.conven/service.yaml` or a separate Policy Profile file. A standardized project
 configuration commits service, policy, and environment profiles together in the
 central manifest.
 
@@ -292,13 +317,13 @@ complete candidate, not a partial overlay.
 The review-once workflow for such a generator is:
 
 ```bash
-./generate-project-loom-policy              # writes a complete local v1 candidate
-conven policy --import ./generated-loom.yaml --edit
+./generate-project-conven-policy              # writes a complete local v1 candidate
+conven policy --import ./generated-conven.yaml --edit
 conven doctor
 conven services --start --dry-run SERVICE...
 ```
 
-After review, commit the canonical `.loom/loom.yaml`, not a claim that the
+After review, commit the canonical `.conven/conven.yaml`, not a claim that the
 generator made every field automatic. Re-run the generator/import flow only
 when the repository or project defaults change.
 
@@ -307,7 +332,7 @@ Import does not use field-level precedence: complete local candidate → optiona
 `conven services --registry` afterward to conservatively backfill empty analyzer
 metadata; it still cannot infer ports or a dependency graph.
 
-Once maintainers have reviewed and committed a standard `.loom/loom.yaml`, that is
+Once maintainers have reviewed and committed a standard `.conven/conven.yaml`, that is
 the project's one-time confirmation. Developers should not re-import a generated
 candidate after every clone; they configure machine-local
 kubeconfig/credentials, run doctor, and start. Maintainers regenerate/import or use
@@ -351,7 +376,7 @@ the path still identifies the same file and its bytes still equal the source
 snapshot. A detected conflict aborts publication with a retry error. This is
 not a linearizable compare-and-swap against arbitrary external writers: an edit
 in the narrow interval between that check and rename may still be replaced. A
-symbolic-link `.loom/loom.yaml` is rejected because atomic replacement would
+symbolic-link `.conven/conven.yaml` is rejected because atomic replacement would
 otherwise break the link rather than update its target.
 
 Discovery intentionally does not infer ports, a complete dependency graph,
@@ -397,7 +422,7 @@ process has exited, its source-tree fingerprint has changed, or its resolved
 plan fingerprint has changed since that service's most recent successful start
 or restart. In a Git worktree, the source fingerprint covers tracked files and
 non-ignored untracked files under the service directory; outside Git it covers
-the directory contents except `.git` and `.loom`. The plan fingerprint covers
+the directory contents except `.git` and `.conven`. The plan fingerprint covers
 the resolved prepare/build workdir and run workdir, artifact, declared ports,
 command argv, environment, health-check configuration, and the resolved
 policy/config materialization plan. Changing only `runner.runWorkdir` or policy
@@ -417,7 +442,7 @@ conven services --restart --tail user-svc
 ```
 
 Restart uses the current session's environment,
-`.loom/runtime/current`, connection, and per-service log paths. It does not
+`.conven/runtime/current`, connection, and per-service log paths. It does not
 reconnect or interrupt unchanged services. It rematerializes configuration and
 runs prepare/build only for restart targets; artifacts, configurations, and logs
 for unchanged services remain untouched. The existing target log receives a
@@ -463,6 +488,9 @@ conven config [--global] [--list|--unset] [key] [value]
 conven policy --edit
 conven policy --import <yaml-file> [--edit]
 conven policy --reset
+conven plugins --install <python-file>
+conven plugins --list
+conven plugins --run <name> [plugin args...]
 conven doctor [flags]
 conven services --list
 conven services --registry [--prune]
@@ -478,7 +506,7 @@ conven --version
 `policy` requires exactly one primary action first. `--edit` after `--import` is
 that action's optional modifier, not a second primary action.
 Import requires exactly one source path; the other actions accept no positional
-arguments. All locate the nearest real `.loom` boundary without requiring the
+arguments. All locate the nearest real `.conven` boundary without requiring the
 current manifest to parse first, so edit can repair invalid content and
 import/reset can recreate a missing file. Candidate validation failure,
 a symbolic link, or a detected publication conflict prevents publication.
@@ -522,7 +550,7 @@ or `--namespace` flags because it reuses the current session and connection.
 
 Every `services --start` is a fresh start: after confirming that no active or
 untrusted saved process remains, Conven safely resets
-`.loom/runtime/current/{artifacts,configs,logs}`. Therefore,
+`.conven/runtime/current/{artifacts,configs,logs}`. Therefore,
 `services --start --skip-build` cannot reuse the default `${artifact}`. If a
 service declares a non-empty `runner.build` and
 its `runner.run` references that default artifact, Conven fails before opening a
@@ -563,15 +591,14 @@ An external ktctl process or network path recorded with both `Owned=false` and
 reference and never terminate that external connection.
 
 When a workspace has no session, `conven services --status` lists shared
-connection records from the current user's effective Conven state root, including
+connection records from `~/.conven/state/connections`, including
 fingerprint, PID/PGID, and effective lease count. After confirming the target,
 `conven services --stop --all --force` examines those records and force-removes only
 connections without active workspace leases. Active leases are retained;
 ordinary stale leases are reclaimed after a fixed five-minute grace period.
 This path recovers connection process groups and records left behind after Conven
 exits unexpectedly. The recovery command must still run from a workspace with a
-valid discoverable manifest. The effective user state root comes from
-`LOOM_STATE_HOME`, `XDG_STATE_HOME`, or the default user state directory.
+valid discoverable manifest.
 
 `services --logs` accepts service names and supports the boolean `--tail` switch
 described above. `doctor` accepts `--env`, `--dev`, `--test`, `--kubeconfig`,
@@ -582,14 +609,14 @@ reference.
 
 ## Git-style configuration
 
-Conven stores user-wide settings in `~/.loom/config` and workspace settings in
-`.loom/config`. Without `--global`, reads and `--list` show the effective merged
+Conven stores user-wide settings in `~/.conven/config` and workspace settings in
+`.conven/config`. Without `--global`, reads and `--list` show the effective merged
 configuration, with local values overriding global values; writes and `--unset`
 change only the local file. With `--global`, every operation targets only the
 user-wide file.
 
 ```bash
-# Effective local-over-global values; requires a .loom workspace boundary.
+# Effective local-over-global values; requires a .conven workspace boundary.
 conven config --list
 conven config ktctl.path
 conven config ktctl.path /opt/homebrew/bin/ktctl
@@ -613,15 +640,58 @@ The ktctl runtime settings consumed by Conven are `ktctl.path` and
 `ktctl.kubeconfig` is resolved from the workspace; absolute and `~/` paths are
 also accepted.
 
+## Python plugins
+
+Conven retains support for generic plugins embedded with a release: `conven init`
+installs a missing built-in without overwriting an existing user copy. The
+current built-in set is empty, and Conven does not bundle company- or
+project-specific plugins. Install those from a local Python file explicitly;
+relative source paths are resolved from the command's current directory:
+
+```bash
+conven plugins --install ./generate-apollo-consul.py
+conven plugins --list
+```
+
+Installation copies the file to `~/.conven/plugins` under its basename and
+makes the installed copy user-only executable (`0700`). The source must be a
+regular, non-symlink `.py` file with a Python 3 shebang. An existing destination
+is never overwritten; review and remove it explicitly before installing a
+replacement.
+
+Run a plugin by its filename without the `.py` suffix from anywhere inside an
+initialized workspace. Everything after the plugin name is passed through
+unchanged, except that `--workspace` is reserved by Conven:
+
+```bash
+conven plugins --run generate-apollo-consul
+conven plugins --run generate-apollo-consul --output candidate.yaml
+conven plugins --run generate-apollo-consul --check
+```
+
+Conven starts the script with the workspace as its current directory, prepends
+`--workspace <absolute-workspace>` to its arguments, sets
+`CONVEN_WORKSPACE=<absolute-workspace>`, and forwards stdin, stdout, stderr, and
+the terminal. A caller-supplied `--workspace` is rejected so it cannot replace
+the resolved workspace. For example, a separately maintained Apollo/Consul
+generator can write its default `<workspace-name>-apollo-consul.yaml` candidate
+into the current workspace. The candidate is not published automatically; review it and use
+`conven policy --import <file> --edit`.
+
+Users can add their own executable `*.py` files to `~/.conven/plugins`. Conven
+only lists and runs regular, executable, non-symlink files and rejects names
+that could escape the plugin directory. Re-running `conven init` only installs
+missing generic built-ins and preserves every existing plugin file.
+
 ## Workspace boundary and manifest discovery
 
-The only recognized manifest is `<workspace>/.loom/loom.yaml`; a `loom.yaml` at
-the workspace root and alternate files inside `.loom` are ignored. Starting at
-the current directory, Conven walks upward and stops at the nearest `.loom`
+The only recognized manifest is `<workspace>/.conven/conven.yaml`; a `conven.yaml` at
+the workspace root and alternate files inside `.conven` are ignored. Starting at
+the current directory, Conven walks upward and stops at the nearest `.conven`
 directory. That directory is a hard workspace boundary: if it does not contain
-`loom.yaml`, Conven reports an incomplete workspace and does not continue to a
-parent workspace. If no `.loom` directory is found, the current directory is
-outside a Conven workspace. The user-wide `~/.loom` directory is reserved for
+`conven.yaml`, Conven reports an incomplete workspace and does not continue to a
+parent workspace. If no `.conven` directory is found, the current directory is
+outside a Conven workspace. The user-wide `~/.conven` directory is reserved for
 global settings and is never a workspace boundary. `conven init` therefore
 refuses the user home directory; initialize a project directory instead.
 
@@ -636,16 +706,16 @@ script:
 Each workspace has one canonical manifest. Select environment-specific values
 through `--env`, `--dev`, or `--test` and the corresponding `environments`
 profile rather than selecting another manifest.
-That `.loom/loom.yaml` is also the workspace's centralized self-description: it
+That `.conven/conven.yaml` is also the workspace's centralized self-description: it
 holds repository paths, static analysis results, runners, ports, dependencies,
 environment connections, and reusable policies. Service declarations produced
 by discovery update only this file. `conven init` may also merge `/runtime/` into
-the central `.loom/.gitignore`, but it never writes Conven configuration or
+the central `.conven/.gitignore`, but it never writes Conven configuration or
 runtime copies into child service repositories.
 
 `conven policy` also operates on this one canonical file; Conven never creates or
-reads `.loom/policy.yaml`. It requires the nearest real `.loom` boundary but can
-open, import-replace, template-replace, or scan-rebuild `loom.yaml` while its
+reads `.conven/policy.yaml`. It requires the nearest real `.conven` boundary but can
+open, import-replace, template-replace, or scan-rebuild `conven.yaml` while its
 contents are invalid. Import, template install, or scan reset can recreate a
 missing manifest inside an existing boundary. All four policy actions reject a
 symbolic-link boundary or manifest.
@@ -655,11 +725,11 @@ a valid resolved manifest.
 Outside a workspace, only `help`, `--help`, `--version`, `init`,
 `config --global`, and internal completion generation are operational.
 Command-specific `--help` can also be displayed anywhere. `config` without
-`--global` uses the nearest `.loom` hard boundary and can be used there while
+`--global` uses the nearest `.conven` hard boundary and can be used there while
 the manifest is still being prepared.
 
 Conven injects the resolved absolute workspace root into every local service as
-`LOOM_WORKSPACE`, replacing any inherited value. This is read-only metadata for
+`CONVEN_WORKSPACE`, replacing any inherited value. This is read-only metadata for
 the service process; the Conven CLI never reads it to discover or select a
 workspace.
 
@@ -746,7 +816,7 @@ reconstruct only scan facts; it cannot reconstruct a policy.
 Materialized output always goes to:
 
 ```text
-<workspace>/.loom/runtime/current/configs/<service>/
+<workspace>/.conven/runtime/current/configs/<service>/
 ```
 
 Source files such as `resources/application.yaml` and bootstrap YAML remain
@@ -771,7 +841,7 @@ declare `runner.runWorkdir` and the corresponding prepare/layout rules explicitl
 Keep complete company or project declarations in the project's own repository.
 Generate a credential-free candidate there, review it with
 `conven policy --import <yaml-file> --edit`, and commit the resulting canonical
-`.loom/loom.yaml`. Machine-local kubeconfig paths can be set with
+`.conven/conven.yaml`. Machine-local kubeconfig paths can be set with
 `conven config ktctl.kubeconfig <path>`; credentials should stay in environment or
 external credential systems.
 
@@ -808,7 +878,7 @@ starting the process. During restart, this check happens for every target before
 any old target process is stopped.
 
 Prefer a generated run workdir under `${runDir}`, which resolves to
-`<workspace>/.loom/runtime/current`. If it is inside the service
+`<workspace>/.conven/runtime/current`. If it is inside the service
 directory, make sure generated files are ignored by source control; otherwise
 the source fingerprint may select the service again on the next argument-free
 `services --restart`.
@@ -834,10 +904,10 @@ meanings:
 
 | Template / variable | Resolved path |
 | --- | --- |
-| `${stateDir}` / `LOOM_STATE_DIR` | `<workspace>/.loom/runtime` |
-| `${runDir}` / `LOOM_RUN_DIR` | `<workspace>/.loom/runtime/current` |
-| `${artifact}` / `LOOM_ARTIFACT` | `current/artifacts/<service>` by default |
-| `LOOM_CONFIG_DIR` | `current/configs/<service>` |
+| `${stateDir}` / `CONVEN_STATE_DIR` | `<workspace>/.conven/runtime` |
+| `${runDir}` / `CONVEN_RUN_DIR` | `<workspace>/.conven/runtime/current` |
+| `${artifact}` / `CONVEN_ARTIFACT` | `current/artifacts/<service>` by default |
+| `CONVEN_CONFIG_DIR` | `current/configs/<service>` |
 
 The `ktctl` driver appends `connect` automatically, so `connection.args` must
 contain only additional arguments. An enabled connection requires at least one
@@ -853,6 +923,8 @@ ownership. Set `connection.sudo: true` when a custom connection must run as
 root. Conven first runs interactive `sudo -v`, starts through `sudo -n`, and tracks
 the actual connection descendant rather than only the outer sudo process. If
 the sudo timestamp has expired at shutdown, Conven requests authorization again.
+Password entry remains under sudo's terminal control and is not echoed; Conven
+prints a confirmation after authorization succeeds.
 
 ## Local and remote routing
 
@@ -874,7 +946,7 @@ Conven supports two explicit routing contracts:
    `remoteDependency` (commonly preserving its Consul/Apollo discovery data).
 
 The second contract modifies only
-`.loom/runtime/current/configs/<service>`, never YAML inside a service
+`.conven/runtime/current/configs/<service>`, never YAML inside a service
 repository. Use `environments.<name>.env` for environment-wide values, then
 `services.<name>.env`, `services.<name>.localEnv`, and dependency environment
 values for successive overrides. A selected dependency must have at least one local
@@ -889,8 +961,8 @@ or application authentication.
 
 For `connection.driver: ktctl`, Conven selects the executable in this order:
 
-1. `ktctl.path` in the workspace's `.loom/config`.
-2. `ktctl.path` in `~/.loom/config`.
+1. `ktctl.path` in the workspace's `.conven/config`.
+2. `ktctl.path` in `~/.conven/config`.
 3. The current environment's manifest `connection.command`.
 4. `ktctl` resolved through `PATH`.
 
@@ -914,12 +986,12 @@ workspace root before that lookup.
 The final kubeconfig path is resolved in this order:
 
 1. CLI `--kubeconfig FILE`.
-2. `LOOM_KUBECONFIG`.
+2. `CONVEN_KUBECONFIG`.
 3. `KTCTL_KUBECONFIG`, for compatibility with existing scripts.
 4. The environment variable named by the current environment's
    `connection.kubeconfigEnv`.
-5. Effective `ktctl.kubeconfig` from local `.loom/config`, then
-   `~/.loom/config`.
+5. Effective `ktctl.kubeconfig` from local `.conven/config`, then
+   `~/.conven/config`.
 6. The current environment's `connection.kubeconfig`.
 7. `KUBECONFIG`.
 8. `$HOME/.kube/config`.
@@ -927,7 +999,7 @@ The final kubeconfig path is resolved in this order:
 Examples:
 
 ```bash
-LOOM_KUBECONFIG=/secure/dev-kubeconfig \
+CONVEN_KUBECONFIG=/secure/dev-kubeconfig \
   conven doctor --env dev --context dev-cluster --namespace dev
 
 # Requires an environments.test profile in the manifest.
@@ -959,7 +1031,7 @@ Workspace runtime state always lives beside the manifest; it is not selected by
 the manifest or user state environment variables:
 
 ```text
-<workspace>/.loom/runtime/
+<workspace>/.conven/runtime/
 ├── .lock
 ├── session.json
 ├── connection.log
@@ -970,7 +1042,7 @@ the manifest or user state environment variables:
 ```
 
 Pre-reset policy snapshots are separate from runtime state. They are retained in
-`<workspace>/.loom/backups/`, are ignored by the workspace `.gitignore`, and are
+`<workspace>/.conven/backups/`, are ignored by the workspace `.gitignore`, and are
 not removed by start, restart, or stop. Remove them manually after the reset
 declarations have been reviewed and committed or backed up elsewhere.
 
@@ -993,7 +1065,7 @@ non-directories, and paths outside the canonical workspace runtime before
 deleting or recreating `current`.
 
 `doctor`, start dry-run, and status report this fixed runtime path. Runtime
-changes under `.loom` are excluded from source fingerprints and do not trigger
+changes under `.conven` are excluded from source fingerprints and do not trigger
 restart. Conven does not create historical run directories: restart reuses
 `current`, stop retains it for inspection, and the next safe
 `services --start` replaces it.
@@ -1003,11 +1075,11 @@ as an unknown field. Conven does not discover, migrate, or delete workspace
 runtime data created by older builds in the user state directory; remove such
 data manually only after confirming no process from the older build is running.
 
-Current-user shared connection records still live under `.connections` in the
-Conven user state root selected, in order, by `LOOM_STATE_HOME`,
-`$XDG_STATE_HOME/loom`, or `$HOME/.local/state/loom`. These settings affect only
-the small cross-workspace connection registry; they never relocate workspace
-artifacts, generated configuration, service logs, locks, or session state.
+Current-user shared connection records live only under
+`~/.conven/state/connections`. Conven does not consult `CONVEN_STATE_HOME` or
+`XDG_STATE_HOME`, and it does not discover or migrate an older user-state root.
+The shared registry never contains workspace artifacts, generated configuration,
+service logs, locks, or session state.
 
 ## Development
 

@@ -69,7 +69,7 @@ func EditWorkspacePolicy(cwd string, edit func(string) error) (PolicyEditResult,
 	if err != nil {
 		return result, err
 	}
-	draft, err := os.CreateTemp(backupDirectory, "loom.yaml-edit-*.yaml")
+	draft, err := os.CreateTemp(backupDirectory, "conven.yaml-edit-*.yaml")
 	if err != nil {
 		return result, fmt.Errorf("create policy edit draft: %w", err)
 	}
@@ -166,8 +166,8 @@ func ImportWorkspacePolicy(cwd string, importPath string, edit func(string) erro
 		validationName: fmt.Sprintf("policy import %q", sourcePath),
 		candidateName:  "imported policy manifest",
 		operation:      "policy import",
-		draftPattern:   "loom.yaml-import-edit-*.yaml",
-		backupPattern:  "loom.yaml-before-import-*.bak",
+		draftPattern:   "conven.yaml-import-edit-*.yaml",
+		backupPattern:  "conven.yaml-before-import-*.bak",
 		backupLabel:    "import",
 	})
 	result.SourcePath = sourcePath
@@ -352,7 +352,7 @@ func ResetWorkspacePolicyFromScan(cwd string) (PolicyResetResult, error) {
 		return result, nil
 	}
 
-	backup, err := savePolicySnapshot(boundary, "loom.yaml-before-reset-*.bak", source)
+	backup, err := savePolicySnapshot(boundary, "conven.yaml-before-reset-*.bak", source)
 	if err != nil {
 		return result, fmt.Errorf("back up Conven manifest before policy reset: %w", err)
 	}
@@ -369,7 +369,7 @@ func policyWorkspace(cwd string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	boundary := filepath.Join(workspace, ".loom")
+	boundary := filepath.Join(workspace, ".conven")
 	info, err := os.Lstat(boundary)
 	if err != nil {
 		return "", "", fmt.Errorf("inspect Conven workspace boundary %q: %w", boundary, err)

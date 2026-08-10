@@ -15,15 +15,15 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.Root != filepath.Join(canonical, ".loom", "runtime") {
+	if store.Root != filepath.Join(canonical, ".conven", "runtime") {
 		t.Fatalf("store root = %q", store.Root)
 	}
-	if store.CurrentDir != filepath.Join(canonical, ".loom", "runtime", "current") {
+	if store.CurrentDir != filepath.Join(canonical, ".conven", "runtime", "current") {
 		t.Fatalf("current directory = %q", store.CurrentDir)
 	}
 	session := &Session{
 		Workspace:   workspace,
-		ConfigPath:  filepath.Join(workspace, ".loom", "loom.yaml"),
+		ConfigPath:  filepath.Join(workspace, ".conven", "conven.yaml"),
 		Environment: "dev",
 		CreatedAt:   time.Now(),
 		Services: []ServiceProcess{{
@@ -105,7 +105,7 @@ func TestStoreLockRejectsSecondOwner(t *testing.T) {
 
 func TestNewStoreCanonicalizesSymlinkedWorkspace(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.Mkdir(filepath.Join(workspace, ".loom"), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(workspace, ".conven"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(t.TempDir(), "workspace-link")
@@ -129,7 +129,7 @@ func TestNewStoreNaturallyIsolatesSameNamedWorkspaces(t *testing.T) {
 	firstWorkspace := filepath.Join(t.TempDir(), "checkout")
 	secondWorkspace := filepath.Join(t.TempDir(), "checkout")
 	for _, workspace := range []string{firstWorkspace, secondWorkspace} {
-		if err := os.MkdirAll(filepath.Join(workspace, ".loom"), 0700); err != nil {
+		if err := os.MkdirAll(filepath.Join(workspace, ".conven"), 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -146,13 +146,12 @@ func TestNewStoreNaturallyIsolatesSameNamedWorkspaces(t *testing.T) {
 	}
 }
 
-func TestNewStoreIgnoresUserStateEnvironment(t *testing.T) {
+func TestNewStoreIgnoresUserHome(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.Mkdir(filepath.Join(workspace, ".loom"), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(workspace, ".conven"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("LOOM_STATE_HOME", filepath.Join(t.TempDir(), "loom-state"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "xdg-state"))
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "user-home"))
 	store, err := NewStore(workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -161,12 +160,11 @@ func TestNewStoreIgnoresUserStateEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(canonical, ".loom", "runtime")
+	want := filepath.Join(canonical, ".conven", "runtime")
 	if store.Root != want {
 		t.Fatalf("store root = %q, want %q", store.Root, want)
 	}
-	t.Setenv("LOOM_STATE_HOME", filepath.Join(t.TempDir(), "other-loom-state"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "other-xdg-state"))
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "other-user-home"))
 	second, err := NewStore(workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +232,7 @@ func TestStoreResetCurrentClearsOldFilesAndProtectsDirectories(t *testing.T) {
 func TestStoreLockMergesRuntimeGitignoreIdempotently(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestStore(t, workspace)
-	gitignore := filepath.Join(workspace, ".loom", ".gitignore")
+	gitignore := filepath.Join(workspace, ".conven", ".gitignore")
 	if err := os.WriteFile(gitignore, []byte("custom-rule\nnested/runtime/"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +384,7 @@ func TestStoreLockAllowsStaleLockFile(t *testing.T) {
 
 func newTestStore(t *testing.T, workspace string) *Store {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(workspace, ".loom"), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Join(workspace, ".conven"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	store, err := NewStore(workspace)

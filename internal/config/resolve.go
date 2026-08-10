@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/leo1394/homebrew-conven/internal/convenhome"
 )
 
 func ResolvePath(cwd string) (configPath string, workspace string, err error) {
@@ -33,7 +35,7 @@ func ResolvePath(cwd string) (configPath string, workspace string, err error) {
 		current = parent
 	}
 
-	return "", "", fmt.Errorf("not a Conven workspace (or any parent): .loom/loom.yaml not found from %q; run \"conven init\"", cwd)
+	return "", "", fmt.Errorf("not a Conven workspace (or any parent): .conven/conven.yaml not found from %q; run \"conven init\"", cwd)
 }
 
 func FindWorkspace(cwd string) (string, error) {
@@ -51,7 +53,7 @@ func FindWorkspace(cwd string) (string, error) {
 			current = parent
 			continue
 		}
-		boundary := filepath.Join(current, ".loom")
+		boundary := filepath.Join(current, ".conven")
 		info, statErr := os.Stat(boundary)
 		if statErr == nil {
 			if !info.IsDir() {
@@ -68,7 +70,7 @@ func FindWorkspace(cwd string) (string, error) {
 		}
 		current = parent
 	}
-	return "", fmt.Errorf("not a Conven workspace (or any parent): .loom directory not found; run \"conven init\"")
+	return "", fmt.Errorf("not a Conven workspace (or any parent): .conven directory not found; run \"conven init\"")
 }
 
 func resolveCwd(cwd string) (string, error) {
@@ -125,7 +127,7 @@ func sameDirectory(left string, right string) bool {
 }
 
 func findConfigInWorkspace(workspace string) (path string, found bool, err error) {
-	boundary := filepath.Join(workspace, ".loom")
+	boundary := filepath.Join(workspace, ".conven")
 	info, statErr := os.Stat(boundary)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
@@ -136,7 +138,7 @@ func findConfigInWorkspace(workspace string) (path string, found bool, err error
 	if !info.IsDir() {
 		return "", false, fmt.Errorf("Conven workspace boundary %q is not a directory", boundary)
 	}
-	candidate := filepath.Join(boundary, "loom.yaml")
+	candidate := filepath.Join(boundary, "conven.yaml")
 	info, statErr = os.Stat(candidate)
 	if statErr == nil {
 		if info.IsDir() {
@@ -147,7 +149,7 @@ func findConfigInWorkspace(workspace string) (path string, found bool, err error
 	if !os.IsNotExist(statErr) {
 		return "", false, fmt.Errorf("inspect Conven manifest %q: %w", candidate, statErr)
 	}
-	return "", false, fmt.Errorf("Conven workspace boundary %q does not contain loom.yaml; run \"conven init\"", boundary)
+	return "", false, fmt.Errorf("Conven workspace boundary %q does not contain conven.yaml; run \"conven init\"", boundary)
 }
 
 func ResolveDirectory(cwd string) (string, error) {
@@ -155,7 +157,7 @@ func ResolveDirectory(cwd string) (string, error) {
 }
 
 func EnsureWorkspaceBoundary(workspace string) error {
-	boundary := filepath.Join(workspace, ".loom")
+	boundary := filepath.Join(workspace, ".conven")
 	info, err := os.Stat(boundary)
 	if err != nil {
 		return fmt.Errorf("inspect Conven workspace boundary %q: %w", boundary, err)
@@ -167,24 +169,17 @@ func EnsureWorkspaceBoundary(workspace string) error {
 }
 
 func ManifestPath(workspace string) string {
-	return filepath.Join(workspace, ".loom", "loom.yaml")
+	return filepath.Join(workspace, ".conven", "conven.yaml")
 }
 
 func LocalSettingsPath(workspace string) string {
-	return filepath.Join(workspace, ".loom", "config")
+	return filepath.Join(workspace, ".conven", "config")
 }
 
 func GlobalSettingsPath(home string) (string, error) {
-	if strings.TrimSpace(home) == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home directory: %w", err)
-		}
-	}
-	path, err := filepath.Abs(home)
+	root, err := convenhome.Root(home)
 	if err != nil {
-		return "", fmt.Errorf("resolve home directory %q: %w", home, err)
+		return "", err
 	}
-	return filepath.Join(filepath.Clean(path), ".loom", "config"), nil
+	return filepath.Join(root, "config"), nil
 }

@@ -11,7 +11,7 @@ import (
 func TestSettingsLocalOverridesGlobalAndUnsetRevealsGlobal(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	mustMkdirAll(t, filepath.Join(workspace, ".loom"))
+	mustMkdirAll(t, filepath.Join(workspace, ".conven"))
 
 	if err := SetSetting("", home, true, "ktctl.path", "/global/ktctl"); err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestSettingsLocalOverridesGlobalAndUnsetRevealsGlobal(t *testing.T) {
 func TestSettingsGlobalScopeDoesNotIncludeLocal(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
-	mustMkdirAll(t, filepath.Join(workspace, ".loom"))
+	mustMkdirAll(t, filepath.Join(workspace, ".conven"))
 	if err := SetSetting("", home, true, "ktctl.path", "global-ktctl"); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestSettingsGlobalScopeDoesNotIncludeLocal(t *testing.T) {
 
 func TestSettingsRejectsRelativeKtctlPathWithSeparator(t *testing.T) {
 	workspace := t.TempDir()
-	mustMkdirAll(t, filepath.Join(workspace, ".loom"))
+	mustMkdirAll(t, filepath.Join(workspace, ".conven"))
 	err := SetSetting(workspace, t.TempDir(), false, "ktctl.path", "../bin/ktctl")
 	if err == nil || !strings.Contains(err.Error(), "absolute path") {
 		t.Fatalf("error = %v, want path validation error", err)
@@ -93,7 +93,7 @@ func TestSettingsRejectsRelativeKtctlPathWithSeparator(t *testing.T) {
 
 func TestSettingsRejectsMultipleKtctlKubeconfigFiles(t *testing.T) {
 	workspace := t.TempDir()
-	mustMkdirAll(t, filepath.Join(workspace, ".loom"))
+	mustMkdirAll(t, filepath.Join(workspace, ".conven"))
 	value := strings.Join([]string{"/config/one", "/config/two"}, string(os.PathListSeparator))
 	err := SetSetting(workspace, t.TempDir(), false, "ktctl.kubeconfig", value)
 	if err == nil || !strings.Contains(err.Error(), "multiple kubeconfig files") {
