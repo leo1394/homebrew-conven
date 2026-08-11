@@ -171,7 +171,7 @@ func (app App) runRestart(arguments []string) int {
 	flags := flag.NewFlagSet("services --restart", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
 	common := bindCommonFlags(flags, false)
-	tail := flags.Bool("tail", false, "tail aggregated logs after restart")
+	tail := flags.Bool("tail", false, "stream plain-text logs after restart")
 	skipBuild := flags.Bool("skip-build", false, "skip build and reuse artifacts from the fixed current runtime")
 	skipVerify := flags.Bool("skip-verify", false, "skip service health checks")
 	flags.Usage = func() {
@@ -197,7 +197,7 @@ func (app App) runRestart(arguments []string) int {
 		return app.fail(err)
 	}
 	if *tail && session != nil {
-		if err := convenruntime.TailLogs(app.Context, workspace, session, flags.Args(), app.Input, app.Output); err != nil {
+		if err := convenruntime.ShowLogs(app.Context, session, flags.Args(), true, app.Output); err != nil {
 			return app.fail(err)
 		}
 	}

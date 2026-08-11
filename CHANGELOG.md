@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+## 0.2.5 - 2026-08-11
+
+- 调整日志查看语义：新增 `services --dashboard [service...]` 全屏查看器，并支持等效的
+  `services --logs --dashboard [service...]` 别名；logs 下同时出现 `--dashboard` 与
+  `--tail` 时以最后一个模式参数为准。固定 banner 下由应用最多保留最近 10,000 行
+  聚合日志，并支持方向键、PgUp/PgDn、Home/End、`g`/`G` 滚动以及 `/`、`n`/`N`、
+  Esc 搜索；Dashboard 搜索不依赖终端 scrollback。
+  `services --logs --tail` 及 start/restart 的显式 `--tail` 改为使用终端主屏幕的 Plain
+  持续日志流，可由原生 Command+F 搜索。交互式 start 默认打开 Dashboard，非 TTY
+  start 默认返回；restart 默认返回且仅在显式 `--tail` 时连接 Plain 日志流。
+- 将中英文 README 从实现手册重构为精简的开源产品门户，突出选择性本地编排、
+  local/remote 混合路由、fail-closed 隔离边界及两条快速上手路径；完整命令细节继续由
+  `conven help` 和 `conven(1)` 承载。
+
 ## 0.2.4 - 2026-08-11
 
 - 修复合法整数 YAML mapping key 被本地隔离 guard 和 External Consul dependency

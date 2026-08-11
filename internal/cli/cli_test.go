@@ -252,7 +252,7 @@ func TestServicesHelpUsesStdout(t *testing.T) {
 		if code := app.Run(arguments); code != 0 {
 			t.Fatalf("%v exit code = %d", arguments, code)
 		}
-		for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs"} {
+		for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard"} {
 			if !strings.Contains(output.String(), action) {
 				t.Fatalf("%v help is missing %s: %q", arguments, action, output.String())
 			}
@@ -272,7 +272,7 @@ func TestServicesHelpUsesStdout(t *testing.T) {
 }
 
 func TestServiceActionHelpUsesStdout(t *testing.T) {
-	for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs"} {
+	for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard"} {
 		t.Run(action, func(t *testing.T) {
 			var output bytes.Buffer
 			var errorOutput bytes.Buffer
@@ -720,6 +720,7 @@ func TestWorkspaceOverrideFlagsWereRemoved(t *testing.T) {
 		{name: "stop", arguments: []string{"services", "--stop"}},
 		{name: "stop-all", arguments: []string{"services", "--stop-all"}},
 		{name: "logs", arguments: []string{"services", "--logs"}},
+		{name: "dashboard", arguments: []string{"services", "--dashboard"}},
 		{name: "list", arguments: []string{"services", "--list"}},
 		{name: "doctor", arguments: []string{"doctor"}},
 	}
@@ -902,6 +903,106 @@ services:
 	}
 	if errorOutput.Len() != 0 {
 		t.Fatalf("stderr = %q", errorOutput.String())
+	}
+}
+
+func TestLogsUsesLastDisplayModeFlag(t *testing.T) {
+	tests := []struct {
+		arguments []string
+		want      logDisplayMode
+	}{
+		{arguments: nil, want: logDisplaySnapshot},
+		{arguments: []string{"--tail"}, want: logDisplayPlain},
+		{arguments: []string{"--dashboard"}, want: logDisplayDashboard},
+		{arguments: []string{"--tail", "api", "--dashboard"}, want: logDisplayDashboard},
+		{arguments: []string{"--dashboard", "api", "--tail"}, want: logDisplayPlain},
+		{arguments: []string{"--tail", "--dashboard=false"}, want: logDisplayPlain},
+	}
+	for _, test := range tests {
+		tail := false
+		dashboard := false
+		for _, argument := range test.arguments {
+			if argument == "--tail" {
+				tail = true
+			}
+			if argument == "--dashboard" {
+				dashboard = true
+			}
+		}
+		if got := resolveLogDisplayMode(test.arguments, tail, dashboard); got != test.want {
+			t.Fatalf("resolve mode %v = %v, want %v", test.arguments, got, test.want)
+		}
+	}
+}
+
+func TestLogsDashboardAliasAndLastModeRouting(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(workspace, "api"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `version: 1
+workspace:
+  name: dashboard-alias
+services:
+  api:
+    path: api
+    runner:
+      run: [sleep, "600"]
+`
+	if err := os.WriteFile(filepath.Join(workspace, ".conven", "conven.yaml"), []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "api.log")
+	if err := os.WriteFile(logPath, []byte("ready\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := convenruntime.NewStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(&convenruntime.Session{
+		Environment: "dev",
+		Services:    []convenruntime.ServiceProcess{{Name: "api", LogPath: logPath}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+
+	for _, arguments := range [][]string{
+		{"services", "--dashboard", "api"},
+		{"services", "--logs", "--dashboard", "api"},
+		{"services", "--logs", "--tail", "--dashboard", "api"},
+	} {
+		var output bytes.Buffer
+		var errorOutput bytes.Buffer
+		app := App{Input: input, Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test"}
+		if code := app.Run(arguments); code != 1 {
+			t.Fatalf("%v exit code = %d", arguments, code)
+		}
+		if !strings.Contains(errorOutput.String(), "dashboard requires an interactive terminal") {
+			t.Fatalf("%v stderr = %q", arguments, errorOutput.String())
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Input: input, Output: &output, Error: &errorOutput, Context: ctx, Cwd: workspace, Version: "test"}
+	arguments := []string{"services", "--logs", "--dashboard", "--tail", "api"}
+	if code := app.Run(arguments); code != 0 {
+		t.Fatalf("%v exit code = %d: %s", arguments, code, errorOutput.String())
+	}
+	if strings.Contains(output.String(), "\x1b[?1049h") {
+		t.Fatalf("plain-last output entered dashboard: %q", output.String())
 	}
 }
 
@@ -1196,7 +1297,7 @@ func TestCompletions(t *testing.T) {
 					t.Fatalf("completion for %s is missing %s", shell, command)
 				}
 			}
-			for _, action := range []string{"--list", "--registry", "--status", "--logs", "--start", "--restart", "--stop", "--stop-all"} {
+			for _, action := range []string{"--list", "--registry", "--status", "--logs", "--dashboard", "--start", "--restart", "--stop", "--stop-all"} {
 				marker := action
 				if shell == "fish" {
 					marker = "-l " + strings.TrimPrefix(action, "--")
@@ -1238,11 +1339,11 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`compgen -W "init services config policy plugins doctor help version"`,
 		`if [ "$subcommand" = "help" ]`,
 		`if [ "$subcommand" = "services" ]`,
-		`--list|--status)`,
+		`--list|--status|--dashboard)`,
 		`--registry)`,
 		`options="--prune --help"`,
 		`--logs)`,
-		`options="--tail --help"`,
+		`options="--tail --dashboard --help"`,
 		`--start)`,
 		`options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --skip-build --skip-verify --help"`,
 		`--restart)`,
@@ -1285,6 +1386,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--list|--status)`,
 		`--registry)`,
 		`--logs)`,
+		`--dashboard)`,
 		`--start)`,
 		`--restart)`,
 		`--stop)`,
@@ -1293,7 +1395,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--test[use the test environment profile]`,
 		`--all[stop every service and release the workspace connection]`,
 		`--force[bypass identity checks and recover saved process groups]`,
-		`--tail[tail aggregated logs]`,
+		`--tail[stream aggregated logs as plain text]`,
+		`--dashboard[open the interactive log dashboard]`,
 		`--prune[remove missing direct-child repository services]`,
 		`--reset[destructively reset the manifest to scanned facts]`,
 		`--import[import a local YAML file as the entire manifest]`,
@@ -1339,6 +1442,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_services_action --start' -l dry-run`,
 		`__conven_services_action --restart' -l tail`,
 		`__conven_services_action --logs' -l tail`,
+		`__conven_services_action --logs' -l dashboard`,
 		`__conven_using_subcommand config' -l global`,
 		`__conven_services_action --stop' -l all`,
 		`__conven_services_action --stop' -l force`,
@@ -2168,6 +2272,7 @@ func TestWorkspaceCommandsFailOutsideDotConvenBoundary(t *testing.T) {
 		{"services", "--stop", "--all"},
 		{"services", "--stop-all"},
 		{"services", "--logs"},
+		{"services", "--dashboard"},
 		{"doctor"},
 		{"services", "--list"},
 		{"services", "--registry"},

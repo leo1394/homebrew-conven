@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/leo1394/homebrew-conven/internal/config"
@@ -33,6 +34,14 @@ type commonFlags struct {
 	context     string
 	namespace   string
 }
+
+type logDisplayMode int
+
+const (
+	logDisplaySnapshot logDisplayMode = iota
+	logDisplayPlain
+	logDisplayDashboard
+)
 
 func (app App) Run(arguments []string) int {
 	app = app.withDefaults()
@@ -124,6 +133,8 @@ func (app App) runServices(arguments []string) int {
 		return app.runStatus(remaining)
 	case "--logs":
 		return app.runLogs(remaining)
+	case "--dashboard":
+		return app.runDashboard(remaining)
 	case "--start":
 		return app.runStart(remaining)
 	case "--restart":
@@ -145,7 +156,7 @@ func (app App) runStart(arguments []string) int {
 	flags.SetOutput(app.Error)
 	common := bindCommonFlags(flags, true)
 	dryRun := flags.Bool("dry-run", false, "show the resolved plan without changing state")
-	tail := flags.Bool("tail", false, "tail aggregated logs after startup")
+	tail := flags.Bool("tail", false, "stream plain-text logs after startup")
 	skipBuild := flags.Bool("skip-build", false, "skip build; artifacts under current runtime cannot be reused after a fresh start")
 	skipVerify := flags.Bool("skip-verify", false, "skip service health checks")
 	flags.Usage = func() {
@@ -202,8 +213,17 @@ func (app App) runStart(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
-	if *tail && session != nil {
-		if err := convenruntime.TailLogs(app.Context, workspace, session, nil, app.Input, app.Output); err != nil {
+	if session == nil {
+		return 0
+	}
+	if *tail {
+		if err := convenruntime.ShowLogs(app.Context, session, nil, true, app.Output); err != nil {
+			return app.fail(err)
+		}
+		return 0
+	}
+	if convenruntime.DashboardAvailable(app.Input, app.Output) {
+		if err := convenruntime.TailLogs(app.Context, workspace, session, convenruntime.TailOptions{Version: app.Version}, app.Input, app.Output); err != nil {
 			return app.fail(err)
 		}
 	}
@@ -266,9 +286,84 @@ func (app App) runLogs(arguments []string) int {
 	flags := flag.NewFlagSet("services --logs", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
 	common := bindCommonFlags(flags, false)
-	tail := flags.Bool("tail", false, "continue tailing appended log lines")
+	tail := flags.Bool("tail", false, "stream appended log lines as plain text")
+	dashboard := flags.Bool("dashboard", false, "open the interactive log dashboard")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --logs [--tail] [service...]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --logs [--tail] [--dashboard] [service...]")
+		flags.PrintDefaults()
+		fmt.Fprintln(flags.Output(), "\nWhen both modes are present, the last --tail or --dashboard flag wins.")
+	}
+	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
+		return code
+	}
+	mode := resolveLogDisplayMode(arguments, *tail, *dashboard)
+	workspace, err := convenruntime.OpenWorkspace(common.options(app.Cwd))
+	if err != nil {
+		return app.fail(err)
+	}
+	session, err := workspace.Store.Load()
+	if err != nil {
+		return app.fail(err)
+	}
+	if mode == logDisplayPlain {
+		if err := convenruntime.ShowLogs(app.Context, session, flags.Args(), true, app.Output); err != nil {
+			return app.fail(err)
+		}
+		return 0
+	}
+	if mode == logDisplayDashboard {
+		if err := convenruntime.TailLogs(app.Context, workspace, session, convenruntime.TailOptions{Names: flags.Args(), Version: app.Version}, app.Input, app.Output); err != nil {
+			return app.fail(err)
+		}
+		return 0
+	}
+	if err := convenruntime.ShowLogs(app.Context, session, flags.Args(), false, app.Output); err != nil {
+		return app.fail(err)
+	}
+	return 0
+}
+
+func resolveLogDisplayMode(arguments []string, tail bool, dashboard bool) logDisplayMode {
+	if !tail && !dashboard {
+		return logDisplaySnapshot
+	}
+	if tail && !dashboard {
+		return logDisplayPlain
+	}
+	if dashboard && !tail {
+		return logDisplayDashboard
+	}
+	mode := logDisplaySnapshot
+	for _, argument := range arguments {
+		if argument == "--" {
+			break
+		}
+		name := strings.TrimLeft(argument, "-")
+		value := "true"
+		if separator := strings.IndexByte(name, '='); separator >= 0 {
+			value = name[separator+1:]
+			name = name[:separator]
+		}
+		enabled, err := strconv.ParseBool(value)
+		if err != nil || !enabled {
+			continue
+		}
+		switch name {
+		case "tail":
+			mode = logDisplayPlain
+		case "dashboard":
+			mode = logDisplayDashboard
+		}
+	}
+	return mode
+}
+
+func (app App) runDashboard(arguments []string) int {
+	flags := flag.NewFlagSet("services --dashboard", flag.ContinueOnError)
+	flags.SetOutput(app.Error)
+	common := bindCommonFlags(flags, false)
+	flags.Usage = func() {
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --dashboard [service...]")
 		flags.PrintDefaults()
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
@@ -282,13 +377,7 @@ func (app App) runLogs(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
-	if *tail {
-		if err := convenruntime.TailLogs(app.Context, workspace, session, flags.Args(), app.Input, app.Output); err != nil {
-			return app.fail(err)
-		}
-		return 0
-	}
-	if err := convenruntime.ShowLogs(app.Context, session, flags.Args(), false, app.Output); err != nil {
+	if err := convenruntime.TailLogs(app.Context, workspace, session, convenruntime.TailOptions{Names: flags.Args(), Version: app.Version}, app.Input, app.Output); err != nil {
 		return app.fail(err)
 	}
 	return 0
@@ -667,8 +756,9 @@ available actions
    --list       List services declared by the workspace
    --registry   Update services from direct-child repositories; --prune missing ones
    --status     Show the current local service state
-   --logs       Show current session logs; --tail follows new output
-   --start      Select and start local services
+   --logs       Show logs; --tail streams plain text, --dashboard opens the UI
+   --dashboard  Open the interactive log dashboard
+   --start      Select and start local services; opens the dashboard on a TTY
    --restart    Restart selected or changed local services
    --stop       Stop selected local services
    --stop-all   Stop all services and release the workspace connection
@@ -677,5 +767,7 @@ The action flag must be the first argument after "conven services".
 Run 'conven services <action> --help' for action-specific usage and flags.
 Without service names, --start opens an interactive selector and asks for
 confirmation; --restart restarts only changed services in the current session.
+After a successful interactive --start, the dashboard opens by default; pass
+--tail to stream plain-text logs instead.
 `)
 }

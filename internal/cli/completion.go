@@ -24,14 +24,14 @@ func Completion(shell string) (string, error) {
     if [ "$subcommand" = "services" ]; then
         action="${COMP_WORDS[2]}"
         case "$action" in
-            --list|--status)
+            --list|--status|--dashboard)
                 options="--help"
                 ;;
             --registry)
                 options="--prune --help"
                 ;;
             --logs)
-                options="--tail --help"
+                options="--tail --dashboard --help"
                 ;;
             --start)
                 options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --skip-build --skip-verify --help"
@@ -47,7 +47,7 @@ func Completion(shell string) (string, error) {
                 ;;
             *)
                 if [ "$COMP_CWORD" -eq 2 ]; then
-                    options="--list --registry --status --logs --start --restart --stop --stop-all --help"
+                    options="--list --registry --status --logs --dashboard --start --restart --stop --stop-all --help"
                 else
                     options=""
                 fi
@@ -173,7 +173,13 @@ _conven() {
                     ;;
                 --logs)
                     _arguments \
-                        '--tail[tail aggregated logs]' \
+                        '--tail[stream aggregated logs as plain text]' \
+                        '--dashboard[open the interactive log dashboard]' \
+                        '--help[show command help]' \
+                        '*:service:'
+                    ;;
+                --dashboard)
+                    _arguments \
                         '--help[show command help]' \
                         '*:service:'
                     ;;
@@ -185,7 +191,7 @@ _conven() {
                         '--kubeconfig[kubeconfig path]:file:_files' \
                         '--context[kubeconfig context]:context:' \
                         '--namespace[Kubernetes namespace]:namespace:' \
-                        '--tail[tail aggregated logs]' \
+                        '--tail[stream aggregated logs as plain text]' \
                         '--dry-run[show the startup plan]' \
                         '--skip-build[skip build when artifacts are reusable]' \
                         '--skip-verify[skip health checks]' \
@@ -194,7 +200,7 @@ _conven() {
                     ;;
                 --restart)
                     _arguments \
-                        '--tail[tail aggregated logs]' \
+                        '--tail[stream aggregated logs as plain text]' \
                         '--skip-build[skip build when artifacts are reusable]' \
                         '--skip-verify[skip health checks]' \
                         '--help[show command help]' \
@@ -218,7 +224,8 @@ _conven() {
                             '--list[list services declared by the workspace]' \
                             '--registry[update services from child repositories]' \
                             '--status[show current local service state]' \
-                            '--logs[show or tail current session logs]' \
+                            '--logs[show or stream current session logs]' \
+                            '--dashboard[open the interactive log dashboard]' \
                             '--start[select and start local services]' \
                             '--restart[restart changed local services]' \
                             '--stop[stop selected local services]' \
@@ -422,24 +429,26 @@ complete -c conven -n '__conven_using_subcommand doctor' -l namespace -r -d 'Kub
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l list -d 'List services declared by the workspace'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l registry -d 'Update services from child repositories'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l status -d 'Show current local service state'
-complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l logs -d 'Show or tail current session logs'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l logs -d 'Show or stream current session logs'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l dashboard -d 'Open the interactive log dashboard'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l start -d 'Select and start local services'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l restart -d 'Restart changed local services'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l stop -d 'Stop selected local services'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l stop-all -d 'Stop all services and release the workspace connection'
 complete -c conven -n '__conven_services_action --registry' -l prune -d 'Remove missing direct-child repository services'
-complete -c conven -n '__conven_services_action --logs' -l tail -d 'Tail aggregated logs'
+complete -c conven -n '__conven_services_action --logs' -l tail -d 'Stream aggregated logs as plain text'
+complete -c conven -n '__conven_services_action --logs' -l dashboard -d 'Open the interactive log dashboard'
 complete -c conven -n '__conven_services_action --start' -l env -r -d 'Environment profile'
 complete -c conven -n '__conven_services_action --start' -l dev -d 'Use the dev environment profile'
 complete -c conven -n '__conven_services_action --start' -l test -d 'Use the test environment profile'
 complete -c conven -n '__conven_services_action --start' -l kubeconfig -r -d 'Kubeconfig path'
 complete -c conven -n '__conven_services_action --start' -l context -r -d 'Kubeconfig context'
 complete -c conven -n '__conven_services_action --start' -l namespace -r -d 'Kubernetes namespace'
-complete -c conven -n '__conven_services_action --start' -l tail -d 'Tail aggregated logs'
+complete -c conven -n '__conven_services_action --start' -l tail -d 'Stream aggregated logs as plain text'
 complete -c conven -n '__conven_services_action --start' -l dry-run -d 'Show the startup plan'
 complete -c conven -n '__conven_services_action --start' -l skip-build -d 'Skip build when artifacts are reusable'
 complete -c conven -n '__conven_services_action --start' -l skip-verify -d 'Skip health checks'
-complete -c conven -n '__conven_services_action --restart' -l tail -d 'Tail aggregated logs'
+complete -c conven -n '__conven_services_action --restart' -l tail -d 'Stream aggregated logs as plain text'
 complete -c conven -n '__conven_services_action --restart' -l skip-build -d 'Skip build when artifacts are reusable'
 complete -c conven -n '__conven_services_action --restart' -l skip-verify -d 'Skip health checks'
 complete -c conven -n '__conven_services_action --stop' -l all -d 'Stop every service and release the workspace connection'

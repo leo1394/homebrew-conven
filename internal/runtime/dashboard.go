@@ -9,20 +9,44 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
 const (
-	dashboardHistoryLines = 2000
+	dashboardHistoryLines = 10000
+	dashboardHistoryBytes = 64 * 1024 * 1024
+	dashboardLineBytes    = 1024 * 1024
 	dashboardFrameInterval = 50 * time.Millisecond
+	dashboardFieldWidth    = 9
+	dashboardReset         = "\x1b[0m"
+	dashboardBold          = "\x1b[1m"
+	dashboardDim           = "\x1b[2m"
+	dashboardCyan          = "\x1b[36m"
+	dashboardBoldCyan      = "\x1b[1;36m"
+	dashboardGreen         = "\x1b[32m"
+	dashboardYellow        = "\x1b[33m"
+	dashboardRed           = "\x1b[31m"
+	dashboardRule          = "\x1b[2;36m"
 )
+
+type dashboardSegment struct {
+	Text  string
+	Style string
+}
+
+type dashboardLine struct {
+	Segments []dashboardSegment
+}
 
 type dashboardService struct {
 	Name  string
@@ -30,11 +54,60 @@ type dashboardService struct {
 }
 
 type dashboardInfo struct {
+	Version     string
 	Workspace   string
 	Environment string
 	Address     string
 	Interface   string
+	Cluster     string
 	Services    []dashboardService
+	Color       bool
+}
+
+type TailOptions struct {
+	Names   []string
+	Version string
+}
+
+type dashboardHistory struct {
+	lines        []string
+	start        int
+	count        int
+	bytes        int
+	maximumBytes int
+}
+
+type dashboardView struct {
+	Follow        bool
+	Top           int
+	NewLines      int
+	SearchMode    bool
+	SearchDraft   string
+	SearchQuery   string
+	SearchMatch   int
+	SearchMessage string
+}
+
+type dashboardInputKind int
+
+const (
+	dashboardInputText dashboardInputKind = iota
+	dashboardInputEscape
+	dashboardInputEnter
+	dashboardInputBackspace
+	dashboardInputInterrupt
+	dashboardInputUp
+	dashboardInputDown
+	dashboardInputPageUp
+	dashboardInputPageDown
+	dashboardInputHome
+	dashboardInputEnd
+	dashboardInputIgnored
+)
+
+type dashboardInputEvent struct {
+	Kind dashboardInputKind
+	Text string
 }
 
 type localIPv4Candidate struct {
@@ -44,35 +117,50 @@ type localIPv4Candidate struct {
 	IP        net.IP
 }
 
-func TailLogs(ctx context.Context, workspace *WorkspaceData, session *Session, names []string, input *os.File, output io.Writer) error {
-	logs, err := selectLogs(session, names)
+func DashboardAvailable(input *os.File, output io.Writer) bool {
+	outputFile, outputIsFile := output.(*os.File)
+	if input == nil || !outputIsFile || !term.IsTerminal(int(input.Fd())) || !term.IsTerminal(int(outputFile.Fd())) {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") {
+		return false
+	}
+	width, height, err := term.GetSize(int(outputFile.Fd()))
+	return err == nil && width >= 20 && height >= 4
+}
+
+func TailLogs(ctx context.Context, workspace *WorkspaceData, session *Session, options TailOptions, input *os.File, output io.Writer) error {
+	logs, err := selectLogs(session, options.Names)
 	if err != nil {
 		return err
 	}
 	if len(logs) == 0 {
 		return errors.New("no logs are available for the current session")
 	}
-	outputFile, outputIsFile := output.(*os.File)
-	if input == nil || !outputIsFile || !term.IsTerminal(int(input.Fd())) || !term.IsTerminal(int(outputFile.Fd())) || strings.EqualFold(os.Getenv("TERM"), "dumb") {
-		return streamLogs(ctx, logs, func(entry logEntry) error {
-			_, err := fmt.Fprintf(output, "[%s] %s\n", entry.Name, entry.Line)
-			return err
-		})
+	if !DashboardAvailable(input, output) {
+		return errors.New("dashboard requires an interactive terminal at least 20x4; use conven services --logs --tail for plain log streaming")
 	}
+	outputFile := output.(*os.File)
 	width, height, err := term.GetSize(int(outputFile.Fd()))
 	if err != nil || width < 20 || height < 4 {
-		return streamLogs(ctx, logs, func(entry logEntry) error {
-			_, err := fmt.Fprintf(output, "[%s] %s\n", entry.Name, entry.Line)
-			return err
-		})
+		return errors.New("dashboard requires an interactive terminal at least 20x4; use conven services --logs --tail for plain log streaming")
 	}
 	address, interfaceName := discoverLocalIPv4()
 	info := dashboardInfo{
+		Version:     strings.TrimSpace(options.Version),
 		Workspace:   workspace.Manifest.Workspace.Name,
 		Environment: session.Environment,
 		Address:     address,
 		Interface:   interfaceName,
-		Services:    dashboardServices(workspace, session, names),
+		Cluster:     dashboardSessionCluster(session),
+		Services:    dashboardServices(workspace, session, options.Names),
+		Color:       dashboardColorEnabled(),
+	}
+	if info.Version == "" {
+		info.Version = "dev"
+	}
+	if info.Cluster == "" {
+		info.Cluster = "-"
 	}
 	if strings.TrimSpace(info.Workspace) == "" {
 		info.Workspace = filepath.Base(workspace.Root)
@@ -94,7 +182,11 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 	defer func() {
 		var exitErr error
 		if entered {
-			_, exitErr = io.WriteString(output, "\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
+			restoreScreen := "\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l"
+			if info.Color {
+				restoreScreen = dashboardReset + restoreScreen
+			}
+			_, exitErr = io.WriteString(output, restoreScreen)
 			if exitErr != nil {
 				exitErr = fmt.Errorf("dashboard: restore screen: %w", exitErr)
 			}
@@ -105,21 +197,25 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 		}
 		err = errors.Join(err, exitErr, restoreErr)
 	}()
-	if _, err := io.WriteString(output, "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J"); err != nil {
+	if _, err := io.WriteString(output, "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J"); err != nil {
 		return fmt.Errorf("dashboard: enter screen: %w", err)
 	}
 	dashboardContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	entries, logErrors := startLogStream(dashboardContext, logs)
-	keys, inputErrors := readDashboardInput(dashboardContext, input)
+	entries, logErrors := startLogStreamWithBudget(dashboardContext, logs, dashboardHistoryLines)
+	keys, inputErrors, inputDone := readDashboardInput(dashboardContext, input)
+	defer func() {
+		cancel()
+		<-inputDone
+	}()
 	resize := make(chan os.Signal, 1)
 	signal.Notify(resize, syscall.SIGWINCH)
 	defer signal.Stop(resize)
 	ticker := time.NewTicker(dashboardFrameInterval)
 	defer ticker.Stop()
 
-	history := make([]string, 0, logTailLines*len(logs))
-	if err := writeDashboardFrame(output, info, width, height, history); err != nil {
+	history := newDashboardHistory(dashboardHistoryLines)
+	view := dashboardView{Follow: true, SearchMatch: -1}
+	if err := writeDashboardViewFrame(output, info, width, height, history, &view); err != nil {
 		return err
 	}
 	dirty := false
@@ -130,7 +226,9 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 				entries = nil
 				continue
 			}
-			history = appendDashboardHistory(history, fmt.Sprintf("[%s] %s", entry.Name, entry.Line))
+			evicted := history.Append(fmt.Sprintf("[%s] %s", entry.Name, entry.Line))
+			view.RecordAppend(history, evicted)
+			view.Clamp(history.Len(), dashboardLogRows(info, width, height))
 			dirty = true
 		case streamErr, open := <-logErrors:
 			if !open {
@@ -143,9 +241,10 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 				keys = nil
 				continue
 			}
-			if key == 0x03 || key == 'q' || key == 'Q' {
+			if handleDashboardInput(key, history, &view, dashboardLogRows(info, width, height)) {
 				return nil
 			}
+			dirty = true
 		case inputErr, open := <-inputErrors:
 			if !open {
 				inputErrors = nil
@@ -157,7 +256,8 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 				width = nextWidth
 				height = nextHeight
 			}
-			if err := writeDashboardFrame(output, info, width, height, history); err != nil {
+			view.Clamp(history.Len(), dashboardLogRows(info, width, height))
+			if err := writeDashboardViewFrame(output, info, width, height, history, &view); err != nil {
 				return err
 			}
 			dirty = false
@@ -165,7 +265,7 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 			if !dirty {
 				continue
 			}
-			if err := writeDashboardFrame(output, info, width, height, history); err != nil {
+			if err := writeDashboardViewFrame(output, info, width, height, history, &view); err != nil {
 				return err
 			}
 			dirty = false
@@ -174,24 +274,348 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 		}
 	}
 	if dirty {
-		return writeDashboardFrame(output, info, width, height, history)
+		return writeDashboardViewFrame(output, info, width, height, history, &view)
 	}
 	return nil
 }
 
-func readDashboardInput(ctx context.Context, input *os.File) (<-chan byte, <-chan error) {
-	keys := make(chan byte, 16)
+func newDashboardHistory(capacity int) *dashboardHistory {
+	if capacity < 1 {
+		capacity = 1
+	}
+	return &dashboardHistory{lines: make([]string, capacity), maximumBytes: dashboardHistoryBytes}
+}
+
+func (history *dashboardHistory) Len() int {
+	if history == nil {
+		return 0
+	}
+	return history.count
+}
+
+func (history *dashboardHistory) Append(line string) int {
+	line = truncateDashboardHistoryLine(sanitizeDashboardText(line))
+	evicted := 0
+	if history.count == len(history.lines) {
+		history.dropOldest()
+		evicted++
+	}
+	index := (history.start + history.count) % len(history.lines)
+	history.lines[index] = line
+	history.count++
+	history.bytes += len(line)
+	for history.count > 0 && history.bytes > history.maximumBytes {
+		history.dropOldest()
+		evicted++
+	}
+	return evicted
+}
+
+func (history *dashboardHistory) dropOldest() {
+	if history == nil || history.count == 0 {
+		return
+	}
+	history.bytes -= len(history.lines[history.start])
+	history.lines[history.start] = ""
+	history.start = (history.start + 1) % len(history.lines)
+	history.count--
+}
+
+func truncateDashboardHistoryLine(line string) string {
+	if len(line) <= dashboardLineBytes {
+		return line
+	}
+	suffix := "…[truncated]"
+	limit := dashboardLineBytes - len(suffix)
+	line = line[:limit]
+	for len(line) > 0 && !utf8.ValidString(line) {
+		line = line[:len(line)-1]
+	}
+	return line + suffix
+}
+
+func (history *dashboardHistory) At(index int) string {
+	if history == nil || index < 0 || index >= history.count {
+		return ""
+	}
+	return history.lines[(history.start+index)%len(history.lines)]
+}
+
+func (history *dashboardHistory) Range(start int, end int) []string {
+	if history == nil || start >= history.count || end <= start {
+		return nil
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > history.count {
+		end = history.count
+	}
+	lines := make([]string, 0, end-start)
+	for index := start; index < end; index++ {
+		lines = append(lines, history.At(index))
+	}
+	return lines
+}
+
+func (view *dashboardView) RecordAppend(history *dashboardHistory, evicted int) {
+	if evicted > 0 {
+		view.Top -= evicted
+		if view.Top < 0 {
+			view.Top = 0
+		}
+		if view.SearchMatch >= 0 {
+			view.SearchMatch -= evicted
+			if view.SearchMatch < 0 {
+				view.SearchMatch = -1
+				view.SearchMessage = "current match expired"
+			}
+		}
+	}
+	if !view.Follow {
+		view.NewLines++
+	}
+	if view.SearchQuery != "" && strings.Contains(strings.ToLower(history.At(history.Len()-1)), strings.ToLower(view.SearchQuery)) {
+		view.SearchMessage = ""
+	}
+}
+
+func (view *dashboardView) Clamp(length int, rows int) {
+	if rows < 1 {
+		rows = 1
+	}
+	maximumTop := length - rows
+	if maximumTop < 0 {
+		maximumTop = 0
+	}
+	if view.Follow {
+		view.Top = maximumTop
+		view.NewLines = 0
+	} else {
+		if view.Top < 0 {
+			view.Top = 0
+		}
+		if view.Top > maximumTop {
+			view.Top = maximumTop
+		}
+	}
+	if view.SearchMatch >= length {
+		view.SearchMatch = -1
+	}
+}
+
+func (view *dashboardView) Pause(length int, rows int) {
+	if view.Follow {
+		view.Follow = false
+		view.Top = length - rows
+		if view.Top < 0 {
+			view.Top = 0
+		}
+		view.NewLines = 0
+	}
+}
+
+func (view *dashboardView) Resume() {
+	view.Follow = true
+	view.NewLines = 0
+}
+
+func handleDashboardInput(event dashboardInputEvent, history *dashboardHistory, view *dashboardView, rows int) bool {
+	if event.Kind == dashboardInputInterrupt {
+		return true
+	}
+	if view.SearchMode {
+		switch event.Kind {
+		case dashboardInputEscape:
+			view.SearchMode = false
+			view.SearchDraft = ""
+			view.SearchMessage = ""
+		case dashboardInputEnter:
+			view.SearchMode = false
+			view.SearchQuery = strings.TrimSpace(view.SearchDraft)
+			view.SearchDraft = ""
+			view.SearchMatch = -1
+			view.SearchMessage = ""
+			if view.SearchQuery != "" {
+				selectDashboardMatch(history, view, rows, view.Top-1, 1)
+			}
+		case dashboardInputBackspace:
+			view.SearchDraft = removeDashboardLastRune(view.SearchDraft)
+		case dashboardInputText:
+			view.SearchDraft += event.Text
+		}
+		return false
+	}
+
+	switch event.Kind {
+	case dashboardInputEscape:
+		view.SearchQuery = ""
+		view.SearchMatch = -1
+		view.SearchMessage = ""
+	case dashboardInputUp:
+		view.Pause(history.Len(), rows)
+		view.Top--
+		view.Clamp(history.Len(), rows)
+	case dashboardInputDown:
+		view.Pause(history.Len(), rows)
+		maximumTop := history.Len() - rows
+		if maximumTop < 0 {
+			maximumTop = 0
+		}
+		if view.Top >= maximumTop {
+			view.Resume()
+		} else {
+			view.Top++
+		}
+		view.Clamp(history.Len(), rows)
+	case dashboardInputPageUp:
+		view.Pause(history.Len(), rows)
+		view.Top -= rows
+		view.Clamp(history.Len(), rows)
+	case dashboardInputPageDown:
+		view.Pause(history.Len(), rows)
+		view.Top += rows
+		maximumTop := history.Len() - rows
+		if maximumTop < 0 {
+			maximumTop = 0
+		}
+		if view.Top >= maximumTop {
+			view.Resume()
+		}
+		view.Clamp(history.Len(), rows)
+	case dashboardInputHome:
+		view.Pause(history.Len(), rows)
+		view.Top = 0
+		view.Clamp(history.Len(), rows)
+	case dashboardInputEnd:
+		view.Resume()
+		view.Clamp(history.Len(), rows)
+	case dashboardInputText:
+		switch event.Text {
+		case "q", "Q":
+			return true
+		case "/":
+			view.SearchMode = true
+			view.SearchDraft = ""
+			view.SearchMessage = ""
+		case "g":
+			view.Pause(history.Len(), rows)
+			view.Top = 0
+			view.Clamp(history.Len(), rows)
+		case "G":
+			view.Resume()
+			view.Clamp(history.Len(), rows)
+		case "n":
+			if view.SearchQuery != "" {
+				selectDashboardMatch(history, view, rows, view.SearchMatch, 1)
+			}
+		case "N":
+			if view.SearchQuery != "" {
+				start := view.SearchMatch
+				if start < 0 {
+					start = view.Top + rows
+				}
+				selectDashboardMatch(history, view, rows, start, -1)
+			}
+		}
+	}
+	return false
+}
+
+func removeDashboardLastRune(value string) string {
+	if value == "" {
+		return ""
+	}
+	_, size := utf8.DecodeLastRuneInString(value)
+	if size <= 0 {
+		return ""
+	}
+	return value[:len(value)-size]
+}
+
+func selectDashboardMatch(history *dashboardHistory, view *dashboardView, rows int, start int, direction int) {
+	match := findDashboardMatch(history, view.SearchQuery, start, direction)
+	if match < 0 {
+		view.SearchMatch = -1
+		view.SearchMessage = "no matches"
+		return
+	}
+	view.SearchMatch = match
+	view.SearchMessage = ""
+	view.Follow = false
+	view.NewLines = 0
+	view.Top = match - rows/2
+	view.Clamp(history.Len(), rows)
+}
+
+func findDashboardMatch(history *dashboardHistory, query string, start int, direction int) int {
+	length := history.Len()
+	query = strings.ToLower(strings.TrimSpace(query))
+	if length == 0 || query == "" {
+		return -1
+	}
+	if direction < 0 {
+		direction = -1
+	} else {
+		direction = 1
+	}
+	index := start
+	for checked := 0; checked < length; checked++ {
+		index = (index + direction) % length
+		if index < 0 {
+			index += length
+		}
+		if strings.Contains(strings.ToLower(history.At(index)), query) {
+			return index
+		}
+	}
+	return -1
+}
+
+func readDashboardInput(ctx context.Context, input *os.File) (<-chan dashboardInputEvent, <-chan error, <-chan struct{}) {
+	keys := make(chan dashboardInputEvent, 16)
 	errorsChannel := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
 		defer close(keys)
 		defer close(errorsChannel)
+		defer close(done)
 		descriptors := []unix.PollFd{{Fd: int32(input.Fd()), Events: unix.POLLIN}}
 		buffer := make([]byte, 32)
+		pending := make([]byte, 0, 32)
+		emit := func(event dashboardInputEvent) bool {
+			if event.Kind == dashboardInputIgnored {
+				return true
+			}
+			select {
+			case keys <- event:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		drain := func() bool {
+			for len(pending) > 0 {
+				event, consumed, incomplete := parseDashboardInputEvent(pending)
+				if incomplete {
+					return true
+				}
+				pending = pending[consumed:]
+				if !emit(event) {
+					return false
+				}
+			}
+			return true
+		}
 		for {
 			if ctx.Err() != nil {
 				return
 			}
-			ready, err := unix.Poll(descriptors, 100)
+			timeout := 100
+			if len(pending) > 0 {
+				timeout = 25
+			}
+			ready, err := unix.Poll(descriptors, timeout)
 			if err != nil {
 				if errors.Is(err, syscall.EINTR) {
 					continue
@@ -200,7 +624,16 @@ func readDashboardInput(ctx context.Context, input *os.File) (<-chan byte, <-cha
 				return
 			}
 			if ready == 0 {
+				if len(pending) > 0 && pending[0] == 0x1b {
+					pending = pending[1:]
+					if !emit(dashboardInputEvent{Kind: dashboardInputEscape}) || !drain() {
+						return
+					}
+				}
 				continue
+			}
+			if ctx.Err() != nil {
+				return
 			}
 			count, err := input.Read(buffer)
 			if err != nil {
@@ -209,50 +642,136 @@ func readDashboardInput(ctx context.Context, input *os.File) (<-chan byte, <-cha
 				}
 				return
 			}
-			for _, key := range buffer[:count] {
-				select {
-				case keys <- key:
-				case <-ctx.Done():
-					return
-				}
+			pending = append(pending, buffer[:count]...)
+			if !drain() {
+				return
 			}
 		}
 	}()
-	return keys, errorsChannel
+	return keys, errorsChannel, done
 }
 
-func writeDashboardFrame(output io.Writer, info dashboardInfo, width int, height int, history []string) error {
-	frame := renderDashboardFrame(info, width, height, history)
+func parseDashboardInputEvent(data []byte) (dashboardInputEvent, int, bool) {
+	if len(data) == 0 {
+		return dashboardInputEvent{}, 0, true
+	}
+	switch data[0] {
+	case 0x03:
+		return dashboardInputEvent{Kind: dashboardInputInterrupt}, 1, false
+	case 0x08, 0x7f:
+		return dashboardInputEvent{Kind: dashboardInputBackspace}, 1, false
+	case '\r', '\n':
+		return dashboardInputEvent{Kind: dashboardInputEnter}, 1, false
+	case 0x1b:
+		if len(data) == 1 {
+			return dashboardInputEvent{}, 0, true
+		}
+		if data[1] == '[' {
+			end := -1
+			for index := 2; index < len(data); index++ {
+				if data[index] >= 0x40 && data[index] <= 0x7e {
+					end = index
+					break
+				}
+			}
+			if end < 0 {
+				return dashboardInputEvent{}, 0, true
+			}
+			sequence := string(data[:end+1])
+			if strings.HasPrefix(sequence, "\x1b[<") && (sequence[len(sequence)-1] == 'M' || sequence[len(sequence)-1] == 'm') {
+				fields := strings.Split(sequence[3:len(sequence)-1], ";")
+				if len(fields) == 3 {
+					button, err := strconv.Atoi(fields[0])
+					if err == nil && button&64 != 0 {
+						if button&1 == 0 {
+							return dashboardInputEvent{Kind: dashboardInputUp}, end + 1, false
+						}
+						return dashboardInputEvent{Kind: dashboardInputDown}, end + 1, false
+					}
+				}
+				return dashboardInputEvent{Kind: dashboardInputIgnored}, end + 1, false
+			}
+			switch sequence {
+			case "\x1b[A":
+				return dashboardInputEvent{Kind: dashboardInputUp}, end + 1, false
+			case "\x1b[B":
+				return dashboardInputEvent{Kind: dashboardInputDown}, end + 1, false
+			case "\x1b[5~":
+				return dashboardInputEvent{Kind: dashboardInputPageUp}, end + 1, false
+			case "\x1b[6~":
+				return dashboardInputEvent{Kind: dashboardInputPageDown}, end + 1, false
+			case "\x1b[H", "\x1b[1~", "\x1b[7~":
+				return dashboardInputEvent{Kind: dashboardInputHome}, end + 1, false
+			case "\x1b[F", "\x1b[4~", "\x1b[8~":
+				return dashboardInputEvent{Kind: dashboardInputEnd}, end + 1, false
+			default:
+				return dashboardInputEvent{Kind: dashboardInputIgnored}, end + 1, false
+			}
+		}
+		if data[1] == 'O' {
+			if len(data) < 3 {
+				return dashboardInputEvent{}, 0, true
+			}
+			switch data[2] {
+			case 'H':
+				return dashboardInputEvent{Kind: dashboardInputHome}, 3, false
+			case 'F':
+				return dashboardInputEvent{Kind: dashboardInputEnd}, 3, false
+			default:
+				return dashboardInputEvent{Kind: dashboardInputIgnored}, 3, false
+			}
+		}
+		return dashboardInputEvent{Kind: dashboardInputEscape}, 1, false
+	}
+	if data[0] < 0x20 {
+		return dashboardInputEvent{Kind: dashboardInputIgnored}, 1, false
+	}
+	if !utf8.FullRune(data) {
+		return dashboardInputEvent{}, 0, true
+	}
+	character, size := utf8.DecodeRune(data)
+	if character == utf8.RuneError && size == 1 || !unicode.IsPrint(character) {
+		return dashboardInputEvent{Kind: dashboardInputIgnored}, size, false
+	}
+	return dashboardInputEvent{Kind: dashboardInputText, Text: string(character)}, size, false
+}
+
+func dashboardLogRows(info dashboardInfo, width int, height int) int {
+	rows := height - len(dashboardBanner(info, width, height))
+	if rows < 1 {
+		return 1
+	}
+	return rows
+}
+
+func writeDashboardViewFrame(output io.Writer, info dashboardInfo, width int, height int, history *dashboardHistory, view *dashboardView) error {
+	frame := renderDashboardViewFrame(info, width, height, history, view)
 	if _, err := io.WriteString(output, frame); err != nil {
 		return fmt.Errorf("dashboard: render: %w", err)
 	}
 	return nil
 }
 
-func renderDashboardFrame(info dashboardInfo, width int, height int, history []string) string {
+func renderDashboardViewFrame(info dashboardInfo, width int, height int, history *dashboardHistory, view *dashboardView) string {
 	if width < 1 {
 		width = 1
 	}
 	if height < 2 {
 		height = 2
 	}
-	banner := dashboardBannerLines(info, height)
-	logRows := height - len(banner)
-	start := len(history) - logRows
-	if start < 0 {
-		start = 0
-	}
-	visible := history[start:]
+	logRows := dashboardLogRows(info, width, height)
+	view.Clamp(history.Len(), logRows)
+	hint := dashboardViewHint(view, history, logRows, width)
+	banner := dashboardBannerWithHint(info, width, height, hint)
+	visible := history.Range(view.Top, view.Top+logRows)
 	var frame strings.Builder
 	frame.WriteString("\x1b[H")
 	for row := 0; row < height; row++ {
 		frame.WriteString("\x1b[2K")
 		if row < len(banner) {
-			frame.WriteString("\x1b[7m")
-			frame.WriteString(fitDashboardLine(banner[row], width, true))
-			frame.WriteString("\x1b[0m")
+			frame.WriteString(renderDashboardLine(banner[row], width, info.Color))
 		} else if index := row - len(banner); index < len(visible) {
-			frame.WriteString(fitDashboardLine(visible[index], width, false))
+			frame.WriteString(renderDashboardLogLine(visible[index], width, info.Color))
 		}
 		if row+1 < height {
 			frame.WriteString("\r\n")
@@ -261,55 +780,482 @@ func renderDashboardFrame(info dashboardInfo, width int, height int, history []s
 	return frame.String()
 }
 
-func dashboardBannerLines(info dashboardInfo, height int) []string {
-	interfaceLabel := ""
-	if info.Interface != "" {
-		interfaceLabel = " (" + info.Interface + ")"
+func dashboardViewHint(view *dashboardView, history *dashboardHistory, rows int, width int) string {
+	if view.SearchMode {
+		if width < 50 {
+			return "/" + view.SearchDraft + " · Enter · Esc cancel"
+		}
+		return "/" + view.SearchDraft + " · Enter: search · Esc: cancel · Ctrl-C: detach"
 	}
-	title := fmt.Sprintf(" CONVEN | %s | env=%s | LAN=%s%s", info.Workspace, info.Environment, info.Address, interfaceLabel)
-	maximumBannerRows := height - 1
-	if maximumBannerRows < 1 {
-		return []string{title}
+	if view.SearchQuery != "" {
+		result := view.SearchMessage
+		if result == "" && view.SearchMatch >= 0 {
+			result = fmt.Sprintf("line %d/%d", view.SearchMatch+1, history.Len())
+		}
+		if result == "" {
+			result = "search ready"
+		}
+		if width < 55 {
+			return fmt.Sprintf("/%s · %s · n/N · Esc", view.SearchQuery, result)
+		}
+		return fmt.Sprintf("q: detach · /%s · %s · n/N: next/prev · Esc: clear", view.SearchQuery, result)
 	}
-	serviceRows := maximumBannerRows - 2
-	if serviceRows < 0 {
-		serviceRows = 0
+	if view.Follow {
+		if width < 50 {
+			return "q: detach · FOLLOW · ↑/↓ scroll"
+		}
+		return "q / Ctrl-C: detach · FOLLOW · ↑/↓ scroll · / search"
 	}
-	lines := []string{title}
-	shown := len(info.Services)
-	if shown > serviceRows {
-		shown = serviceRows
-		if serviceRows > 0 {
-			shown--
+	start := 0
+	end := 0
+	if history.Len() > 0 {
+		start = view.Top + 1
+		end = view.Top + rows
+		if end > history.Len() {
+			end = history.Len()
 		}
 	}
-	for index := 0; index < shown; index++ {
-		service := info.Services[index]
-		lines = append(lines, fmt.Sprintf(" %s | ports %s", service.Name, dashboardPorts(service.Ports)))
+	position := fmt.Sprintf("%d-%d/%d", start, end, history.Len())
+	newLines := ""
+	if view.NewLines > 0 {
+		newLines = fmt.Sprintf(" · %d new", view.NewLines)
 	}
-	if shown < len(info.Services) && serviceRows > 0 {
-		lines = append(lines, fmt.Sprintf(" ... +%d more services", len(info.Services)-shown))
+	if width < 60 {
+		return fmt.Sprintf("q: detach · PAUSED · %s%s · End follow", position, newLines)
 	}
-	if len(lines) < maximumBannerRows {
-		lines = append(lines, " LOGS | q/Ctrl-C detach; services keep running")
+	return fmt.Sprintf("q / Ctrl-C: detach · PAUSED · %s%s · End/G: follow · / search", position, newLines)
+}
+
+func dashboardBanner(info dashboardInfo, width int, height int) []dashboardLine {
+	return dashboardBannerWithHint(info, width, height, dashboardLogHint(width))
+}
+
+func dashboardBannerWithHint(info dashboardInfo, width int, height int, hint string) []dashboardLine {
+	minimumLogRows := 1
+	if height >= 7 {
+		minimumLogRows = 3
+	}
+	maximumBannerRows := height - minimumLogRows
+	if maximumBannerRows < 1 {
+		maximumBannerRows = 1
+	}
+	detachLine := dashboardDividerLine(width, hint)
+	if maximumBannerRows == 1 {
+		return []dashboardLine{detachLine}
+	}
+
+	workspaceLines := dashboardWorkspaceLines(info, width)
+	showTitleRule := true
+	showCluster := true
+	showServices := true
+	fixedRows := func() int {
+		rows := 2 + len(workspaceLines)
+		if showTitleRule {
+			rows++
+		}
+		if showCluster {
+			rows++
+		}
+		if showServices {
+			rows++
+		}
+		return rows
+	}
+	if fixedRows() > maximumBannerRows {
+		showServices = false
+	}
+	if fixedRows() > maximumBannerRows {
+		showCluster = false
+	}
+	if fixedRows() > maximumBannerRows && len(workspaceLines) > 1 {
+		workspaceLines = []dashboardLine{dashboardCompactWorkspaceLine(info)}
+	}
+	if fixedRows() > maximumBannerRows {
+		workspaceLines = nil
+	}
+	if fixedRows() > maximumBannerRows {
+		showTitleRule = false
+	}
+
+	lines := []dashboardLine{dashboardTitleLine(info.Version)}
+	if showTitleRule {
+		lines = append(lines, dashboardHorizontalRuleLine(width))
+	}
+	lines = append(lines, workspaceLines...)
+	if showCluster {
+		lines = append(lines, dashboardFieldLine("CLUSTER", info.Cluster, dashboardGreen))
+	}
+	if showServices {
+		lines = append(lines, dashboardServicesTitleLine(len(info.Services)))
+		serviceRows := maximumBannerRows - len(lines) - 1
+		lines = append(lines, dashboardServiceLines(info.Services, width, serviceRows)...)
+	}
+	lines = append(lines, detachLine)
+	return lines
+}
+
+func dashboardBannerLines(info dashboardInfo, width int, height int) []string {
+	banner := dashboardBanner(info, width, height)
+	lines := make([]string, 0, len(banner))
+	for _, line := range banner {
+		lines = append(lines, dashboardPlainLine(line))
 	}
 	return lines
 }
 
-func dashboardPorts(ports map[string]int) string {
+func dashboardTitleLine(version string) dashboardLine {
+	return dashboardLine{Segments: []dashboardSegment{
+		{Text: "  "},
+		{Text: "CONVEN", Style: dashboardBoldCyan},
+		{Text: "  "},
+		{Text: version, Style: dashboardGreen},
+	}}
+}
+
+func dashboardHorizontalRuleLine(width int) dashboardLine {
+	ruleWidth := width - 2
+	if ruleWidth < 1 {
+		ruleWidth = 1
+	}
+	return dashboardLine{Segments: []dashboardSegment{
+		{Text: "  "},
+		{Text: strings.Repeat("─", ruleWidth), Style: dashboardRule},
+	}}
+}
+
+func dashboardWorkspaceLines(info dashboardInfo, width int) []dashboardLine {
+	interfaceLabel := ""
+	if info.Interface != "" {
+		interfaceLabel = " (" + info.Interface + ")"
+	}
+	workspace := append(dashboardFieldPrefix("WORKSPACE"), dashboardSegment{Text: info.Workspace, Style: dashboardBold})
+	environment := []dashboardSegment{
+		{Text: "     "},
+		{Text: "ENV", Style: dashboardDim},
+		{Text: "  "},
+		{Text: info.Environment, Style: dashboardYellow},
+	}
+	network := []dashboardSegment{
+		{Text: "     "},
+		{Text: "LAN", Style: dashboardDim},
+		{Text: "  "},
+		{Text: info.Address + interfaceLabel, Style: dashboardGreen},
+	}
+	if width >= 78 {
+		segments := append(workspace, environment...)
+		segments = append(segments, network...)
+		return []dashboardLine{{Segments: segments}}
+	}
+	if width >= 50 {
+		first := append(workspace, environment...)
+		return []dashboardLine{{Segments: first}, dashboardFieldLine("LAN", info.Address+interfaceLabel, dashboardGreen)}
+	}
+	return []dashboardLine{
+		dashboardFieldLine("WORKSPACE", info.Workspace, dashboardBold),
+		dashboardFieldLine("ENV", info.Environment, dashboardYellow),
+		dashboardFieldLine("LAN", info.Address+interfaceLabel, dashboardGreen),
+	}
+}
+
+func dashboardCompactWorkspaceLine(info dashboardInfo) dashboardLine {
+	interfaceLabel := ""
+	if info.Interface != "" {
+		interfaceLabel = " (" + info.Interface + ")"
+	}
+	segments := append(dashboardFieldPrefix("WORKSPACE"), dashboardSegment{Text: info.Workspace, Style: dashboardBold})
+	segments = append(segments,
+		dashboardSegment{Text: "     "},
+		dashboardSegment{Text: "ENV", Style: dashboardDim},
+		dashboardSegment{Text: "  "},
+		dashboardSegment{Text: info.Environment, Style: dashboardYellow},
+		dashboardSegment{Text: "     "},
+		dashboardSegment{Text: "LAN", Style: dashboardDim},
+		dashboardSegment{Text: "  "},
+		dashboardSegment{Text: info.Address + interfaceLabel, Style: dashboardGreen},
+	)
+	return dashboardLine{Segments: segments}
+}
+
+func dashboardFieldPrefix(label string) []dashboardSegment {
+	padding := dashboardFieldWidth - dashboardDisplayWidth(label) + 2
+	if padding < 2 {
+		padding = 2
+	}
+	return []dashboardSegment{
+		{Text: "  "},
+		{Text: label, Style: dashboardDim},
+		{Text: strings.Repeat(" ", padding)},
+	}
+}
+
+func dashboardFieldLine(label string, value string, valueStyle string) dashboardLine {
+	segments := dashboardFieldPrefix(label)
+	segments = append(segments, dashboardSegment{Text: value, Style: valueStyle})
+	return dashboardLine{Segments: segments}
+}
+
+func dashboardServicesTitleLine(count int) dashboardLine {
+	return dashboardFieldLine("SERVICES", fmt.Sprintf("%d local", count), dashboardDim)
+}
+
+func dashboardServiceLines(services []dashboardService, width int, rows int) []dashboardLine {
+	if rows <= 0 || len(services) == 0 {
+		return nil
+	}
+	shown := len(services)
+	includeMore := false
+	if shown > rows {
+		includeMore = true
+		shown = rows - 1
+		if shown < 0 {
+			shown = 0
+		}
+	}
+	nameWidth := dashboardServiceNameWidth(width)
+	lines := make([]dashboardLine, 0, rows)
+	for index := 0; index < shown; index++ {
+		lines = append(lines, dashboardServiceLine(services[index], nameWidth))
+	}
+	if includeMore {
+		hidden := len(services) - shown
+		message := fmt.Sprintf("…  +%d more services", hidden)
+		if shown == 0 {
+			message = fmt.Sprintf("…  %d services hidden at this terminal height", len(services))
+		}
+		lines = append(lines, dashboardLine{Segments: []dashboardSegment{
+			{Text: "  "},
+			{Text: message, Style: dashboardDim},
+		}})
+	}
+	return lines
+}
+
+func dashboardServiceNameWidth(width int) int {
+	if width >= 78 {
+		return 32
+	}
+	available := width - 15
+	if available > 32 {
+		available = 32
+	}
+	if available < 8 {
+		available = 8
+	}
+	return available
+}
+
+func dashboardServiceLine(service dashboardService, nameWidth int) dashboardLine {
+	name := fitDashboardLine(service.Name, nameWidth, false)
+	segments := []dashboardSegment{
+		{Text: "    "},
+		{Text: name, Style: dashboardBoldCyan},
+		{Text: strings.Repeat(" ", nameWidth-dashboardDisplayWidth(name)) + "  "},
+	}
+	segments = append(segments, dashboardPortSegments(service.Ports)...)
+	return dashboardLine{Segments: segments}
+}
+
+func dashboardPortSegments(ports map[string]int) []dashboardSegment {
 	if len(ports) == 0 {
-		return "-"
+		return []dashboardSegment{{Text: "-", Style: dashboardDim}}
 	}
 	names := make([]string, 0, len(ports))
 	for name := range ports {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	values := make([]string, 0, len(names))
-	for _, name := range names {
-		values = append(values, fmt.Sprintf("%s=%d", name, ports[name]))
+	segments := make([]dashboardSegment, 0, len(names)*4)
+	for index, name := range names {
+		if index > 0 {
+			segments = append(segments, dashboardSegment{Text: "  ·  ", Style: dashboardDim})
+		}
+		protocol := strings.ToUpper(name)
+		protocolPadding := 4 - dashboardDisplayWidth(protocol) + 2
+		if protocolPadding < 2 {
+			protocolPadding = 2
+		}
+		segments = append(segments,
+			dashboardSegment{Text: protocol, Style: dashboardDim},
+			dashboardSegment{Text: strings.Repeat(" ", protocolPadding)},
+			dashboardSegment{Text: fmt.Sprintf("%d", ports[name]), Style: dashboardGreen},
+		)
 	}
-	return strings.Join(values, ", ")
+	return segments
+}
+
+func dashboardDetachLine(width int) dashboardLine {
+	return dashboardDividerLine(width, dashboardLogHint(width))
+}
+
+func dashboardDividerLine(width int, hint string) dashboardLine {
+	used := dashboardDisplayWidth("  ── " + hint + " ")
+	ruleWidth := width - used
+	if ruleWidth < 1 {
+		ruleWidth = 1
+	}
+	return dashboardLine{Segments: []dashboardSegment{
+		{Text: "  "},
+		{Text: "── ", Style: dashboardRule},
+		{Text: hint, Style: dashboardDim},
+		{Text: " "},
+		{Text: strings.Repeat("─", ruleWidth), Style: dashboardRule},
+	}}
+}
+
+func dashboardLogHint(width int) string {
+	if width < 42 {
+		return "q: detach"
+	}
+	if width < 70 {
+		return "q / Ctrl-C: detach"
+	}
+	return "q / Ctrl-C: detach · services keep running"
+}
+
+func dashboardPlainLine(line dashboardLine) string {
+	var value strings.Builder
+	for _, segment := range line.Segments {
+		value.WriteString(sanitizeDashboardText(segment.Text))
+	}
+	return value.String()
+}
+
+func renderDashboardLine(line dashboardLine, width int, color bool) string {
+	if width < 1 {
+		return ""
+	}
+	plain := dashboardPlainLine(line)
+	truncated := dashboardDisplayWidth(plain) > width
+	limit := width
+	if truncated {
+		limit -= dashboardRuneWidth('…')
+		if limit < 0 {
+			limit = 0
+		}
+	}
+	used := 0
+	var rendered strings.Builder
+	for _, segment := range line.Segments {
+		text := sanitizeDashboardText(segment.Text)
+		var visible strings.Builder
+		for _, character := range text {
+			characterWidth := dashboardRuneWidth(character)
+			if used+characterWidth > limit {
+				break
+			}
+			visible.WriteRune(character)
+			used += characterWidth
+		}
+		if visible.Len() == 0 {
+			if used >= limit {
+				break
+			}
+			continue
+		}
+		if color && segment.Style != "" {
+			rendered.WriteString(segment.Style)
+		}
+		rendered.WriteString(visible.String())
+		if color && segment.Style != "" {
+			rendered.WriteString(dashboardReset)
+		}
+		if used >= limit {
+			break
+		}
+	}
+	if truncated {
+		rendered.WriteRune('…')
+	}
+	return rendered.String()
+}
+
+func renderDashboardLogLine(value string, width int, color bool) string {
+	line := fitDashboardLine(value, width, false)
+	if !color || line == "" {
+		return line
+	}
+	prefixEnd := 0
+	if strings.HasPrefix(line, "[") {
+		if end := strings.IndexByte(line, ']'); end >= 0 {
+			prefixEnd = end + 1
+		}
+	}
+	remainder := line[prefixEnd:]
+	severityStart, severityEnd, severityStyle := dashboardLogSeverity(remainder)
+	var rendered strings.Builder
+	if prefixEnd > 0 {
+		rendered.WriteString(dashboardCyan)
+		rendered.WriteString(line[:prefixEnd])
+		rendered.WriteString(dashboardReset)
+	}
+	if severityStart < 0 {
+		rendered.WriteString(remainder)
+		return rendered.String()
+	}
+	rendered.WriteString(remainder[:severityStart])
+	rendered.WriteString(severityStyle)
+	rendered.WriteString(remainder[severityStart:severityEnd])
+	rendered.WriteString(dashboardReset)
+	rendered.WriteString(remainder[severityEnd:])
+	return rendered.String()
+}
+
+func dashboardLogSeverity(value string) (int, int, string) {
+	upper := strings.ToUpper(value)
+	for _, token := range []string{"ERROR", "FATAL", "PANIC"} {
+		if index := strings.Index(upper, token); index >= 0 {
+			return index, index + len(token), dashboardRed
+		}
+	}
+	for _, token := range []string{"WARN", "SLOW"} {
+		if index := strings.Index(upper, token); index >= 0 {
+			return index, index + len(token), dashboardYellow
+		}
+	}
+	return -1, -1, ""
+}
+
+func dashboardColorEnabled() bool {
+	_, disabled := os.LookupEnv("NO_COLOR")
+	return !disabled
+}
+
+func kubeconfigClusterName(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	name := filepath.Base(filepath.Clean(path))
+	if name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	return name
+}
+
+func dashboardSessionCluster(session *Session) string {
+	if session == nil {
+		return ""
+	}
+	if cluster := strings.TrimSpace(session.Cluster); cluster != "" {
+		return cluster
+	}
+	if session.Connection == nil || session.Connection.Driver != "ktctl" {
+		return ""
+	}
+	command := session.Connection.Command
+	for index := 0; index < len(command); index++ {
+		argument := command[index]
+		if argument == "connect" {
+			break
+		}
+		if argument == "--kubeconfig" && index+1 < len(command) {
+			return kubeconfigClusterName(command[index+1])
+		}
+		if strings.HasPrefix(argument, "--kubeconfig=") {
+			return kubeconfigClusterName(strings.TrimPrefix(argument, "--kubeconfig="))
+		}
+	}
+	return ""
 }
 
 func fitDashboardLine(value string, width int, pad bool) string {
@@ -419,14 +1365,6 @@ func sanitizeDashboardText(value string) string {
 	return result.String()
 }
 
-func appendDashboardHistory(history []string, line string) []string {
-	history = append(history, sanitizeDashboardText(line))
-	if len(history) > dashboardHistoryLines {
-		history = append([]string(nil), history[len(history)-dashboardHistoryLines:]...)
-	}
-	return history
-}
-
 func dashboardServices(workspace *WorkspaceData, session *Session, names []string) []dashboardService {
 	processes := make(map[string]ServiceProcess, len(session.Services))
 	for _, process := range session.Services {
@@ -473,7 +1411,7 @@ func dashboardServices(workspace *WorkspaceData, session *Session, names []strin
 func discoverLocalIPv4() (string, string) {
 	primary := defaultRouteIPv4()
 	candidates := interfaceIPv4Candidates()
-	selected := chooseLocalIPv4(primary, candidates)
+	selected := chooseLocalIPv4ForOS(goruntime.GOOS, primary, candidates)
 	if selected.IP == nil {
 		return "unavailable", ""
 	}
@@ -531,22 +1469,13 @@ func interfaceIPv4Candidates() []localIPv4Candidate {
 }
 
 func chooseLocalIPv4(primary net.IP, candidates []localIPv4Candidate) localIPv4Candidate {
+	return chooseLocalIPv4ForOS(goruntime.GOOS, primary, candidates)
+}
+
+func chooseLocalIPv4ForOS(goos string, primary net.IP, candidates []localIPv4Candidate) localIPv4Candidate {
 	primary = primary.To4()
-	if primary != nil {
-		for _, candidate := range candidates {
-			if candidate.IP.Equal(primary) {
-				return candidate
-			}
-		}
-		return localIPv4Candidate{IP: append(net.IP(nil), primary...)}
-	}
 	candidates = append([]localIPv4Candidate(nil), candidates...)
 	sort.Slice(candidates, func(left int, right int) bool {
-		leftScore := localIPv4Score(candidates[left])
-		rightScore := localIPv4Score(candidates[right])
-		if leftScore != rightScore {
-			return leftScore < rightScore
-		}
 		if candidates[left].Index != candidates[right].Index {
 			return candidates[left].Index < candidates[right].Index
 		}
@@ -555,19 +1484,82 @@ func chooseLocalIPv4(primary net.IP, candidates []localIPv4Candidate) localIPv4C
 		}
 		return candidates[left].IP.String() < candidates[right].IP.String()
 	})
-	if len(candidates) == 0 {
-		return localIPv4Candidate{}
+	preferredInterface := ""
+	switch goos {
+	case "darwin":
+		preferredInterface = "en0"
+	case "linux":
+		preferredInterface = "eth0"
 	}
-	return candidates[0]
+	selectCandidate := func(matches func(localIPv4Candidate) bool) (localIPv4Candidate, bool) {
+		for _, candidate := range candidates {
+			if candidate.IP == nil || !matches(candidate) {
+				continue
+			}
+			return candidate, true
+		}
+		return localIPv4Candidate{}, false
+	}
+	nonTunnel := func(candidate localIPv4Candidate) bool {
+		return !isTunnelIPv4Candidate(candidate)
+	}
+	privateNonTunnel := func(candidate localIPv4Candidate) bool {
+		return candidate.IP.IsPrivate() && nonTunnel(candidate)
+	}
+	if preferredInterface != "" {
+		if selected, found := selectCandidate(func(candidate localIPv4Candidate) bool {
+			return candidate.Interface == preferredInterface && privateNonTunnel(candidate)
+		}); found {
+			return selected
+		}
+	}
+	if primary != nil {
+		if selected, found := selectCandidate(func(candidate localIPv4Candidate) bool {
+			return candidate.IP.Equal(primary) && privateNonTunnel(candidate)
+		}); found {
+			return selected
+		}
+	}
+	if selected, found := selectCandidate(privateNonTunnel); found {
+		return selected
+	}
+	if preferredInterface != "" {
+		if selected, found := selectCandidate(func(candidate localIPv4Candidate) bool {
+			return candidate.Interface == preferredInterface && nonTunnel(candidate)
+		}); found {
+			return selected
+		}
+	}
+	if primary != nil {
+		if selected, found := selectCandidate(func(candidate localIPv4Candidate) bool {
+			return candidate.IP.Equal(primary) && nonTunnel(candidate)
+		}); found {
+			return selected
+		}
+	}
+	if selected, found := selectCandidate(nonTunnel); found {
+		return selected
+	}
+	if primary != nil {
+		if selected, found := selectCandidate(func(candidate localIPv4Candidate) bool {
+			return candidate.IP.Equal(primary)
+		}); found {
+			return selected
+		}
+	}
+	if selected, found := selectCandidate(func(localIPv4Candidate) bool { return true }); found {
+		return selected
+	}
+	if primary != nil {
+		return localIPv4Candidate{IP: append(net.IP(nil), primary...)}
+	}
+	return localIPv4Candidate{}
 }
 
-func localIPv4Score(candidate localIPv4Candidate) int {
-	score := 0
-	if !candidate.IP.IsPrivate() {
-		score += 1
-	}
+func isTunnelIPv4Candidate(candidate localIPv4Candidate) bool {
 	if candidate.Flags&net.FlagPointToPoint != 0 {
-		score += 2
+		return true
 	}
-	return score
+	name := strings.ToLower(candidate.Interface)
+	return strings.HasPrefix(name, "utun") || strings.HasPrefix(name, "tun") || strings.HasPrefix(name, "tap")
 }

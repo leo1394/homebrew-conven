@@ -17,7 +17,7 @@ class Conven < Formula
   test do
     ENV["HOME"] = testpath.to_s
     if build.head?
-      assert_equal "conven 0.2.4\n", shell_output("#{bin}/conven --version")
+      assert_equal "conven 0.2.5\n", shell_output("#{bin}/conven --version")
     else
       expected_version = "conven #{version}\n"
       actual_version = shell_output("#{bin}/conven --version")
@@ -66,6 +66,7 @@ class Conven < Formula
     assert_path_exists fish_completion/"conven.fish"
     top_level_commands = %w[init services config policy plugins doctor help version]
     service_actions = %w[list registry status logs start restart stop stop-all]
+    service_actions.insert(4, "dashboard") if build.head? || version >= "0.2.5"
     policy_actions = %w[edit import reset]
     plugin_actions = %w[install list run]
     plugin_actions.insert(2, "remove") if build.head? || version >= "0.2.2"

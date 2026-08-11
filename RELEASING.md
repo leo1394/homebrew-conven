@@ -419,7 +419,7 @@ for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION" "$CONVEN_FI
   grep -Fq -- "services" "$completion"
   grep -Fq -- "plugins" "$completion"
 done
-for action in list registry status logs start restart stop stop-all; do
+for action in list registry status dashboard logs start restart stop stop-all; do
   for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
@@ -443,6 +443,9 @@ for option in prune tail; do
   done
   grep -Fq -- "-l $option" "$CONVEN_FISH_COMPLETION"
 done
+grep -Fq -- 'options="--tail --dashboard --help"' "$CONVEN_BASH_COMPLETION"
+grep -Fq -- "'--dashboard[open the interactive log dashboard]'" "$CONVEN_ZSH_COMPLETION"
+grep -Fq -- "__conven_services_action --logs' -l dashboard" "$CONVEN_FISH_COMPLETION"
 ! grep -Eq 'compgen -W "[^"]* (discover|start|restart|status|stop|logs|list)( |")' "$CONVEN_BASH_COMPLETION"
 ! grep -Eq "^[[:space:]]*'(discover|start|restart|status|stop|logs|list):" "$CONVEN_ZSH_COMPLETION"
 ! grep -Eq ' -a (discover|start|restart|status|stop|logs|list) -d ' "$CONVEN_FISH_COMPLETION"
@@ -517,6 +520,10 @@ for command in services doctor; do
   ! grep -Fq -- "--workspace" "$CONVEN_HELP_OUTPUT"
   ! grep -Fq -- "--config" "$CONVEN_HELP_OUTPUT"
 done
+"$CONVEN_BIN" services --logs --help >"$CONVEN_HELP_OUTPUT"
+grep -Fq -- "--tail" "$CONVEN_HELP_OUTPUT"
+grep -Fq -- "--dashboard" "$CONVEN_HELP_OUTPUT"
+grep -Fq -- "last --tail or --dashboard flag wins" "$CONVEN_HELP_OUTPUT"
 for removed_command in discover start restart status stop logs list; do
   if "$CONVEN_BIN" "$removed_command" --help >/dev/null 2>&1; then
     false
@@ -534,7 +541,7 @@ fi
 rm -f "$CONVEN_HELP_OUTPUT"
 "$CONVEN_BIN" services --start --dry-run --dev user-svc order-svc
 "$CONVEN_BIN" services --start --dry-run user-svc order-svc
-"$CONVEN_BIN" services --start user-svc order-svc
+"$CONVEN_BIN" services --start user-svc order-svc </dev/null
 "$CONVEN_BIN" services --status
 "$CONVEN_BIN" services --logs user-svc order-svc
 CONVEN_TAIL_OUTPUT=$(mktemp /tmp/conven-tail.XXXXXX)
@@ -603,36 +610,53 @@ real business repositories:
   the narrow check/rename interval remains a best-effort limitation. A
   symbolic-link `.conven/conven.yaml` must also be rejected rather than replaced.
 
-The redirected `services --logs --tail` invocation above is the non-TTY
-acceptance path. It must remain a continuous `[service]`-prefixed plain-text
-stream and must not emit dashboard control sequences. ANSI bytes written by a
-service may remain in this plain stream; sanitization applies to full-screen
-dashboard rendering.
+The redirected `services --logs --tail` invocation above is the non-TTY Plain
+acceptance path. It must remain a continuous `[service]`-prefixed stream and
+must not emit Dashboard control sequences. ANSI bytes written by a service may
+remain in this Plain stream; sanitization applies only to full-screen Dashboard
+rendering. The preceding start uses non-TTY standard input intentionally: a
+successful start must return and leave the services running instead of entering
+either viewer.
 
 Also exercise the dashboard from a real interactive terminal rather than a
 redirect or pipeline:
 
 ```bash
-"$CONVEN_BIN" services --start --tail user-svc order-svc
-# Resize the window, then press q. Both services must remain running.
+"$CONVEN_BIN" services --start user-svc order-svc
+# Start opens the Dashboard by default. Exercise its controls, then press q.
 "$CONVEN_BIN" services --status
-"$CONVEN_BIN" services --restart --tail user-svc
+"$CONVEN_BIN" services --restart user-svc
+# Restart returns without opening a viewer.
+"$CONVEN_BIN" services --dashboard user-svc order-svc
 # Press Ctrl-C. The restarted service and unchanged service must remain running.
 "$CONVEN_BIN" services --status
-"$CONVEN_BIN" services --logs --tail user-svc order-svc
-# Press q, then clean up the still-running services.
+"$CONVEN_BIN" services --logs --tail --dashboard user-svc order-svc
+# The last mode flag selects the Dashboard alias; exercise it, then press q.
+"$CONVEN_BIN" services --logs --dashboard --tail user-svc order-svc
+# The last mode flag selects Plain; use native scrollback and Command+F, then press Ctrl-C.
 "$CONVEN_BIN" services --stop --all
 ```
 
-For every TTY entry point, confirm that `--tail` behaves as a boolean switch,
-not a line-count option. The full-screen dashboard must keep a fixed banner for
-the workspace/environment, selected running services, their manifest-declared
-port snapshots, and the current LAN IPv4 address while the remaining viewport
-shows the latest aggregated logs and continues scrolling. Resizing the terminal
-must redraw the layout, and ANSI or other terminal control sequences written by
-a service must be sanitized. Both `q` and `Ctrl-C` must only detach, restore the
-terminal, and leave all services running, as verified by the following
-`services --status`.
+Confirm that `services --logs --tail`, `services --start --tail`, and
+`services --restart --tail` use the Plain continuous stream even in a TTY;
+`--tail` remains a boolean switch rather than a line-count option. Plain output
+must enter native terminal scrollback and be searchable with Command+F.
+`services --logs --dashboard` must behave exactly like the independent
+`services --dashboard` action. When both logs mode flags are supplied, confirm
+that the last occurrence wins: `--tail --dashboard` opens the Dashboard and
+`--dashboard --tail` selects Plain.
+
+The full-screen Dashboard must keep a fixed banner for the
+workspace/environment, selected running services, their manifest-declared port
+snapshots, and the current LAN IPv4 address. Its application-owned history must
+retain at most 10,000 received lines. Verify mouse-wheel, Up/Down, and PgUp/PgDn
+scrolling, Home or `g` for the oldest retained line, End or `G` for live follow,
+`/` search, `n`/`N` match navigation, and Esc to clear search. Terminal
+Command+F is not the Dashboard history search and need only see the currently
+rendered frame. Resizing the terminal must redraw the layout, and ANSI or other
+terminal control sequences written by a service must be sanitized. Both `q`
+and `Ctrl-C` must only detach, restore the terminal, and leave all services
+running, as verified by the following `services --status`.
 The displayed ports are configuration snapshots rather than live listening-
 socket probes; the LAN address and a displayed port do not by themselves prove
 that an endpoint is bound or reachable.
@@ -647,10 +671,10 @@ Confirm the following behavior:
   discovery always scans immediate children of the resolved workspace root,
   never children of the invocation directory.
 - The `services` action must be its first argument, and exactly one of `--list`,
-  `--registry`, `--status`, `--logs`, `--start`, `--restart`, `--stop`, or
-  `--stop-all` is required. The former top-level service commands return usage
-  status 2 and are absent from help and generated top-level completion
-  candidates.
+  `--registry`, `--status`, `--dashboard`, `--logs`, `--start`, `--restart`,
+  `--stop`, or `--stop-all` is required. The former top-level service commands
+  return usage status 2 and are absent from help and generated top-level
+  completion candidates.
 - The removed workspace and manifest flags return usage status 2 for every
   workspace command and are absent from command help and all generated
   completions. Setting `CONVEN_WORKSPACE` cannot change CLI discovery: a command
@@ -685,9 +709,13 @@ Confirm the following behavior:
   `Convening local services: user-svc, order-svc`.
 - `localEnv` is injected for selected dependencies and `remoteEnv` for
   unselected dependencies.
-- Logs from all selected services are available through `conven services --logs`. The
-  boolean `--tail` switch provides the TTY dashboard and the non-TTY plain-text
-  fallback described above.
+- Logs from all selected services are available through `conven services --logs`.
+  `services --dashboard` and its `services --logs --dashboard` alias provide the
+  fixed-banner TTY viewer and its application-owned 10,000-line history;
+  `services --logs --tail` provides the Plain native-scrollback stream. If both
+  logs mode flags appear, the last one wins. Interactive start defaults to the
+  Dashboard, explicit start `--tail` selects Plain, non-TTY start returns, and
+  restart returns unless its Plain `--tail` was explicitly requested.
 - `services --status` reports saved PID/PGID data, and normal
   `services --stop` validates process identity.
 - The picker toggles with `f`, an empty selection remains in the picker, only

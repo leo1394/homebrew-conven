@@ -196,7 +196,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			return nil, err
 		}
 	}
-	fmt.Fprintln(output, style.Success("✓ Changed local services were restarted. Use `conven services --logs --tail` to observe them."))
+	fmt.Fprintln(output, style.Success("✓ Changed local services were restarted. Use `conven services --dashboard` or `conven services --logs --tail` to observe them."))
 	return session, nil
 }
 

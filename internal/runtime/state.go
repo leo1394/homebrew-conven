@@ -21,6 +21,7 @@ type Session struct {
 	Workspace   string              `json:"workspace"`
 	ConfigPath  string              `json:"configPath"`
 	Environment string              `json:"environment"`
+	Cluster     string              `json:"cluster,omitempty"`
 	CreatedAt   time.Time           `json:"createdAt"`
 	Selected    []string            `json:"selected,omitempty"`
 	Services    []ServiceProcess    `json:"services"`

@@ -110,6 +110,7 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 				Workspace:   workspace.Root,
 				ConfigPath:  workspace.ConfigPath,
 				Environment: plan.EnvironmentName,
+				Cluster:     kubeconfigClusterName(plan.Connection.Kubeconfig),
 				CreatedAt:   time.Now(),
 				Connection:  connection,
 			}
@@ -123,6 +124,7 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 		Workspace:   workspace.Root,
 		ConfigPath:  workspace.ConfigPath,
 		Environment: plan.EnvironmentName,
+		Cluster:     kubeconfigClusterName(plan.Connection.Kubeconfig),
 		CreatedAt:   time.Now(),
 		Selected:    append([]string(nil), plan.Selected...),
 		Connection:  connection,
@@ -242,7 +244,7 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	if err := workspace.Store.Save(session); err != nil {
 		return nil, failStartup(workspace, session, connection, output, err)
 	}
-	fmt.Fprintln(output, style.Success("✓ Local services are ready. Use `conven services --logs --tail` to observe them."))
+	fmt.Fprintln(output, style.Success("✓ Local services are ready. Use `conven services --dashboard` or `conven services --logs --tail` to observe them."))
 	return session, nil
 }
 

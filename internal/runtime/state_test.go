@@ -25,6 +25,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		Workspace:   workspace,
 		ConfigPath:  filepath.Join(workspace, ".conven", "conven.yaml"),
 		Environment: "dev",
+		Cluster:     "dev-cluster-config",
 		CreatedAt:   time.Now(),
 		Services: []ServiceProcess{{
 			Name:    "user-svc",
@@ -60,6 +61,9 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if loaded.Version != stateVersion {
 		t.Fatalf("session version = %d, want %d", loaded.Version, stateVersion)
+	}
+	if loaded.Cluster != "dev-cluster-config" {
+		t.Fatalf("session cluster = %q", loaded.Cluster)
 	}
 	if loaded.Services[0].Ports["http"] != 8080 || loaded.Services[0].Ports["metrics"] != 9090 {
 		t.Fatalf("unexpected loaded service ports: %#v", loaded.Services[0].Ports)

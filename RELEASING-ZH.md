@@ -381,7 +381,7 @@ for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION" "$CONVEN_FI
   grep -Fq -- "services" "$completion"
   grep -Fq -- "plugins" "$completion"
 done
-for action in list registry status logs start restart stop stop-all; do
+for action in list registry status dashboard logs start restart stop stop-all; do
   for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
@@ -405,6 +405,9 @@ for option in prune tail; do
   done
   grep -Fq -- "-l $option" "$CONVEN_FISH_COMPLETION"
 done
+grep -Fq -- 'options="--tail --dashboard --help"' "$CONVEN_BASH_COMPLETION"
+grep -Fq -- "'--dashboard[open the interactive log dashboard]'" "$CONVEN_ZSH_COMPLETION"
+grep -Fq -- "__conven_services_action --logs' -l dashboard" "$CONVEN_FISH_COMPLETION"
 ! grep -Eq 'compgen -W "[^"]* (discover|start|restart|status|stop|logs|list)( |")' "$CONVEN_BASH_COMPLETION"
 ! grep -Eq "^[[:space:]]*'(discover|start|restart|status|stop|logs|list):" "$CONVEN_ZSH_COMPLETION"
 ! grep -Eq ' -a (discover|start|restart|status|stop|logs|list) -d ' "$CONVEN_FISH_COMPLETION"
@@ -474,6 +477,10 @@ for command in services doctor; do
   ! grep -Fq -- "--workspace" "$CONVEN_HELP_OUTPUT"
   ! grep -Fq -- "--config" "$CONVEN_HELP_OUTPUT"
 done
+"$CONVEN_BIN" services --logs --help >"$CONVEN_HELP_OUTPUT"
+grep -Fq -- "--tail" "$CONVEN_HELP_OUTPUT"
+grep -Fq -- "--dashboard" "$CONVEN_HELP_OUTPUT"
+grep -Fq -- "last --tail or --dashboard flag wins" "$CONVEN_HELP_OUTPUT"
 for removed_command in discover start restart status stop logs list; do
   if "$CONVEN_BIN" "$removed_command" --help >/dev/null 2>&1; then
     false
@@ -491,7 +498,7 @@ fi
 rm -f "$CONVEN_HELP_OUTPUT"
 "$CONVEN_BIN" services --start --dry-run --dev user-svc order-svc
 "$CONVEN_BIN" services --start --dry-run user-svc order-svc
-"$CONVEN_BIN" services --start user-svc order-svc
+"$CONVEN_BIN" services --start user-svc order-svc </dev/null
 "$CONVEN_BIN" services --status
 "$CONVEN_BIN" services --logs user-svc order-svc
 CONVEN_TAIL_OUTPUT=$(mktemp /tmp/conven-tail.XXXXXX)
@@ -545,31 +552,46 @@ Schema 校验通过不是运行门禁，实际启动前仍必须通过上面的 
   针对任意外部 writer 的线性化 compare-and-swap；极窄的 check/rename 间隔仍是
   best-effort 限制。符号链接形式的 `.conven/conven.yaml` 也必须拒绝，不能替换链接本身。
 
-上面的重定向 `services --logs --tail` 是非 TTY 验收路径。它必须保持为持续输出、带
-`[service]` 前缀的普通文本流，并且不能输出 Dashboard 控制序列。服务自身写出的
-ANSI 字节可以保留在该普通文本流中；净化只用于全屏 Dashboard 渲染。
+上面的重定向 `services --logs --tail` 是非 TTY Plain 模式验收路径。它必须保持为
+持续输出、带 `[service]` 前缀的日志流，并且不能输出 Dashboard 控制序列。服务自身
+写出的 ANSI 字节可以保留在 Plain 日志流中；净化只用于全屏 Dashboard 渲染。前面的
+start 刻意使用非 TTY 标准输入：启动成功后必须直接返回并让服务继续运行，不能进入
+任何日志查看器。
 
 还要在真实交互式终端中验收 Dashboard，不能使用重定向或管道：
 
 ```bash
-"$CONVEN_BIN" services --start --tail user-svc order-svc
-# 调整窗口大小后按 q；两个服务必须继续运行。
+"$CONVEN_BIN" services --start user-svc order-svc
+# Start 默认打开 Dashboard；验收其控制键后按 q。
 "$CONVEN_BIN" services --status
-"$CONVEN_BIN" services --restart --tail user-svc
+"$CONVEN_BIN" services --restart user-svc
+# Restart 完成后直接返回，不打开日志查看器。
+"$CONVEN_BIN" services --dashboard user-svc order-svc
 # 按 Ctrl-C；已重启服务和未变化服务都必须继续运行。
 "$CONVEN_BIN" services --status
-"$CONVEN_BIN" services --logs --tail user-svc order-svc
-# 按 q，再清理仍在运行的服务。
+"$CONVEN_BIN" services --logs --tail --dashboard user-svc order-svc
+# 最后一个模式参数选择 Dashboard 别名；验收后按 q。
+"$CONVEN_BIN" services --logs --dashboard --tail user-svc order-svc
+# 最后一个模式参数选择 Plain；使用原生 scrollback 和 Command+F，随后按 Ctrl-C。
 "$CONVEN_BIN" services --stop --all
 ```
 
-对每个 TTY 入口，都要确认 `--tail` 是布尔开关，而不是日志行数选项。全屏
-Dashboard 必须用固定 banner 展示 workspace/environment、所选的运行中服务、
-对应的 manifest 声明端口快照和当前 LAN IPv4；剩余 viewport 显示最近的聚合日志并
-持续滚动。调整终端窗口大小必须触发布局重绘，服务写出的 ANSI 或其他终端控制序列
-必须先净化。`q` 和 `Ctrl-C` 都只能脱离并恢复终端，不能停止服务，随后执行的
-`services --status` 必须证明服务仍在运行。显示端口是配置快照，不是实时监听 socket 探测；
-LAN 地址与端口同时显示，本身不能证明 endpoint 已绑定或可达。
+确认 `services --logs --tail`、`services --start --tail` 和
+`services --restart --tail` 即使在 TTY 中也使用持续输出的 Plain 日志流；`--tail`
+仍是布尔开关，不是日志行数选项。Plain 输出必须进入终端原生 scrollback，并可使用
+Command+F 搜索。`services --logs --dashboard` 必须与独立的
+`services --dashboard` action 行为完全一致。同时传入两个 logs 模式参数时，必须以最后
+出现的参数为准：`--tail --dashboard` 打开 Dashboard，`--dashboard --tail` 选择 Plain。
+
+全屏 Dashboard 必须用固定 banner 展示 workspace/environment、所选的运行中服务、
+对应的 manifest 声明端口快照和当前 LAN IPv4。应用内历史最多保留最近 10,000 行
+已接收日志。验收鼠标滚轮、`↑`/`↓` 和 `PgUp`/`PgDn` 滚动、`Home` 或 `g` 跳到最早保留日志、
+`End` 或 `G` 返回实时跟随、`/` 搜索、`n`/`N` 切换匹配项，以及 `Esc` 清除搜索。
+终端 Command+F 不是 Dashboard 历史搜索，只需看到当前渲染的一屏。调整终端窗口大小
+必须触发布局重绘，服务写出的 ANSI 或其他终端控制序列必须先净化。`q` 和 `Ctrl-C`
+都只能脱离并恢复终端，不能停止服务，随后执行的 `services --status` 必须证明服务仍在
+运行。显示端口是配置快照，不是实时监听 socket 探测；LAN 地址与端口同时显示，本身
+不能证明 endpoint 已绑定或可达。
 
 确认以下行为：
 
@@ -579,8 +601,9 @@ LAN 地址与端口同时显示，本身不能证明 endpoint 已绑定或可达
   报错，不能回退到有效的父级 workspace。仓库发现始终扫描解析出的 workspace 根目录
   的一级子目录，不能扫描命令调用目录的子目录。
 - `services` 的动作参数必须位于其后的第一个参数，并且必须且只能指定 `--list`、
-  `--registry`、`--status`、`--logs`、`--start`、`--restart`、`--stop`、`--stop-all`
-  之一。原顶层服务命令必须以用法错误状态 2 退出，并从 help 和补全顶层候选中消失。
+  `--registry`、`--status`、`--dashboard`、`--logs`、`--start`、`--restart`、`--stop`、
+  `--stop-all` 之一。原顶层服务命令必须以用法错误状态 2 退出，并从 help 和补全顶层
+  候选中消失。
 - 已移除的 workspace 和 manifest 参数在每个 workspace 命令中都必须以用法错误
   状态 2 退出，并且不出现在命令 help 或任何补全中。设置 `CONVEN_WORKSPACE` 不能
   改变 CLI 发现：位于 workspace 内时仍选择当前 workspace，位于 workspace 外时仍失败。
@@ -604,8 +627,12 @@ LAN 地址与端口同时显示，本身不能证明 endpoint 已绑定或可达
 - PathPicker 的候选项仍只来自 manifest，不能隐式触发仓库发现。
 - 启动信息严格为 `Convening local services: user-svc, order-svc`。
 - 对已选中的依赖注入 `localEnv`，对未选中的依赖注入 `remoteEnv`。
-- 可通过 `conven services --logs` 查看所有选中服务的日志；布尔开关 `--tail` 提供上述 TTY
-  Dashboard 和非 TTY 普通文本降级路径。
+- 可通过 `conven services --logs` 查看所有选中服务的日志。`services --dashboard`
+  及其 `services --logs --dashboard` 别名提供固定 banner 的 TTY 查看器和应用内最近
+  10,000 行历史；`services --logs --tail` 提供使用原生 scrollback 的 Plain 日志流。
+  同时出现两个 logs 模式参数时以最后一个为准。交互式 start 默认打开 Dashboard，
+  显式指定 start `--tail` 会选择 Plain；非 TTY start 直接返回，restart 也默认返回，
+  只有显式指定 `--tail` 才连接 Plain 日志流。
 - `services --status` 显示保存的 PID/PGID，普通 `services --stop` 会校验进程身份。
 - PathPicker 使用 `f` 切换；空选择仍停留在选择页；仅 `y` 或 `yes` 确认启动；
   非 TTY 且未显式给出服务时安全失败。

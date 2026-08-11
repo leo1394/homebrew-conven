@@ -108,12 +108,50 @@ remove manifest services whose repositories no longer exist.
 Show the saved local session, service PID and PGID information, and relevant
 shared connection state.
 .TP
-.B "\-\-logs [\-\-tail] [service...]"
+.B "\-\-dashboard [service...]"
+Open the full-screen Dashboard for the current session and optional service
+selection.
+The equivalent alias is
+.BR "services \-\-logs \-\-dashboard [service...]" .
+Its fixed banner remains visible while the application retains and scrolls up
+to 10,000 lines received by the viewer. The initial replay budget is shared
+across selected log sources; subsequent lines are retained in arrival order.
+Use the mouse wheel, Up/Down, or PgUp/PgDn to browse, Home or
+.B g
+for the oldest retained line, and End or
+.B G
+to resume live follow mode.
+Use
+.B /
+to search,
+.BR n / N
+to move between matches, and Esc to clear the search.
+Press
+.B q
+or Ctrl-C to detach without stopping services.
+This application-level search is independent of terminal search; Command+F can
+only inspect the currently rendered Dashboard frame.
+If the terminal is unsuitable for the Dashboard, the action fails with guidance
+to use
+.BR "services \-\-logs \-\-tail" .
+.TP
+.B "\-\-logs [\-\-tail] [\-\-dashboard] [service...]"
 Show logs for the current session.
 With
 .BR \-\-tail ,
-follow new output using the interactive dashboard when a suitable terminal is
-available, otherwise use a plain text stream.
+follow new output in a plain continuous stream on the terminal primary screen.
+The stream enters native terminal scrollback and can be searched with
+Command+F, subject to the terminal profile's scrollback limit.
+On attachment, an initial replay budget of up to 10,000 lines is shared across
+the selected log sources before following new output.
+Use Ctrl-C to detach from the plain stream without stopping services;
+.B q
+is a Dashboard-only control.
+With
+.BR \-\-dashboard ,
+open the same full-screen viewer as the independent Dashboard action.
+If both mode options appear, they are evaluated from left to right and the last
+one selects the effective mode.
 .TP
 .B "\-\-start [options] [service...]"
 Start a fresh local service session.
@@ -122,12 +160,21 @@ After safety and static validation, Conven rebuilds
 .IR runtime/current ,
 establishes the configured connection, materializes configuration, prepares and
 builds services, starts them in dependency order, and performs health checks.
+After a successful start, Conven opens the Dashboard automatically when attached
+to a usable interactive terminal.
+Without such a terminal, start returns and leaves the services running unless
+.B \-\-tail
+was explicitly requested.
 .TP
 .B "\-\-restart [options] [service...]"
 Restart named services, or detect changed and exited services in the current
 session when no names are supplied.
 The fixed runtime directory and existing connection are reused; unchanged
 service artifacts, configuration, processes, and logs remain untouched.
+Restart returns after completing by default; use
+.B \-\-tail
+to follow selected logs in the plain stream, or all current-session logs when
+no service names were supplied.
 .TP
 .B "\-\-stop [\-\-force] (service...|\-\-all)"
 Stop selected services or the entire current workspace session.
@@ -138,10 +185,10 @@ until the next fresh start.
 .B "\-\-stop\-all [\-\-force]"
 Exact shorthand for
 .BR "conven services \-\-stop \-\-all" .
-.SH START AND DOCTOR OPTIONS
+.SH START, RESTART, AND DOCTOR OPTIONS
 The following options are available to
 .B services \-\-start
-and, where noted, to
+and, where noted, to restart or
 .BR doctor .
 Use action-specific
 .B \-\-help
@@ -178,9 +225,11 @@ Override the Kubernetes namespace used by the connection.
 Available to start and doctor.
 .TP
 .B \-\-tail
-Attach to aggregated service logs after a successful start or restart.
+Follow aggregated service logs in a plain continuous stream after a successful
+start or restart, overriding start's automatic TTY Dashboard.
 Also accepted by
 .BR "services \-\-logs" .
+It is a boolean switch, not a line-count option.
 .TP
 .B \-\-dry\-run
 Resolve and validate a start plan without creating or modifying runtime state,
