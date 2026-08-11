@@ -238,22 +238,33 @@ func validateYAMLGuardMappings(node *yaml.Node, visited map[*yaml.Node]bool, pat
 		}
 	case yaml.MappingNode:
 		seen := make(map[string]bool, len(node.Content)/2)
+		seenText := make(map[string]bool, len(node.Content)/2)
 		for index := 0; index+1 < len(node.Content); index += 2 {
 			key := node.Content[index]
 			if key.Kind == yaml.ScalarNode && (key.Value == "<<" || key.Tag == "!!merge") {
 				return fmt.Errorf("YAML guard document uses an unsupported merge key at %s", yamlPathLabel(path))
 			}
-			if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
+			if key.Kind != yaml.ScalarNode || (key.Tag != "!!str" && key.Tag != "!!int") {
 				return fmt.Errorf("YAML guard document uses an unsupported mapping key at %s", yamlPathLabel(path))
 			}
+			identifier, err := yamlScalarIdentifier(key)
+			if err != nil {
+				return fmt.Errorf("decode YAML guard mapping key at %s: %w", yamlPathLabel(path), err)
+			}
+			var decoded any
+			if err := key.Decode(&decoded); err != nil {
+				return fmt.Errorf("decode YAML guard mapping key at %s: %w", yamlPathLabel(path), err)
+			}
+			textIdentifier := fmt.Sprint(decoded)
 			keyPath := key.Value
 			if path != "" {
 				keyPath = path + "." + key.Value
 			}
-			if seen[key.Value] {
+			if seen[identifier] || seenText[textIdentifier] {
 				return fmt.Errorf("YAML guard document uses duplicate key %s", keyPath)
 			}
-			seen[key.Value] = true
+			seen[identifier] = true
+			seenText[textIdentifier] = true
 			if err := validateYAMLGuardMappings(node.Content[index+1], visited, keyPath); err != nil {
 				return err
 			}
@@ -332,7 +343,8 @@ func encodeYAMLValue(value any) (*yaml.Node, error) {
 
 func mappingPosition(mapping *yaml.Node, key string) int {
 	for index := 0; index+1 < len(mapping.Content); index += 2 {
-		if mapping.Content[index].Value == key {
+		candidate := mapping.Content[index]
+		if candidate.Kind == yaml.ScalarNode && candidate.Tag == "!!str" && candidate.Value == key {
 			return index
 		}
 	}

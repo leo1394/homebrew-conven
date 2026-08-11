@@ -41,9 +41,11 @@ func (app App) Run(arguments []string) int {
 		return 2
 	}
 	switch arguments[0] {
-	case "-h", "--help", "help":
+	case "-h", "--help":
 		app.printUsage(app.Output)
 		return 0
+	case "help":
+		return app.runHelp(arguments[1:])
 	case "-v", "--version", "version":
 		fmt.Fprintf(app.Output, "conven %s\n", app.Version)
 		return 0
@@ -62,9 +64,43 @@ func (app App) Run(arguments []string) int {
 	case "__completion":
 		return app.runCompletion(arguments[1:])
 	default:
+		app.printUnknownCommand(arguments[0])
+		return 2
+	}
+}
+
+func (app App) runHelp(arguments []string) int {
+	if len(arguments) == 0 {
+		app.printUsage(app.Output)
+		return 0
+	}
+	if len(arguments) > 1 {
 		style := terminal.New(app.Error)
-		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: unknown command %q", arguments[0])))
-		app.printUsage(app.Error)
+		fmt.Fprintln(app.Error, style.Failure("conven: help accepts at most one command"))
+		app.printHelpUsage(app.Error)
+		return 2
+	}
+	switch arguments[0] {
+	case "-h", "--help", "help":
+		app.printHelpUsage(app.Output)
+		return 0
+	case "version":
+		fmt.Fprint(app.Output, "usage:\n  conven version\n  conven --version\n")
+		return 0
+	case "init":
+		return app.runInit([]string{"--help"})
+	case "config":
+		return app.runConfig([]string{"--help"})
+	case "policy":
+		return app.runPolicy([]string{"--help"})
+	case "plugins":
+		return app.runPlugins([]string{"--help"})
+	case "services":
+		return app.runServices([]string{"--help"})
+	case "doctor":
+		return app.runDoctor([]string{"--help"})
+	default:
+		app.printUnknownCommand(arguments[0])
 		return 2
 	}
 }
@@ -502,36 +538,144 @@ func (app App) withDefaults() App {
 
 func (app App) printUsage(output io.Writer) {
 	fmt.Fprint(output, `usage:
-  conven init
-  conven config [--global] [--list|--unset] [key] [value]
-  conven policy ACTION
-  conven plugins ACTION
-  conven services ACTION [flags] [service...]
-  conven doctor [flags]
-  conven --version
+  conven <command> [<args>]
+  conven help [<command>]
+  conven [--help | --version]
 
-Run "conven policy --help" for policy actions,
-"conven plugins --help" for plugin actions,
-"conven services --help" for service actions, and
-"conven services --start --help" for startup flags. Without service arguments,
-Conven opens an interactive PathPicker-style selector and requires confirmation.
-Run "conven services --restart" without service arguments to restart only changed
-services from the current session.
+These are common Conven commands:
+
+set up and configure a workspace
+   init       Initialize a Conven workspace
+   config     View or change Conven settings
+   policy     Edit, import, or reset the workspace manifest
+   plugins    Install, list, remove, or run plugins
+
+run and inspect local services
+   services   List, start, restart, stop, and inspect services
+   doctor     Validate workspace and connection configuration
+
+Run 'conven help <command>' or 'conven <command> --help' for detailed help.
 `)
+}
+
+func (app App) printHelpUsage(output io.Writer) {
+	fmt.Fprint(output, `usage:
+  conven help [<command>]
+
+With no command, show the root overview. With one command, show its detailed help.
+`)
+}
+
+func (app App) printUnknownCommand(command string) {
+	style := terminal.New(app.Error)
+	fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: %s is not a conven command. See 'conven --help'.", quoteCommand(command))))
+	suggestions := similarCommands(command, []string{
+		"config",
+		"doctor",
+		"help",
+		"init",
+		"plugins",
+		"policy",
+		"services",
+		"version",
+	})
+	if len(suggestions) == 0 {
+		return
+	}
+	fmt.Fprintln(app.Error)
+	if len(suggestions) == 1 {
+		fmt.Fprintln(app.Error, "The most similar command is")
+	} else {
+		fmt.Fprintln(app.Error, "The most similar commands are")
+	}
+	for _, suggestion := range suggestions {
+		fmt.Fprintf(app.Error, "\t%s\n", suggestion)
+	}
+}
+
+func quoteCommand(command string) string {
+	quoted := fmt.Sprintf("%q", command)
+	return "'" + strings.ReplaceAll(quoted[1:len(quoted)-1], "'", `\'`) + "'"
+}
+
+func similarCommands(command string, candidates []string) []string {
+	command = strings.ToLower(command)
+	maximumDistance := 1
+	if len([]rune(command)) >= 5 {
+		maximumDistance = 2
+	}
+	bestDistance := maximumDistance + 1
+	var suggestions []string
+	for _, candidate := range candidates {
+		distance := commandEditDistance(command, candidate)
+		if distance > maximumDistance || distance > bestDistance {
+			continue
+		}
+		if distance < bestDistance {
+			bestDistance = distance
+			suggestions = suggestions[:0]
+		}
+		suggestions = append(suggestions, candidate)
+	}
+	return suggestions
+}
+
+func commandEditDistance(left string, right string) int {
+	leftRunes := []rune(left)
+	rightRunes := []rune(right)
+	distances := make([][]int, len(leftRunes)+1)
+	for leftIndex := range distances {
+		distances[leftIndex] = make([]int, len(rightRunes)+1)
+		distances[leftIndex][0] = leftIndex
+	}
+	for rightIndex := range distances[0] {
+		distances[0][rightIndex] = rightIndex
+	}
+	for leftIndex := 1; leftIndex <= len(leftRunes); leftIndex++ {
+		for rightIndex := 1; rightIndex <= len(rightRunes); rightIndex++ {
+			replacementCost := 1
+			if leftRunes[leftIndex-1] == rightRunes[rightIndex-1] {
+				replacementCost = 0
+			}
+			distance := distances[leftIndex-1][rightIndex] + 1
+			if insertionDistance := distances[leftIndex][rightIndex-1] + 1; insertionDistance < distance {
+				distance = insertionDistance
+			}
+			if replacementDistance := distances[leftIndex-1][rightIndex-1] + replacementCost; replacementDistance < distance {
+				distance = replacementDistance
+			}
+			if leftIndex > 1 && rightIndex > 1 &&
+				leftRunes[leftIndex-1] == rightRunes[rightIndex-2] &&
+				leftRunes[leftIndex-2] == rightRunes[rightIndex-1] {
+				if transpositionDistance := distances[leftIndex-2][rightIndex-2] + 1; transpositionDistance < distance {
+					distance = transpositionDistance
+				}
+			}
+			distances[leftIndex][rightIndex] = distance
+		}
+	}
+	return distances[len(leftRunes)][len(rightRunes)]
 }
 
 func (app App) printServicesUsage(output io.Writer) {
 	fmt.Fprint(output, `usage:
-  conven services --list
-  conven services --registry [--prune]
-  conven services --status
-  conven services --logs [--tail] [service...]
-  conven services --start [flags] [service...]
-  conven services --restart [flags] [service...]
-  conven services --stop [--force] (<service...>|--all)
-  conven services --stop-all [--force]
+  conven services <action> [<args>]
+
+Manage the local service session for the current workspace.
+
+available actions
+   --list       List services declared by the workspace
+   --registry   Update services from direct-child repositories; --prune missing ones
+   --status     Show the current local service state
+   --logs       Show current session logs; --tail follows new output
+   --start      Select and start local services
+   --restart    Restart selected or changed local services
+   --stop       Stop selected local services
+   --stop-all   Stop all services and release the workspace connection
 
 The action flag must be the first argument after "conven services".
-Run "conven services --ACTION --help" for action-specific flags.
+Run 'conven services <action> --help' for action-specific usage and flags.
+Without service names, --start opens an interactive selector and asks for
+confirmation; --restart restarts only changed services in the current session.
 `)
 }

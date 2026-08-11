@@ -95,7 +95,8 @@ go build -o /tmp/conven ./cmd/conven
 /tmp/conven --version
 ```
 
-The Formula installs Bash, Zsh, and Fish completions. `__completion` is an
+The Formula installs the `conven(1)` manual and Bash, Zsh, and Fish completions.
+Run `man conven` for the complete command reference. `__completion` is an
 internal command used by the Formula and normally does not need to be invoked
 directly.
 
@@ -509,6 +510,7 @@ conven services --start [flags] [service...]
 conven services --restart [flags] [service...]
 conven services --stop [--force] (<service...>|--all)
 conven services --stop-all [--force]
+conven help [<command>]
 conven --version
 ```
 
@@ -1105,10 +1107,12 @@ go-zero YAML structure with `discovType: consul` and sibling `consul.host`,
 `consul.port`, and `consul.key` fields, then calls the plain-HTTP Consul health
 endpoint. ACL tokens, HTTPS/TLS, mTLS, and other authentication mechanisms are
 not currently supported by this preflight, so secured Consul endpoints cannot
-use it yet. A compatible materialized application rejects YAML merge keys,
-custom or binary tags, non-string mapping keys, and duplicate keys so effective
-server registration and dependency fields cannot be hidden behind parser
-ambiguities. Guarded YAML files apply the same unambiguous mapping-key rule.
+use it yet. A compatible materialized application allows string keys and integer
+keys used as opaque business data, but inspected go-zero fields must use string
+keys. It rejects YAML merge keys, custom or binary tags, other non-string mapping
+keys, and duplicate or text-equivalent keys so effective server registration and
+dependency fields cannot be hidden behind parser ambiguities. Guarded YAML files
+apply the same unambiguous mapping-key rule.
 
 If the External Consul dependency preflight succeeds, neither local isolation
 nor dependency selection rewrites unrelated runtime behavior. Conven does not

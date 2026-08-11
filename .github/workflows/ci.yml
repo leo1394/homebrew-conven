@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check Formula
         run: |
+          mandoc -Tlint docs/conven.1
           ruby -c Formula/conven.rb
           brew style Formula/conven.rb
       - name: Install and test stable and HEAD Formula from checkout
@@ -54,7 +55,10 @@ jobs:
           brew install --HEAD "$tap/conven"
           brew test "$tap/conven"
 
-          conven_bin="$(brew --prefix "$tap/conven")/bin/conven"
+          conven_prefix="$(brew --prefix "$tap/conven")"
+          conven_bin="$conven_prefix/bin/conven"
+          test -s "$conven_prefix/share/man/man1/conven.1"
+          MANPATH="$conven_prefix/share/man" man -w conven | grep -Fq "$conven_prefix/share/man/man1/conven.1"
           completion_dir="$RUNNER_TEMP/conven-completions"
           mkdir -p "$completion_dir"
           "$conven_bin" __completion bash > "$completion_dir/conven.bash"

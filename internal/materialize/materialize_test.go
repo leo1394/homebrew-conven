@@ -213,6 +213,64 @@ func TestMaterializeGuardCanExplicitlyCreatePath(t *testing.T) {
 	}
 }
 
+func TestMaterializeGuardAllowsUnrelatedIntegerMappingKeys(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	configRoot := filepath.Join(root, "configs")
+	target := filepath.Join(configRoot, "api")
+	writeTestSource(t, source, "http://unused.invalid")
+	application := "server:\n  registrationEnabled: true\ngStitchingDedup:\n  - irProjectIdMap:\n      234: 123,234,567\n    skipStoreChannelMap:\n      234: CVS,GT\n"
+	if err := os.WriteFile(filepath.Join(source, "application.yaml"), []byte(application), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan := testPlan(source, configRoot, target)
+	plan.Guards = []Guard{{File: "application.yaml", Path: "server.registrationEnabled", Value: false}}
+	if err := Materialize(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyGuards(target, plan.Guards); err != nil {
+		t.Fatalf("verify published guard: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(target, "application.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := &yaml.Node{}
+	if err := yaml.Unmarshal(data, document); err != nil {
+		t.Fatal(err)
+	}
+	rootMapping := document.Content[0]
+	dedup := rootMapping.Content[mappingPosition(rootMapping, "gStitchingDedup")+1]
+	dedupItem := dedup.Content[0]
+	idMap := dedupItem.Content[mappingPosition(dedupItem, "irProjectIdMap")+1]
+	if key := idMap.Content[0]; key.Kind != yaml.ScalarNode || key.Tag != "!!int" || key.Value != "234" {
+		t.Fatalf("integer mapping key changed: %#v", key)
+	}
+}
+
+func TestMaterializeGuardDoesNotMatchIntegerKeyAsStringPath(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	configRoot := filepath.Join(root, "configs")
+	target := filepath.Join(configRoot, "api")
+	writeTestSource(t, source, "http://unused.invalid")
+	if err := os.WriteFile(filepath.Join(source, "application.yaml"), []byte("234: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan := testPlan(source, configRoot, target)
+	plan.Guards = []Guard{{File: "application.yaml", Path: "234", Value: false}}
+	err := Materialize(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), `YAML guard path "234" does not exist`) {
+		t.Fatalf("integer key matched a string guard path: %v", err)
+	}
+}
+
 func TestMaterializeGuardRejectsAmbiguousMappingKeys(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -230,6 +288,24 @@ func TestMaterializeGuardRejectsAmbiguousMappingKeys(t *testing.T) {
 			application: "defaults: &defaults\n  registrationEnabled: true\n" +
 				"server:\n  <<: *defaults\n",
 			want: "unsupported merge key",
+		},
+		{
+			name: "integer and string key collision",
+			application: "server:\n  registrationEnabled: true\nvalues:\n" +
+				"  234: first\n  \"234\": second\n",
+			want: "duplicate key",
+		},
+		{
+			name: "equivalent integer key collision",
+			application: "server:\n  registrationEnabled: true\nvalues:\n" +
+				"  0xEA: first\n  234: second\n",
+			want: "duplicate YAML key",
+		},
+		{
+			name: "boolean key",
+			application: "server:\n  registrationEnabled: true\nvalues:\n" +
+				"  true: first\n",
+			want: "unsupported mapping key",
 		},
 	}
 	for _, test := range tests {

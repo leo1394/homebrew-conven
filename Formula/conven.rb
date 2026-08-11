@@ -11,18 +11,20 @@ class Conven < Formula
   def install
     system "go", "build", *std_go_args(ldflags: "-s -w"), "./cmd/conven"
     generate_completions_from_executable(bin/"conven", "__completion")
+    man1.install "docs/conven.1" if build.head? || version >= "0.2.4"
   end
 
   test do
     ENV["HOME"] = testpath.to_s
     if build.head?
-      assert_equal "conven 0.2.3\n", shell_output("#{bin}/conven --version")
+      assert_equal "conven 0.2.4\n", shell_output("#{bin}/conven --version")
     else
       expected_version = "conven #{version}\n"
       actual_version = shell_output("#{bin}/conven --version")
       assert_equal expected_version, actual_version
     end
     assert_predicate bin/"conven", :executable?
+    assert_path_exists man1/"conven.1" if build.head? || version >= "0.2.4"
 
     workspace = testpath/"workspace"
     workspace.mkpath

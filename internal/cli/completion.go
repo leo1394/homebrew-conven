@@ -13,6 +13,14 @@ func Completion(shell string) (string, error) {
         return
     fi
     subcommand="${COMP_WORDS[1]}"
+    if [ "$subcommand" = "help" ]; then
+        if [ "$COMP_CWORD" -eq 2 ]; then
+            COMPREPLY=( $(compgen -W "init services config policy plugins doctor help version" -- "$cur") )
+        else
+            COMPREPLY=()
+        fi
+        return
+    fi
     if [ "$subcommand" = "services" ]; then
         action="${COMP_WORDS[2]}"
         case "$action" in
@@ -142,6 +150,10 @@ _conven() {
         return
     fi
     case $words[2] in
+        help)
+            _arguments \
+                '1:command:(init services config policy plugins doctor help version)'
+            ;;
         services)
             action=''
             if (( CURRENT > 3 )); then
@@ -309,7 +321,7 @@ _conven() {
                 '--namespace[Kubernetes namespace]:namespace:' \
                 '--help[show command help]'
             ;;
-        help|version)
+        version)
             ;;
         *)
             _message 'unknown conven command'
@@ -324,6 +336,12 @@ compdef _conven conven
     set -l tokens (commandline -opc)
     test (count $tokens) -ge 2; or return 1
     contains -- $tokens[2] $argv
+end
+
+function __conven_help_without_command
+    set -l tokens (commandline -opc)
+    test (count $tokens) -eq 2; or return 1
+    test "$tokens[2]" = help
 end
 
 function __conven_services_action
@@ -381,6 +399,7 @@ complete -c conven -f -n '__fish_use_subcommand' -a plugins -d 'Install, list, r
 complete -c conven -f -n '__fish_use_subcommand' -a doctor -d 'Validate workspace configuration'
 complete -c conven -f -n '__fish_use_subcommand' -a help -d 'Show conven usage'
 complete -c conven -f -n '__fish_use_subcommand' -a version -d 'Show conven version'
+complete -c conven -f -n '__conven_using_subcommand help; and __conven_help_without_command' -a 'init services config policy plugins doctor help version' -d 'Show detailed command help'
 complete -c conven -n '__conven_using_subcommand init services config policy plugins doctor' -s h -l help -d 'Show command help'
 complete -c conven -n '__conven_using_subcommand config' -l global -d 'Use the current user global config'
 complete -c conven -n '__conven_using_subcommand config' -l list -d 'List configuration values'

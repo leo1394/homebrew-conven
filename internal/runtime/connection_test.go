@@ -502,7 +502,7 @@ func TestEnsureConnectionCancellationWinsOverConcurrentExit(t *testing.T) {
 	select {
 	case got := <-done:
 		if got.process != nil {
-			t.Fatalf("cancelled connection returned residual process: %#v", got.process)
+			t.Fatalf("cancelled connection returned residual process: %#v; error=%v", got.process, got.err)
 		}
 		if !errors.Is(got.err, context.Canceled) {
 			t.Fatalf("cancelled connection error = %v, want context.Canceled", got.err)

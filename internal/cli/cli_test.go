@@ -29,7 +29,7 @@ func TestVersion(t *testing.T) {
 }
 
 func TestLegacyServiceCommandsWereRemoved(t *testing.T) {
-	for _, command := range []string{"convening", "discover", "start", "restart", "status", "stop", "logs", "list", "serivces"} {
+	for _, command := range []string{"convening", "discover", "start", "restart", "status", "stop", "logs", "list"} {
 		t.Run(command, func(t *testing.T) {
 			var output bytes.Buffer
 			var errorOutput bytes.Buffer
@@ -41,43 +41,201 @@ func TestLegacyServiceCommandsWereRemoved(t *testing.T) {
 			if output.Len() != 0 {
 				t.Fatalf("stdout = %q", output.String())
 			}
-			if !strings.Contains(errorOutput.String(), `unknown command "`+command+`"`) {
+			if errorOutput.String() != "conven: '"+command+"' is not a conven command. See 'conven --help'.\n" {
 				t.Fatalf("stderr = %q", errorOutput.String())
 			}
 		})
 	}
 }
 
-func TestRootHelpExposesOnlyServicesCommandForServiceOperations(t *testing.T) {
+func TestUnknownCommandSuggestsClosestCommand(t *testing.T) {
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
+
+	if code := app.Run([]string{"serivces"}); code != 2 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("stdout = %q", output.String())
+	}
+	const want = `conven: 'serivces' is not a conven command. See 'conven --help'.
+
+The most similar command is
+	services
+`
+	if errorOutput.String() != want {
+		t.Fatalf("stderr = %q, want %q", errorOutput.String(), want)
+	}
+}
+
+func TestUnknownCommandEscapesControlCharacters(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "bad\nservices", want: "conven: 'bad\\nservices' is not a conven command. See 'conven --help'.\n"},
+		{input: "bad\x1b[31m", want: "conven: 'bad\\x1b[31m' is not a conven command. See 'conven --help'.\n"},
+		{input: "it's", want: "conven: 'it\\'s' is not a conven command. See 'conven --help'.\n"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			var errorOutput bytes.Buffer
+			app := App{Output: io.Discard, Error: &errorOutput, Version: "test-version"}
+
+			if code := app.Run([]string{test.input}); code != 2 {
+				t.Fatalf("exit code = %d", code)
+			}
+			if errorOutput.String() != test.want {
+				t.Fatalf("stderr = %q, want %q", errorOutput.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestSimilarCommandsRecognizesCommonTypos(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "inti", want: "init"},
+		{input: "hlep", want: "help"},
+		{input: "confg", want: "config"},
+		{input: "polciy", want: "policy"},
+		{input: "plguins", want: "plugins"},
+		{input: "docotr", want: "doctor"},
+		{input: "serivces", want: "services"},
+		{input: "verison", want: "version"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			got := similarCommands(test.input, []string{"config", "doctor", "help", "init", "plugins", "policy", "services", "version"})
+			if strings.Join(got, ",") != test.want {
+				t.Fatalf("suggestions = %v, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSimilarCommandsReturnsAllEquallyCloseCandidates(t *testing.T) {
+	got := similarCommands("cot", []string{"cat", "cut", "doctor"})
+	if strings.Join(got, ",") != "cat,cut" {
+		t.Fatalf("suggestions = %v", got)
+	}
+}
+
+func TestRootHelpIsConciseAndDescriptive(t *testing.T) {
 	var output bytes.Buffer
 	var errorOutput bytes.Buffer
 	app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
 	if code := app.Run([]string{"help"}); code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
-	if !strings.Contains(output.String(), "conven services ACTION") {
-		t.Fatalf("root help does not expose the services command: %q", output.String())
-	}
-	if !strings.Contains(output.String(), "conven policy ACTION") {
-		t.Fatalf("root help does not expose the policy command: %q", output.String())
-	}
-	if !strings.Contains(output.String(), "conven plugins ACTION") {
-		t.Fatalf("root help does not expose the plugins command: %q", output.String())
-	}
-	for _, removed := range []string{
-		"conven discover ",
-		"conven start ",
-		"conven restart ",
-		"conven status\n",
-		"conven stop ",
-		"conven logs ",
-		"conven list\n",
-	} {
-		if strings.Contains(output.String(), removed) {
-			t.Fatalf("root help still exposes legacy command %q: %q", removed, output.String())
-		}
+	const want = `usage:
+  conven <command> [<args>]
+  conven help [<command>]
+  conven [--help | --version]
+
+These are common Conven commands:
+
+set up and configure a workspace
+   init       Initialize a Conven workspace
+   config     View or change Conven settings
+   policy     Edit, import, or reset the workspace manifest
+   plugins    Install, list, remove, or run plugins
+
+run and inspect local services
+   services   List, start, restart, stop, and inspect services
+   doctor     Validate workspace and connection configuration
+
+Run 'conven help <command>' or 'conven <command> --help' for detailed help.
+`
+	if output.String() != want {
+		t.Fatalf("root help = %q, want %q", output.String(), want)
 	}
 	if errorOutput.Len() != 0 {
+		t.Fatalf("stderr = %q", errorOutput.String())
+	}
+}
+
+func TestHelpCommandShowsDetailedCommandHelp(t *testing.T) {
+	for _, command := range []string{"init", "config", "policy", "plugins", "services", "doctor"} {
+		t.Run(command, func(t *testing.T) {
+			var directOutput bytes.Buffer
+			var directError bytes.Buffer
+			directApp := App{Output: &directOutput, Error: &directError, Version: "test-version"}
+			if code := directApp.Run([]string{command, "--help"}); code != 0 {
+				t.Fatalf("direct help exit code = %d", code)
+			}
+
+			var helpOutput bytes.Buffer
+			var helpError bytes.Buffer
+			helpApp := App{Output: &helpOutput, Error: &helpError, Version: "test-version"}
+			if code := helpApp.Run([]string{"help", command}); code != 0 {
+				t.Fatalf("help command exit code = %d", code)
+			}
+			if helpOutput.String() != directOutput.String() {
+				t.Fatalf("help output = %q, direct output = %q", helpOutput.String(), directOutput.String())
+			}
+			if directError.Len() != 0 || helpError.Len() != 0 {
+				t.Fatalf("direct stderr = %q, help stderr = %q", directError.String(), helpError.String())
+			}
+		})
+	}
+}
+
+func TestHelpCommandHandlesHelpAndVersionTopics(t *testing.T) {
+	for _, test := range []struct {
+		arguments []string
+		want      string
+	}{
+		{arguments: []string{"help", "help"}, want: "usage:\n  conven help [<command>]\n"},
+		{arguments: []string{"help", "--help"}, want: "usage:\n  conven help [<command>]\n"},
+		{arguments: []string{"help", "version"}, want: "usage:\n  conven version\n  conven --version\n"},
+	} {
+		var output bytes.Buffer
+		var errorOutput bytes.Buffer
+		app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
+
+		if code := app.Run(test.arguments); code != 0 {
+			t.Fatalf("%v exit code = %d", test.arguments, code)
+		}
+		if !strings.HasPrefix(output.String(), test.want) {
+			t.Fatalf("%v stdout = %q", test.arguments, output.String())
+		}
+		if errorOutput.Len() != 0 {
+			t.Fatalf("%v stderr = %q", test.arguments, errorOutput.String())
+		}
+	}
+}
+
+func TestHelpCommandSuggestsUnknownTopic(t *testing.T) {
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
+
+	if code := app.Run([]string{"help", "serivces"}); code != 2 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("stdout = %q", output.String())
+	}
+	if !strings.Contains(errorOutput.String(), "The most similar command is\n\tservices\n") {
+		t.Fatalf("stderr = %q", errorOutput.String())
+	}
+}
+
+func TestHelpCommandRejectsMultipleTopics(t *testing.T) {
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
+
+	if code := app.Run([]string{"help", "services", "--start"}); code != 2 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("stdout = %q", output.String())
+	}
+	if !strings.Contains(errorOutput.String(), "conven: help accepts at most one command") ||
+		!strings.Contains(errorOutput.String(), "conven help [<command>]") {
 		t.Fatalf("stderr = %q", errorOutput.String())
 	}
 }
@@ -98,6 +256,14 @@ func TestServicesHelpUsesStdout(t *testing.T) {
 			if !strings.Contains(output.String(), action) {
 				t.Fatalf("%v help is missing %s: %q", arguments, action, output.String())
 			}
+		}
+		if !strings.Contains(output.String(), "--start opens an interactive selector") ||
+			!strings.Contains(output.String(), "--restart restarts only changed services") {
+			t.Fatalf("%v help is missing service selection behavior: %q", arguments, output.String())
+		}
+		if !strings.Contains(output.String(), "Manage the local service session") ||
+			!strings.Contains(output.String(), "--registry   Update services from direct-child repositories") {
+			t.Fatalf("%v help is missing action descriptions: %q", arguments, output.String())
 		}
 		if errorOutput.Len() != 0 {
 			t.Fatalf("%v stderr = %q", arguments, errorOutput.String())
@@ -1070,6 +1236,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`compgen -W "init services config policy plugins doctor help version"`,
+		`if [ "$subcommand" = "help" ]`,
 		`if [ "$subcommand" = "services" ]`,
 		`--list|--status)`,
 		`--registry)`,
@@ -1110,6 +1277,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`case $words[2] in`,
+		`'1:command:(init services config policy plugins doctor help version)'`,
 		`'services:manage workspace services'`,
 		`'policy:edit, import, or rebuild the workspace policy manifest'`,
 		`'plugins:install, list, remove, or run Conven plugins'`,
@@ -1149,6 +1317,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`function __conven_using_subcommand`,
+		`function __conven_help_without_command`,
+		`__conven_using_subcommand help; and __conven_help_without_command`,
 		`function __conven_services_action`,
 		`function __conven_services_without_action`,
 		`function __conven_policy_without_action`,
@@ -1192,6 +1362,21 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		if strings.Contains(fish, removed) {
 			t.Fatalf("fish completion still exposes legacy top-level command marker %q", removed)
 		}
+	}
+}
+
+func TestBashHelpCompletionOffersCommandTopics(t *testing.T) {
+	completion, err := Completion("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := completion + "\nCOMP_WORDS=(conven help ser)\nCOMP_CWORD=2\n_conven\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
+	output, err := exec.Command("bash", "-c", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash completion failed: %v: %s", err, output)
+	}
+	if string(output) != "services\n" {
+		t.Fatalf("completion = %q, want services", output)
 	}
 }
 

@@ -81,8 +81,8 @@ go build -o /tmp/conven ./cmd/conven
 /tmp/conven --version
 ```
 
-Formula 会安装 Bash、Zsh 和 Fish 补全。`__completion` 是 Formula 使用的内部命令，
-通常不需要手工调用。
+Formula 会安装 `conven(1)` 手册以及 Bash、Zsh 和 Fish 补全。完整命令参考可通过
+`man conven` 查看。`__completion` 是 Formula 使用的内部命令，通常不需要手工调用。
 
 Conven 以 `.conven`、`conven.yaml`、`~/.conven`、`CONVEN_*` 和 `conven` 作为
 workspace、用户目录、环境变量与命令的规范命名。不会再在 `.local/state` 或 XDG
@@ -432,6 +432,7 @@ conven services --start [flags] [service...]
 conven services --restart [flags] [service...]
 conven services --stop [--force] (<service...>|--all)
 conven services --stop-all [--force]
+conven help [<command>]
 conven --version
 ```
 
@@ -936,10 +937,11 @@ server 根节点若仍出现活动的 Consul 注册会直接失败，而不是�
 该预检只识别已知的 go-zero YAML 结构：`discovType: consul` 以及同级的
 `consul.host`、`consul.port`、`consul.key`，并调用明文 HTTP Consul health endpoint。
 当前不支持 ACL token、HTTPS/TLS、mTLS 或其他认证方式，因此加固后的 Consul endpoint
-暂时不能使用这项预检。兼容的最终 application 会拒绝 YAML merge key、自定义或
-binary tag、非字符串 mapping key 和重复 key，避免利用不同 YAML parser 的歧义隐藏
-实际生效的 server registration 或 dependency 字段。受 guard 保护的 YAML 文件也使用
-相同的无歧义 mapping-key 规则。
+暂时不能使用这项预检。兼容的最终 application 允许字符串 key，以及作为不透明业务
+数据使用的整数 key，但被检查的 go-zero 字段必须使用字符串 key。它仍会拒绝 YAML
+merge key、自定义或 binary tag、其他非字符串 mapping key，以及重复或文本等价的 key，
+避免利用不同 YAML parser 的歧义隐藏实际生效的 server registration 或 dependency 字段。
+受 guard 保护的 YAML 文件也使用相同的无歧义 mapping-key 规则。
 
 External Consul dependency preflight 通过后，本地隔离和 dependency 选择不会改写
 无关的运行行为。Conven 不会改写或关闭远程数据库、Kafka broker、未选择本地路由的

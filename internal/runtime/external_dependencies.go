@@ -133,18 +133,24 @@ func walkExternalDependencyYAML(node *yaml.Node, path string, owner string, kind
 	switch node.Kind {
 	case yaml.MappingNode:
 		seenKeys := make(map[string]bool)
+		seenKeyText := make(map[string]bool)
 		for index := 0; index+1 < len(node.Content); index += 2 {
 			key := node.Content[index]
 			if key.Kind == yaml.ScalarNode && (key.Value == "<<" || key.Tag == "!!merge") {
 				return fmt.Errorf("service %s materialized application uses an unsupported YAML merge key at %s", owner, externalDependencyPathLabel(path))
 			}
-			if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
+			if key.Kind != yaml.ScalarNode || (key.Tag != "!!str" && key.Tag != "!!int") {
 				return fmt.Errorf("service %s materialized application uses an unsupported YAML mapping key at %s", owner, externalDependencyPathLabel(path))
 			}
-			if seenKeys[key.Value] {
+			identifier, textIdentifier, err := externalYAMLKeyIdentifiers(key)
+			if err != nil {
+				return fmt.Errorf("service %s materialized application uses an unsupported YAML mapping key at %s", owner, externalDependencyPathLabel(path))
+			}
+			if seenKeys[identifier] || seenKeyText[textIdentifier] {
 				return fmt.Errorf("service %s materialized application uses duplicate YAML key %q at %s", owner, key.Value, externalDependencyPathLabel(path))
 			}
-			seenKeys[key.Value] = true
+			seenKeys[identifier] = true
+			seenKeyText[textIdentifier] = true
 		}
 		discovType := externalMappingValue(node, "discovType")
 		if externalStringValue(discovType) == "consul" && path == "" && (kind == "rpc" || kind == "http") {
@@ -226,7 +232,8 @@ func externalMappingValue(mapping *yaml.Node, key string) *yaml.Node {
 		return nil
 	}
 	for index := 0; index+1 < len(mapping.Content); index += 2 {
-		if mapping.Content[index].Kind == yaml.ScalarNode && mapping.Content[index].Value == key {
+		candidate := mapping.Content[index]
+		if candidate.Kind == yaml.ScalarNode && candidate.Tag == "!!str" && candidate.Value == key {
 			value := mapping.Content[index+1]
 			if value.Kind == yaml.AliasNode {
 				return value.Alias
@@ -235,6 +242,14 @@ func externalMappingValue(mapping *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
+}
+
+func externalYAMLKeyIdentifiers(node *yaml.Node) (string, string, error) {
+	var decoded any
+	if err := node.Decode(&decoded); err != nil {
+		return "", "", err
+	}
+	return fmt.Sprintf("%s\x00%#v", node.Tag, decoded), fmt.Sprint(decoded), nil
 }
 
 func externalStringValue(node *yaml.Node) string {

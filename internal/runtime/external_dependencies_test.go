@@ -58,6 +58,28 @@ nonActiveRpc:
 	}
 }
 
+func TestDetectExternalConsulDependenciesAllowsUnrelatedIntegerMappingKeys(t *testing.T) {
+	service := externalDependencyTestService(t, `deviceRpc:
+  discovType: consul
+  consul:
+    host: consul-server.default
+    port: 8500
+    key: device.rpc
+gStitchingDedup:
+  - irProjectIdMap:
+      234: 123,234,567
+    skipStoreChannelMap:
+      234: CVS,GT
+`, nil)
+	dependencies, err := detectExternalConsulDependencies(service, "http")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dependencies) != 1 || dependencies[0].Key != "device.rpc" {
+		t.Fatalf("dependencies = %#v", dependencies)
+	}
+}
+
 func TestDetectExternalConsulDependenciesOnlyRunsForSupportedPolicy(t *testing.T) {
 	for _, config := range []*PlannedConfig{
 		nil,
@@ -213,6 +235,21 @@ func TestDetectExternalConsulDependenciesRejectsAmbiguousYAML(t *testing.T) {
 			name: "duplicate mapping key",
 			yaml: "deviceRpc:\n  discovType: \"\"\n  discovType: consul\n",
 			want: "duplicate YAML key",
+		},
+		{
+			name: "integer and string key collision",
+			yaml: "values:\n  234: first\n  \"234\": second\n",
+			want: "duplicate YAML key",
+		},
+		{
+			name: "equivalent integer key collision",
+			yaml: "values:\n  0xEA: first\n  234: second\n",
+			want: "duplicate YAML key",
+		},
+		{
+			name: "boolean mapping key",
+			yaml: "values:\n  true: first\n",
+			want: "unsupported YAML mapping key",
 		},
 	}
 	for _, test := range tests {

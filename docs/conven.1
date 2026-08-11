@@ -1,0 +1,350 @@
+.TH CONVEN 1 "August 11, 2026" "Conven" "User Commands"
+.SH NAME
+conven \- run a focused set of local microservices with remote dependencies
+.SH SYNOPSIS
+.nf
+\fBconven\fR \fIcommand\fR [\fIargs\fR]
+\fBconven help\fR [\fIcommand\fR]
+\fBconven\fR [\fB\-h\fR | \fB\-\-help\fR]
+\fBconven\fR [\fB\-v\fR | \fB\-\-version\fR]
+.fi
+.SH DESCRIPTION
+.B conven
+is a local microservice launcher.
+It starts selected services from a workspace, keeps unselected dependencies
+reachable through the configured development infrastructure, materializes
+runtime configuration outside the source tree, and records the local session
+under
+.IR <workspace>/.conven/runtime/current .
+.PP
+Conven discovers the nearest canonical
+.I .conven
+workspace from the current directory.
+The workspace manifest declares services, environments, connections, runners,
+ports, dependencies, and policy-backed configuration adapters.
+.PP
+For typed local services, startup fails closed unless the selected policy can
+prove that remote service registration is disabled or not applicable and that
+the service listener is restricted to a loopback address.
+Conven does not create a reverse route from the remote cluster to local
+services.
+.SH COMMANDS
+.TP
+.B init
+Initialize the current workspace.
+Conven scans direct-child Git repositories for supported service layouts and
+creates
+.IR .conven/conven.yaml .
+An existing manifest is not overwritten.
+.TP
+.BR config " [" \-\-global "] [" \-\-list | \-\-unset "] [" key "] [" value "]"
+Read, write, list, or remove Conven settings.
+Without
+.BR \-\-global ,
+reads combine global and workspace settings while writes affect only the
+workspace configuration.
+The valid forms are:
+.nf
+    conven config [\-\-global] \-\-list
+    conven config [\-\-global] key
+    conven config [\-\-global] key value
+    conven config [\-\-global] \-\-unset key
+.fi
+.TP
+.B policy
+Edit, import, or reset the canonical workspace manifest.
+Exactly one of
+.BR \-\-edit ,
+.BR \-\-import ,
+or
+.B \-\-reset
+is required.
+.TP
+.B plugins
+Install, list, remove, or run Python plugins from
+.IR ~/.conven/plugins .
+Project-specific plugins are not implicitly bundled with Conven.
+Use
+.BR "\-\-install python-file" ,
+.BR \-\-list ,
+.BR "\-\-remove name" ,
+or
+.BR "\-\-run name [plugin-args...]" .
+.TP
+.B services
+List, start, restart, stop, and inspect services in the current workspace.
+See
+.B SERVICES ACTIONS
+below.
+.TP
+.B doctor
+Validate the resolved workspace, selected environment, connection settings,
+and static startup configuration without starting services.
+.TP
+.BR help " [" command "]"
+Show the root command overview or detailed help for one command.
+For example,
+.B conven help services
+is equivalent to
+.BR "conven services \-\-help" .
+.TP
+.B version
+Print the Conven version.
+.SH SERVICES ACTIONS
+The action flag must be the first argument after
+.BR "conven services" .
+.TP
+.B \-\-list
+List services declared by the workspace manifest.
+.TP
+.B "\-\-registry [\-\-prune]"
+Conservatively update services from direct-child repositories.
+Existing non-empty manual declarations take precedence.
+With
+.BR \-\-prune ,
+remove manifest services whose repositories no longer exist.
+.TP
+.B \-\-status
+Show the saved local session, service PID and PGID information, and relevant
+shared connection state.
+.TP
+.B "\-\-logs [\-\-tail] [service...]"
+Show logs for the current session.
+With
+.BR \-\-tail ,
+follow new output using the interactive dashboard when a suitable terminal is
+available, otherwise use a plain text stream.
+.TP
+.B "\-\-start [options] [service...]"
+Start a fresh local service session.
+Without service names, open the interactive selector and require confirmation.
+After safety and static validation, Conven rebuilds
+.IR runtime/current ,
+establishes the configured connection, materializes configuration, prepares and
+builds services, starts them in dependency order, and performs health checks.
+.TP
+.B "\-\-restart [options] [service...]"
+Restart named services, or detect changed and exited services in the current
+session when no names are supplied.
+The fixed runtime directory and existing connection are reused; unchanged
+service artifacts, configuration, processes, and logs remain untouched.
+.TP
+.B "\-\-stop [\-\-force] (service...|\-\-all)"
+Stop selected services or the entire current workspace session.
+Stopping all services releases the workspace connection lease but preserves
+.I runtime/current
+until the next fresh start.
+.TP
+.B "\-\-stop\-all [\-\-force]"
+Exact shorthand for
+.BR "conven services \-\-stop \-\-all" .
+.SH START AND DOCTOR OPTIONS
+The following options are available to
+.B services \-\-start
+and, where noted, to
+.BR doctor .
+Use action-specific
+.B \-\-help
+for the authoritative option list.
+.TP
+.BI \-\-env " name"
+Select a manifest environment profile.
+The default is
+.BR dev .
+Available to start and doctor.
+.TP
+.B \-\-dev
+Select the
+.B dev
+profile.
+Available to start and doctor.
+.TP
+.B \-\-test
+Select the
+.B test
+profile.
+Available to start and doctor.
+.TP
+.BI \-\-kubeconfig " file"
+Override the Kubernetes configuration path.
+Available to start and doctor.
+.TP
+.BI \-\-context " name"
+Override the Kubernetes context.
+Available to start and doctor.
+.TP
+.BI \-\-namespace " name"
+Override the Kubernetes namespace used by the connection.
+Available to start and doctor.
+.TP
+.B \-\-tail
+Attach to aggregated service logs after a successful start or restart.
+Also accepted by
+.BR "services \-\-logs" .
+.TP
+.B \-\-dry\-run
+Resolve and validate a start plan without creating or modifying runtime state,
+requesting remote configuration, establishing a connection, building, or
+starting processes.
+.TP
+.B \-\-skip\-build
+Skip service builds.
+A fresh start cannot reuse default artifacts inside
+.IR runtime/current ;
+restart can reuse current artifacts.
+.TP
+.B \-\-skip\-verify
+Skip service health checks.
+.SH CONFIGURATION AND POLICY
+The canonical workspace manifest is
+.IR <workspace>/.conven/conven.yaml .
+There is no separate policy file.
+Policy profiles in the manifest describe framework, configuration source,
+service discovery, materialization, routing, and local-isolation rules.
+.PP
+.B conven policy \-\-edit
+publishes a temporary edited copy only after strict validation.
+.B conven policy \-\-import
+installs an entire local YAML file, backs up the previous manifest, and does not
+merge it with repository scan results.
+.B conven policy \-\-reset
+destructively rebuilds the whole manifest from facts that built-in analyzers can
+prove; manual rules must be restored from the backup or declared again.
+.PP
+Run
+.BR "conven doctor" " and " "conven services \-\-start \-\-dry\-run"
+after importing or materially changing a policy.
+.SH FILES
+.TP
+.I <workspace>/.conven/conven.yaml
+Canonical workspace manifest.
+.TP
+.I <workspace>/.conven/config
+Workspace-local settings.
+.TP
+.I <workspace>/.conven/.gitignore
+Workspace-local ignore rules; initialization non-destructively adds the runtime
+directory.
+.TP
+.I <workspace>/.conven/backups
+Backups created before manifest import or reset publication.
+.TP
+.I <workspace>/.conven/runtime
+Private workspace runtime root containing the lock and session state.
+.TP
+.I <workspace>/.conven/runtime/current
+Current artifacts, materialized configurations, and service logs.
+.TP
+.I ~/.conven/config
+User-global settings.
+.TP
+.I ~/.conven/plugins
+Installed user plugins.
+.TP
+.I ~/.conven/state/connections
+Cross-workspace shared connection lease metadata.
+.SH ENVIRONMENT
+.TP
+.B CONVEN_EDITOR
+Editor command used by
+.BR "policy \-\-edit" .
+Falls back to
+.BR VISUAL ,
+then
+.BR EDITOR ,
+then
+.BR vi .
+.TP
+.B CONVEN_KUBECONFIG
+Preferred kubeconfig override when no command-line override is supplied.
+.TP
+.B KTCTL_KUBECONFIG
+Compatibility kubeconfig override used after
+.BR CONVEN_KUBECONFIG .
+.TP
+.B KUBECONFIG
+Standard Kubernetes fallback.
+.TP
+.B NO_COLOR
+Disable colored terminal output when set.
+.TP
+.B TERM
+When set to
+.BR dumb ,
+disable color and the interactive log dashboard.
+.PP
+Conven injects runtime metadata into service, prepare, and build processes
+using variables including
+.BR CONVEN_WORKSPACE ,
+.BR CONVEN_SERVICE ,
+.BR CONVEN_ENV ,
+.BR CONVEN_STATE_DIR ,
+.BR CONVEN_RUN_DIR ,
+.BR CONVEN_CONFIG_DIR ,
+.BR CONVEN_ARTIFACT ,
+and
+.BR CONVEN_SELECTED_SERVICES .
+Plugins receive the canonical workspace through
+.BR CONVEN_WORKSPACE .
+.SH SAFETY
+For typed services, the verified adapter contract prevents selected services
+from being advertised through the configured remote service registry and
+limits their listeners to loopback.
+It does not isolate business data or messaging.
+Local services may still connect to remote databases, Kafka, RPC endpoints, and
+other infrastructure, and may write data or consume messages.
+.PP
+Use
+.B \-\-force
+only after verifying the saved PID and PGID.
+It bypasses normal process identity checks during stop recovery.
+.SH NOTES
+Service lifecycle actions are flags under the
+.B services
+command.
+Use
+.BR "conven services \-\-start" ,
+not
+.B conven start
+or
+.BR "conven services start" .
+The former top-level
+.BR list ,
+.BR discover ,
+.BR status ,
+.BR logs ,
+.BR start ,
+.BR restart ,
+and
+.B stop
+commands have been removed.
+The former
+.B \-\-follow
+option is now
+.BR \-\-tail .
+.SH EXIT STATUS
+.TP
+.B 0
+Success, displayed help, or an explicit interactive cancellation.
+.TP
+.B 1
+Configuration, validation, connection, build, process, or runtime failure.
+.TP
+.B 2
+Invalid syntax, unknown command, unknown action, or unsupported flag.
+.SH EXAMPLES
+.nf
+conven init
+conven help services
+conven policy \-\-edit
+conven doctor \-\-test \-\-namespace test
+conven services \-\-start \-\-dry\-run api service-a
+conven services \-\-start \-\-test \-\-namespace test \-\-tail api service-a
+conven services \-\-restart
+conven services \-\-logs \-\-tail api
+conven services \-\-stop\-all
+.fi
+.SH SEE ALSO
+.BR brew (1),
+.BR git (1),
+.BR kubectl (1)

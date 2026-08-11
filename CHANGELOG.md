@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.4 - 2026-08-11
+
+- 修复合法整数 YAML mapping key 被本地隔离 guard 和 External Consul dependency
+  preflight 全局拒绝的问题。整数 key 仅作为不透明业务数据保留；guard 路径及
+  `discovType`、`consul` 等受检查字段仍只接受字符串 key，并继续 fail-closed 拒绝
+  merge、自定义或 binary tag、其他类型 key、重复 key 和文本等价的类型冲突。
+- 参照 Git 的顶层帮助结构精简 `conven --help`，按使用场景展示带说明的常用命令，
+  将服务选择和 restart 行为说明收敛到 `conven services --help`；未知顶层命令会给出
+  Git 风格的相似候选，但不会自动执行猜测结果。新增 `conven help <command>` 作为
+  各公开命令详细帮助的统一入口，并为 `services` 动作补充用途说明及三种 shell 补全。
+- 新增 `conven(1)` 系统手册，Homebrew 0.2.4 stable 和 HEAD 安装后均可通过
+  `man conven` 查看完整命令、运行目录、环境变量和本地隔离安全边界。
+- 修复 connection readiness 取消与连接进程同时退出时的清理 TOCTOU；仅在确认整个
+  PID/PGID 已消失时归一为成功，真实残留进程组仍按 fail-closed 返回恢复状态。
+
 ## 0.2.3 - 2026-08-11
 
 - 改进 ktctl connection 失败诊断：观察实际启动命令的退出状态，并在提前退出或

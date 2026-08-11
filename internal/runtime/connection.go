@@ -210,6 +210,10 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 		}
 		if exitErr, exited := connectionCommandExit(completed); exited {
+			if contextErr := waitContext.Err(); contextErr != nil {
+				failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath)
+				return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+			}
 			failure := fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, exitErr, logPath)
 			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 		}
@@ -724,7 +728,10 @@ func stopConnection(process *ConnectionProcess, force bool) error {
 		Command:  process.Command,
 		Identity: process.Identity,
 	}
-	if !ProcessAlive(process.PID) {
+	if !connectionProcessAlive(process.PID) {
+		if !force && waitForManagedExit(process.PID, process.PGID, connectionExitReapGrace) {
+			return nil
+		}
 		if ProcessGroupAlive(process.PGID) {
 			if !force {
 				return fmt.Errorf("refusing to stop %s: leader pid %d exited while process group %d is still active", managed.Name, process.PID, process.PGID)
@@ -734,6 +741,9 @@ func stopConnection(process *ConnectionProcess, force bool) error {
 		return nil
 	}
 	if err := VerifyProcess(managed); err != nil {
+		if waitForManagedExit(process.PID, process.PGID, connectionExitReapGrace) {
+			return nil
+		}
 		if !force || !ProcessGroupAlive(process.PGID) {
 			return err
 		}
@@ -761,6 +771,9 @@ func forceStopConnectionGroup(process *ConnectionProcess) error {
 		{signal: syscall.SIGKILL, timeout: 2 * time.Second},
 	} {
 		if err := signalConnection(process, target, phase.signal); err != nil && !errors.Is(err, syscall.ESRCH) {
+			if waitForManagedExit(process.PID, process.PGID, connectionExitReapGrace) {
+				return nil
+			}
 			return fmt.Errorf("stop %s connection: %w", process.Driver, err)
 		}
 		if waitForManagedExit(process.PID, process.PGID, phase.timeout) {
