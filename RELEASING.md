@@ -419,7 +419,7 @@ for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION" "$CONVEN_FI
   grep -Fq -- "services" "$completion"
   grep -Fq -- "plugins" "$completion"
 done
-for action in list registry status dashboard logs start restart stop stop-all; do
+for action in list registry status dashboard logs start restart stop stop-all cleanup; do
   for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
@@ -678,9 +678,9 @@ Confirm the following behavior:
   never children of the invocation directory.
 - The `services` action must be its first argument, and exactly one of `--list`,
   `--registry`, `--status`, `--dashboard`, `--logs`, `--start`, `--restart`,
-  `--stop`, or `--stop-all` is required. The former top-level service commands
-  return usage status 2 and are absent from help and generated top-level
-  completion candidates.
+  `--stop`, `--stop-all`, or `--cleanup` is required. The former top-level
+  service commands return usage status 2 and are absent from help and generated
+  top-level completion candidates.
 - The removed workspace and manifest flags return usage status 2 for every
   workspace command and are absent from command help and all generated
   completions. Setting `CONVEN_WORKSPACE` cannot change CLI discovery: a command
@@ -755,6 +755,10 @@ Confirm the following behavior:
   For an external ktctl process or network path recorded with both `Owned=false`
   and `Managed=false`, both forms remove only the session reference and never
   terminate the external connection.
+- After `services --stop-all`, `services --cleanup` removes only
+  `runtime/current/artifacts` and `runtime/current/logs`. It preserves runtime
+  configs and the shared connection log, and refuses while a session is saved
+  or when a cleanup target is a symlink or escapes the workspace runtime.
 
 In a disposable environment that supports `ktctl`, also verify readiness,
 kubeconfig/context/namespace forwarding, shared connection leases, final-lease

@@ -2,6 +2,9 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,7 +27,27 @@ type StartOptions struct {
 	Output     io.Writer
 }
 
+type RunningServicesError struct {
+	Services     []string
+	SessionToken string
+}
+
+func (err *RunningServicesError) Error() string {
+	return fmt.Sprintf("workspace already has running services: %s; use conven services --restart or conven services --stop first", strings.Join(err.Services, ", "))
+}
+
 func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) (*Session, error) {
+	return start(ctx, workspace, options, "")
+}
+
+func ReplaceStart(ctx context.Context, workspace *WorkspaceData, options StartOptions, expectedSessionToken string) (*Session, error) {
+	if strings.TrimSpace(expectedSessionToken) == "" {
+		return nil, errors.New("replacement start requires the running session confirmation token")
+	}
+	return start(ctx, workspace, options, expectedSessionToken)
+}
+
+func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, expectedSessionToken string) (*Session, error) {
 	output := options.Output
 	if output == nil {
 		output = io.Discard
@@ -52,19 +75,9 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	if err != nil {
 		return nil, err
 	}
-	if existing != nil {
-		active := activeServices(existing)
-		if len(active) > 0 {
-			return nil, fmt.Errorf("workspace already has running services: %s; use conven services --restart or conven services --stop first", strings.Join(active, ", "))
-		}
-		for _, process := range existing.Services {
-			if ProcessGroupAlive(process.PGID) {
-				return nil, fmt.Errorf("workspace has an unverified process group for %s; use conven services --stop --all before starting a new session", process.Name)
-			}
-		}
-		if existing.Connection != nil && existing.Connection.Owned && !existing.Connection.Managed && ProcessGroupAlive(existing.Connection.PGID) {
-			return nil, fmt.Errorf("workspace has an active or unverified %s connection; use conven services --stop --all before starting a new session", existing.Connection.Driver)
-		}
+	active, err := inspectSessionServicesForStart(existing)
+	if err != nil {
+		return nil, err
 	}
 	plan, err := BuildPlan(workspace, options.Common, options.Services)
 	if err != nil {
@@ -89,14 +102,53 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 			return nil, err
 		}
 	}
+	if len(active) > 0 {
+		if err := validateConnectionForReplacement(ctx, existing.Connection, workspace.Store.Root); err != nil {
+			return nil, err
+		}
+		token, err := replacementSessionToken(existing)
+		if err != nil {
+			return nil, err
+		}
+		if expectedSessionToken == "" {
+			return nil, &RunningServicesError{Services: active, SessionToken: token}
+		}
+		if expectedSessionToken != token {
+			return nil, errors.New("workspace session changed while awaiting replacement confirmation; retry conven services --start")
+		}
+	} else if expectedSessionToken != "" {
+		return nil, errors.New("workspace session changed while awaiting replacement confirmation; retry conven services --start")
+	}
+	retainedConnection := false
+	var retainedConnectionSnapshot *ConnectionProcess
+	if expectedSessionToken != "" {
+		retainedConnection, err = renewRetainedKtctlConnection(ctx, existing.Connection, plan.Connection, workspace.Store.Root)
+		if err != nil {
+			return nil, err
+		}
+		if retainedConnection {
+			snapshot := *existing.Connection
+			snapshot.Command = append([]string(nil), existing.Connection.Command...)
+			retainedConnectionSnapshot = &snapshot
+		}
+		if err := stopSessionServicesForReplacement(workspace, existing, output); err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	if existing != nil {
-		if existing.Connection != nil {
+		if existing.Connection != nil && !retainedConnection {
 			if err := releaseConnection(context.Background(), existing.Connection, workspace.Store.Root, false, output); err != nil {
 				return nil, fmt.Errorf("release previous workspace connection before replacing stale session: %w", err)
 			}
+			existing.Connection = nil
 		}
-		if err := workspace.Store.Clear(); err != nil {
-			return nil, err
+		if !retainedConnection {
+			if err := workspace.Store.Clear(); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := workspace.Store.ResetCurrent(); err != nil {
@@ -104,7 +156,13 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 	}
 	printPlan(output, plan, false)
 	connection, err := EnsureConnection(ctx, plan.Connection, ConnectionLogPath(workspace.Store.Root), workspace.Store.Root, output)
+	if retainedConnection && !sameConnectionProcess(retainedConnectionSnapshot, connection) {
+		retainedConnection = false
+	}
 	if err != nil {
+		if retainedConnection {
+			return nil, err
+		}
 		if connection != nil {
 			failedSession := &Session{
 				Workspace:   workspace.Root,
@@ -120,6 +178,9 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 		}
 		return nil, err
 	}
+	if retainedConnection {
+		fmt.Fprintln(output, style.Success("✓ Keeping the usable managed ktctl connection lease for the fresh start."))
+	}
 	session := &Session{
 		Workspace:   workspace.Root,
 		ConfigPath:  workspace.ConfigPath,
@@ -130,57 +191,63 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 		Connection:  connection,
 	}
 	if err := workspace.Store.Save(session); err != nil {
+		if retainedConnection {
+			return nil, err
+		}
 		return nil, errors.Join(err, releaseConnection(context.Background(), connection, workspace.Store.Root, false, output))
 	}
+	fail := func(failure error) error {
+		return failStartup(workspace, session, connection, retainedConnection, output, failure)
+	}
 	if err := materializeRuntimeConfigs(ctx, plan, plan.Order, output); err != nil {
-		return nil, failStartup(workspace, session, connection, output, err)
+		return nil, fail(err)
 	}
 	if err := runRuntimePreflight(ctx, plan, output, true); err != nil {
-		return nil, failStartup(workspace, session, connection, output, err)
+		return nil, fail(err)
 	}
 	sourceFingerprints := make(map[string]string, len(plan.Order))
 	planFingerprints := make(map[string]string, len(plan.Order))
 	for _, name := range plan.Order {
 		if err := ctx.Err(); err != nil {
-			return nil, failStartup(workspace, session, connection, output, err)
+			return nil, fail(err)
 		}
 		service := plan.Services[name]
 		sourceFingerprint, err := SourceFingerprint(service.Directory)
 		if err != nil {
-			return nil, failStartup(workspace, session, connection, output, fmt.Errorf("fingerprint %s source: %w", name, err))
+			return nil, fail(fmt.Errorf("fingerprint %s source: %w", name, err))
 		}
 		planFingerprint, err := PlanFingerprint(service)
 		if err != nil {
-			return nil, failStartup(workspace, session, connection, output, fmt.Errorf("fingerprint %s plan: %w", name, err))
+			return nil, fail(fmt.Errorf("fingerprint %s plan: %w", name, err))
 		}
 		sourceFingerprints[name] = sourceFingerprint
 		planFingerprints[name] = planFingerprint
 		if len(service.Prepare) > 0 {
 			fmt.Fprintf(output, "%s %s\n", style.Stage("Preparing"), style.Identifier(name))
 			if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
-				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("prepare %s: %w", name, err))
+				return nil, fail(fmt.Errorf("prepare %s: %w", name, err))
 			}
 			prepareLog := filepath.Join(plan.RunDir, "logs", name+"-prepare.log")
 			if err := RunForeground(ctx, service.Prepare, service.Workdir, service.Environment, output, prepareLog); err != nil {
-				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("prepare %s: %w", name, err))
+				return nil, fail(fmt.Errorf("prepare %s: %w", name, err))
 			}
 		}
 		if !options.SkipBuild && len(service.Build) > 0 {
 			fmt.Fprintf(output, "%s %s\n", style.Stage("Building"), style.Identifier(name))
 			if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
-				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("build %s: %w", name, err))
+				return nil, fail(fmt.Errorf("build %s: %w", name, err))
 			}
 			buildLog := filepath.Join(plan.RunDir, "logs", name+"-build.log")
 			if err := RunForeground(ctx, service.Build, service.Workdir, service.Environment, output, buildLog); err != nil {
-				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("build %s: %w", name, err))
+				return nil, fail(fmt.Errorf("build %s: %w", name, err))
 			}
 		}
 		if err := inspectRunWorkdir(service); err != nil {
-			return nil, failStartup(workspace, session, connection, output, err)
+			return nil, fail(err)
 		}
 	}
 	if err := runRuntimePreflight(ctx, plan, output, false); err != nil {
-		return nil, failStartup(workspace, session, connection, output, err)
+		return nil, fail(err)
 	}
 	started := make(map[string]ServiceProcess, len(plan.Order))
 	for _, group := range plan.Groups {
@@ -189,22 +256,22 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 		}
 		for _, name := range group {
 			if err := ctx.Err(); err != nil {
-				return nil, failStartup(workspace, session, connection, output, err)
+				return nil, fail(err)
 			}
 			service := plan.Services[name]
 			if err := appendIsolationEvidence(service, plan.Connection); err != nil {
-				return nil, failStartup(workspace, session, connection, output, fmt.Errorf("record %s local isolation: %w", name, err))
+				return nil, fail(fmt.Errorf("record %s local isolation: %w", name, err))
 			}
 			fmt.Fprintf(output, "%s %s\n", style.Stage("Starting"), style.Identifier(name))
 			process, err := StartService(name, service.Run, service.RunWorkdir, service.Environment, service.LogPath)
 			if err != nil {
-				return nil, failStartup(workspace, session, connection, output, err)
+				return nil, fail(err)
 			}
 			process.Ports = copyPorts(service.Ports)
 			started[name] = process
 			session.Services = append(session.Services, process)
 			if err := workspace.Store.Save(session); err != nil {
-				return nil, failStartup(workspace, session, connection, output, err)
+				return nil, fail(err)
 			}
 		}
 		if !options.SkipVerify {
@@ -214,13 +281,13 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 				if err := WaitHealthy(ctx, process, service.Health); err != nil {
 					fmt.Fprintf(output, "%s %s; last log lines:\n", style.Failure("✗ Health check failed:"), style.Identifier(name))
 					ShowLogs(context.Background(), session, []string{name}, false, output)
-					return nil, failStartup(workspace, session, connection, output, err)
+					return nil, fail(err)
 				}
 				fmt.Fprintf(output, "%s %s\n", style.Success("✓ Healthy:"), style.Identifier(name))
 			}
 		}
 		if err := ctx.Err(); err != nil {
-			return nil, failStartup(workspace, session, connection, output, err)
+			return nil, fail(err)
 		}
 		for _, name := range group {
 			process := sessionProcess(session, name)
@@ -230,19 +297,19 @@ func Start(ctx context.Context, workspace *WorkspaceData, options StartOptions) 
 			started[name] = process
 		}
 		if err := workspace.Store.Save(session); err != nil {
-			return nil, failStartup(workspace, session, connection, output, err)
+			return nil, fail(err)
 		}
 	}
 	for _, process := range session.Services {
 		if !ProcessAlive(process.PID) || VerifyProcess(process) != nil {
-			return nil, failStartup(workspace, session, connection, output, fmt.Errorf("%s exited or changed identity during startup", process.Name))
+			return nil, fail(fmt.Errorf("%s exited or changed identity during startup", process.Name))
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, failStartup(workspace, session, connection, output, err)
+		return nil, fail(err)
 	}
 	if err := workspace.Store.Save(session); err != nil {
-		return nil, failStartup(workspace, session, connection, output, err)
+		return nil, fail(err)
 	}
 	fmt.Fprintln(output, style.Success("✓ Local services are ready. Use `conven services --dashboard` or `conven services --logs --tail` to observe them."))
 	return session, nil
@@ -656,25 +723,101 @@ func displayConnection(connection ConnectionConfig) string {
 	return details
 }
 
-func activeServices(session *Session) []string {
-	names := make([]string, 0)
+func inspectSessionServicesForStart(session *Session) ([]string, error) {
+	if session == nil {
+		return nil, nil
+	}
+	active := make([]string, 0, len(session.Services))
 	for _, process := range session.Services {
-		if ProcessAlive(process.PID) && VerifyProcess(process) == nil {
-			names = append(names, process.Name)
+		if ProcessAlive(process.PID) {
+			if err := VerifyProcess(process); err != nil {
+				return nil, fmt.Errorf("workspace has an unverified process for %s: %w; use conven services --stop --all before starting a new session", process.Name, err)
+			}
+			active = append(active, process.Name)
+			continue
+		}
+		if ProcessGroupAlive(process.PGID) {
+			return nil, fmt.Errorf("workspace has an unverified process group for %s; use conven services --stop --all before starting a new session", process.Name)
 		}
 	}
-	sort.Strings(names)
-	return names
+	if session.Connection != nil && session.Connection.Owned && !session.Connection.Managed && !connectionProcessAlive(session.Connection.PID) && ProcessGroupAlive(session.Connection.PGID) {
+		return nil, fmt.Errorf("workspace has an active or unverified %s connection; use conven services --stop --all before starting a new session", session.Connection.Driver)
+	}
+	sort.Strings(active)
+	return active, nil
 }
 
-func failStartup(workspace *WorkspaceData, session *Session, connection *ConnectionProcess, output io.Writer, failure error) error {
-	if err := rollbackSession(workspace, session, connection, output); err != nil {
+func replacementSessionToken(session *Session) (string, error) {
+	data, err := json.Marshal(session)
+	if err != nil {
+		return "", fmt.Errorf("encode running session confirmation token: %w", err)
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func stopSessionServicesForReplacement(workspace *WorkspaceData, session *Session, output io.Writer) error {
+	style := terminal.New(output)
+	failed := make(map[string]bool)
+	for index := len(session.Services) - 1; index >= 0; index-- {
+		process := session.Services[index]
+		fmt.Fprintf(output, "%s %s for fresh start\n", style.Stage("Stopping"), style.Identifier(process.Name))
+		if err := StopProcess(process, 10*time.Second); err != nil {
+			fmt.Fprintf(output, "%s %s: %v\n", style.Failure("✗ Error stopping"), style.Identifier(process.Name), err)
+			failed[process.Name] = true
+		}
+	}
+	remaining := make([]ServiceProcess, 0, len(failed))
+	for _, process := range session.Services {
+		if failed[process.Name] {
+			remaining = append(remaining, process)
+		}
+	}
+	session.Services = remaining
+	session.Selected = filterSelectedServices(session.Selected, remaining)
+	if err := workspace.Store.Save(session); err != nil {
+		return fmt.Errorf("preserve session after stopping services for fresh start: %w", err)
+	}
+	if len(failed) > 0 {
+		names := make([]string, 0, len(failed))
+		for name := range failed {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return fmt.Errorf("failed to stop running services for fresh start: %s; replacement start was not attempted", strings.Join(names, ", "))
+	}
+	return nil
+}
+
+func filterSelectedServices(selected []string, services []ServiceProcess) []string {
+	remaining := make(map[string]bool, len(services))
+	for _, process := range services {
+		remaining[process.Name] = true
+	}
+	filtered := make([]string, 0, len(services))
+	for _, name := range selected {
+		if remaining[name] {
+			filtered = append(filtered, name)
+			delete(remaining, name)
+		}
+	}
+	for _, process := range services {
+		if remaining[process.Name] {
+			filtered = append(filtered, process.Name)
+			delete(remaining, process.Name)
+		}
+	}
+	return filtered
+}
+
+func failStartup(workspace *WorkspaceData, session *Session, connection *ConnectionProcess, retainConnection bool, output io.Writer, failure error) error {
+	if err := rollbackSession(workspace, session, connection, retainConnection, output); err != nil {
 		return errors.Join(failure, fmt.Errorf("startup rollback incomplete: %w", err))
 	}
 	return failure
 }
 
-func rollbackSession(workspace *WorkspaceData, session *Session, connection *ConnectionProcess, output io.Writer) error {
+func rollbackSession(workspace *WorkspaceData, session *Session, connection *ConnectionProcess, retainConnection bool, output io.Writer) error {
 	style := terminal.New(output)
 	if len(session.Services) > 0 {
 		fmt.Fprintln(output, style.Failure("Startup failed; stopping services started by this command."))
@@ -696,19 +839,28 @@ func rollbackSession(workspace *WorkspaceData, session *Session, connection *Con
 		}
 	}
 	session.Services = remaining
-	if err := releaseConnection(context.Background(), connection, workspace.Store.Root, false, output); err != nil {
-		fmt.Fprintf(output, "%s: %v\n", style.Warning("Rollback warning for connection"), err)
+	session.Selected = filterSelectedServices(session.Selected, remaining)
+	if retainConnection {
 		session.Connection = connection
-		problems = append(problems, fmt.Errorf("stop connection: %w", err))
 	} else {
-		session.Connection = nil
+		if err := releaseConnection(context.Background(), connection, workspace.Store.Root, false, output); err != nil {
+			fmt.Fprintf(output, "%s: %v\n", style.Warning("Rollback warning for connection"), err)
+			session.Connection = connection
+			problems = append(problems, fmt.Errorf("stop connection: %w", err))
+		} else {
+			session.Connection = nil
+		}
 	}
 	if len(session.Services) == 0 && session.Connection == nil {
 		if err := workspace.Store.Clear(); err != nil {
 			problems = append(problems, err)
 		}
-	} else if err := workspace.Store.Save(session); err != nil {
-		problems = append(problems, fmt.Errorf("preserve rollback state: %w", err))
+	} else {
+		if err := workspace.Store.Save(session); err != nil {
+			problems = append(problems, fmt.Errorf("preserve rollback state: %w", err))
+		} else if retainConnection {
+			fmt.Fprintln(output, style.Success("✓ Pre-existing managed ktctl connection lease was kept after replacement startup failed."))
+		}
 	}
 	return errors.Join(problems...)
 }

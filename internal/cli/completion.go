@@ -24,7 +24,7 @@ func Completion(shell string) (string, error) {
     if [ "$subcommand" = "services" ]; then
         action="${COMP_WORDS[2]}"
         case "$action" in
-            --list|--status|--dashboard)
+            --list|--status|--dashboard|--cleanup)
                 options="--help"
                 ;;
             --registry)
@@ -47,7 +47,7 @@ func Completion(shell string) (string, error) {
                 ;;
             *)
                 if [ "$COMP_CWORD" -eq 2 ]; then
-                    options="--list --registry --status --logs --dashboard --start --restart --stop --stop-all --help"
+                    options="--list --registry --status --logs --dashboard --start --restart --stop --stop-all --cleanup --help"
                 else
                     options=""
                 fi
@@ -162,7 +162,7 @@ _conven() {
                 (( CURRENT -= 2 ))
             fi
             case $action in
-                --list|--status)
+                --list|--status|--cleanup)
                     _arguments \
                         '--help[show command help]'
                     ;;
@@ -231,6 +231,7 @@ _conven() {
                             '--restart[restart changed local services]' \
                             '--stop[stop selected local services]' \
                             '--stop-all[stop all services and release the workspace connection]' \
+                            '--cleanup[remove saved build artifacts and service logs]' \
                             '--help[show command help]'
                     else
                         _message 'unknown conven services action'
@@ -436,6 +437,7 @@ complete -c conven -n '__conven_using_subcommand services; and __conven_services
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l restart -d 'Restart changed local services'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l stop -d 'Stop selected local services'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l stop-all -d 'Stop all services and release the workspace connection'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l cleanup -d 'Remove saved build artifacts and service logs'
 complete -c conven -n '__conven_services_action --registry' -l prune -d 'Remove missing direct-child repository services'
 complete -c conven -n '__conven_services_action --logs' -l tail -d 'Stream aggregated logs as plain text'
 complete -c conven -n '__conven_services_action --logs' -l dashboard -d 'Open the interactive log dashboard'

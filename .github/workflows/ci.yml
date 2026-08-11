@@ -83,7 +83,7 @@ jobs:
             ! grep -Fq "        '$command:" "$completion_dir/_conven"
             ! grep -Fq "complete -c conven -f -n '__fish_use_subcommand' -a $command " "$completion_dir/conven.fish"
           done
-          for action in list registry status logs dashboard start restart stop stop-all; do
+          for action in list registry status logs dashboard start restart stop stop-all cleanup; do
             grep -Fq -- "--$action" "$completion_dir/conven.bash"
             grep -Fq -- "--$action" "$completion_dir/_conven"
             grep -Fq -- "-l $action" "$completion_dir/conven.fish"

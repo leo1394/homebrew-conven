@@ -102,6 +102,33 @@ func (app App) runDiscover(arguments []string) int {
 	return 0
 }
 
+func (app App) runCleanup(arguments []string) int {
+	flags := flag.NewFlagSet("services --cleanup", flag.ContinueOnError)
+	flags.SetOutput(app.Error)
+	flags.Usage = func() {
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --cleanup")
+		fmt.Fprintln(flags.Output(), "\nRemoves saved build artifacts and service logs after the workspace session has stopped. Runtime configs and the shared connection log are preserved.")
+	}
+	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
+		return code
+	}
+	if len(flags.Args()) != 0 {
+		return app.fail(errors.New("services --cleanup does not accept service arguments"))
+	}
+	workspace, err := config.FindWorkspace(app.Cwd)
+	if err != nil {
+		return app.fail(err)
+	}
+	store, err := convenruntime.NewStore(workspace)
+	if err != nil {
+		return app.fail(err)
+	}
+	if err := convenruntime.CleanupRuntime(store, app.Output); err != nil {
+		return app.fail(err)
+	}
+	return 0
+}
+
 func (app App) runConfig(arguments []string) int {
 	flags := flag.NewFlagSet("config", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
@@ -167,6 +194,19 @@ func (app App) runConfig(arguments []string) int {
 	return 0
 }
 
+func restartEnvironmentFlagHint(err error) string {
+	switch err.Error() {
+	case "flag provided but not defined: -test":
+		return "Hint: --restart reuses the current session environment; switch with conven services --start --test."
+	case "flag provided but not defined: -dev":
+		return "Hint: --restart reuses the current session environment; switch with conven services --start --dev."
+	case "flag provided but not defined: -env":
+		return "Hint: --restart reuses the current session environment; switch with conven services --start --env NAME."
+	default:
+		return ""
+	}
+}
+
 func (app App) runRestart(arguments []string) int {
 	flags := flag.NewFlagSet("services --restart", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
@@ -180,7 +220,7 @@ func (app App) runRestart(arguments []string) int {
 		flags.PrintDefaults()
 		fmt.Fprintln(flags.Output(), "\nWithout a mode flag, restart opens the Dashboard on an interactive terminal. When both modes are present, the last --tail or --dashboard flag wins.")
 	}
-	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
+	if ok, code := parseCommandFlagsWithHint(flags, arguments, app.Output, restartEnvironmentFlagHint); !ok {
 		return code
 	}
 	options := common.options(app.Cwd)

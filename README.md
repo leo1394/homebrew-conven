@@ -245,6 +245,7 @@ you explicitly use a shell such as `[sh, -c, "..."]`.
 | Follow plain logs | `conven services --logs --tail SERVICE...` |
 | Stop selected services | `conven services --stop SERVICE...` |
 | Stop the workspace session | `conven services --stop-all` |
+| Remove saved artifacts and logs | `conven services --cleanup` |
 
 Use `--dev`, `--test`, or `--env NAME` to select a declared environment. Add
 `--namespace NAME`, `--context NAME`, or `--kubeconfig FILE` when a start needs
@@ -254,6 +255,10 @@ Fresh `--start` safely rebuilds `runtime/current`. `--restart` reuses it and
 restarts only changed or exited services; unchanged services and a shared
 connection stay running. Stop preserves the current logs and generated files
 for inspection until the next safe fresh start.
+
+After `--stop-all`, `--cleanup` removes `runtime/current/artifacts` and
+`runtime/current/logs`. It refuses while a session is saved and preserves
+runtime configs plus the shared connection log.
 
 ## Logs
 

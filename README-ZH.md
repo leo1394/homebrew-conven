@@ -227,6 +227,7 @@ services:
 | 持续输出 Plain 日志 | `conven services --logs --tail SERVICE...` |
 | 停止指定服务 | `conven services --stop SERVICE...` |
 | 停止整个 workspace session | `conven services --stop-all` |
+| 清理构建产物和服务日志 | `conven services --cleanup` |
 
 使用 `--dev`、`--test` 或 `--env NAME` 选择 manifest 中声明的环境。如果启动时需要
 覆盖当前机器的 Kubernetes 设置，可添加 `--namespace NAME`、`--context NAME` 或
@@ -235,6 +236,9 @@ services:
 fresh `--start` 会安全地重建 `runtime/current`。`--restart` 会复用该目录，只重启
 发生变化或已经退出的服务；未变化的服务和共享连接会保持运行。stop 后仍会保留
 当前日志和生成文件，供排查使用，直到下一次安全的 fresh start。
+
+执行 `--stop-all` 后，可使用 `--cleanup` 删除 `runtime/current/artifacts` 和
+`runtime/current/logs`。存在 session 时会拒绝清理；运行配置和共享连接日志会保留。
 
 ## 日志
 

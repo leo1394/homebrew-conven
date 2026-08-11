@@ -338,6 +338,335 @@ func TestStartDryRunPreservesExistingCurrent(t *testing.T) {
 	}
 }
 
+func TestStartReportsRunningServicesConflictWithoutChangingState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := startReplacementWorkspace(t, "alpha", "zeta")
+	var output strings.Builder
+	session, err := Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"zeta", "alpha"},
+		Output:   &output,
+	})
+	if err != nil {
+		t.Fatalf("initial start: %v\n%s", err, output.String())
+	}
+	defer Stop(context.Background(), workspace, nil, true, false, &output)
+	sentinel := filepath.Join(workspace.Store.CurrentDir, "logs", "keep")
+	if err := os.WriteFile(sentinel, []byte("keep\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"alpha"},
+		Output:   &output,
+	})
+	var conflict *RunningServicesError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %v, want RunningServicesError", err)
+	}
+	if strings.Join(conflict.Services, ",") != "alpha,zeta" || conflict.SessionToken == "" {
+		t.Fatalf("running conflict = %#v", conflict)
+	}
+	for _, process := range session.Services {
+		if !ProcessAlive(process.PID) || VerifyProcess(process) != nil {
+			t.Fatalf("running conflict changed %s process: %#v", process.Name, process)
+		}
+	}
+	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "keep\n" {
+		t.Fatalf("running conflict changed current sentinel: data=%q err=%v", data, err)
+	}
+}
+
+func TestStartValidatesReplacementBeforeReportingRunningConflict(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := startReplacementWorkspace(t, "rea-custom-api-service")
+	var output strings.Builder
+	session, err := Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"rea-custom-api-service"},
+		Output:   &output,
+	})
+	if err != nil {
+		t.Fatalf("initial start: %v\n%s", err, output.String())
+	}
+	defer Stop(context.Background(), workspace, nil, true, false, &output)
+
+	_, err = Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"rea-api-service"},
+		Output:   &output,
+	})
+	var conflict *RunningServicesError
+	if err == nil || errors.As(err, &conflict) || !strings.Contains(err.Error(), "unknown services: rea-api-service") {
+		t.Fatalf("error = %v, want unknown service before running conflict", err)
+	}
+	if !ProcessAlive(session.Services[0].PID) || VerifyProcess(session.Services[0]) != nil {
+		t.Fatalf("invalid replacement stopped the running service: %#v", session.Services[0])
+	}
+}
+
+func TestReplaceStartStopsVerifiedServicesAndResetsCurrent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := startReplacementWorkspace(t, "api")
+	var output strings.Builder
+	initial, err := Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	})
+	if err != nil {
+		t.Fatalf("initial start: %v\n%s", err, output.String())
+	}
+	oldProcess := initial.Services[0]
+	sentinel := filepath.Join(workspace.Store.CurrentDir, "logs", "old-sentinel")
+	if err := os.WriteFile(sentinel, []byte("old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	})
+	var conflict *RunningServicesError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %v, want RunningServicesError", err)
+	}
+	replacement, err := ReplaceStart(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	}, conflict.SessionToken)
+	if err != nil {
+		t.Fatalf("replace start: %v\n%s", err, output.String())
+	}
+	defer Stop(context.Background(), workspace, nil, true, false, &output)
+	if ProcessGroupAlive(oldProcess.PGID) {
+		t.Fatalf("old process group %d is still active", oldProcess.PGID)
+	}
+	if replacement == nil || len(replacement.Services) != 1 || replacement.Services[0].PID == oldProcess.PID {
+		t.Fatalf("replacement session = %#v, old process = %#v", replacement, oldProcess)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("replacement retained old current sentinel: %v", err)
+	}
+}
+
+func TestReplaceStartRejectsSessionChangedAfterConfirmation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := startReplacementWorkspace(t, "api")
+	var output strings.Builder
+	initial, err := Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	})
+	if err != nil {
+		t.Fatalf("initial start: %v\n%s", err, output.String())
+	}
+	defer Stop(context.Background(), workspace, nil, true, false, &output)
+	_, err = Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	})
+	var conflict *RunningServicesError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %v, want RunningServicesError", err)
+	}
+	initial.Environment = "changed-while-confirming"
+	if err := workspace.Store.Save(initial); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ReplaceStart(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	}, conflict.SessionToken)
+	if err == nil || !strings.Contains(err.Error(), "session changed while awaiting replacement confirmation") {
+		t.Fatalf("error = %v, want changed session rejection", err)
+	}
+	if !ProcessAlive(initial.Services[0].PID) || VerifyProcess(initial.Services[0]) != nil {
+		t.Fatalf("changed session rejection stopped the running service: %#v", initial.Services[0])
+	}
+}
+
+func TestReplaceStartKeepsUsableManagedKtctlLease(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := startReplacementWorkspace(t, "api")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			connection.Close()
+		}
+	}()
+	kubeconfig := filepath.Join(workspace.Root, "kubeconfig")
+	if err := os.WriteFile(kubeconfig, []byte("test\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	workspace.Manifest.Environments = map[string]model.Environment{
+		"dev": {Connection: model.Connection{
+			Driver:     "ktctl",
+			Command:    "sleep",
+			Args:       []string{"600"},
+			Kubeconfig: kubeconfig,
+			Timeout:    "2s",
+			Readiness:  []model.Endpoint{{Name: "reachable", Address: address}},
+		}},
+	}
+	connectionConfig := ConnectionConfig{
+		Driver:     "ktctl",
+		Command:    "sleep",
+		Args:       []string{"600"},
+		Kubeconfig: kubeconfig,
+		Timeout:    2 * time.Second,
+		Readiness:  []ConnectionEndpoint{{Name: "reachable", Address: address}},
+	}
+	if err := workspace.Store.ResetCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	oldService, err := StartService("api", []string{"sleep", "600"}, filepath.Join(workspace.Root, "api"), CommandEnvironment(), filepath.Join(workspace.Store.CurrentDir, "logs", "api.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionService, err := StartService("connection/ktctl", []string{"sleep", "600"}, workspace.Root, CommandEnvironment(), ConnectionLogPath(workspace.Store.Root))
+	if err != nil {
+		_ = StopProcess(oldService, time.Second)
+		t.Fatal(err)
+	}
+	fingerprint := connectionFingerprint(connectionConfig)
+	connection := &ConnectionProcess{
+		Driver:      "ktctl",
+		PID:         connectionService.PID,
+		PGID:        connectionService.PGID,
+		Command:     connectionService.Command,
+		Identity:    connectionService.Identity,
+		LogPath:     connectionService.LogPath,
+		StartedAt:   connectionService.StartedAt,
+		Owned:       true,
+		Managed:     true,
+		Fingerprint: fingerprint,
+	}
+	defer func() {
+		_ = StopProcess(oldService, time.Second)
+		_ = stopConnection(connection, true)
+		_ = removeConnectionRecord(fingerprint)
+	}()
+	if err := saveConnectionRecord(&connectionRecord{
+		Version:     1,
+		Fingerprint: fingerprint,
+		Process:     *connection,
+		Leases:      map[string]time.Time{workspace.Store.Root: time.Now().Add(-connectionLeaseGrace - time.Minute)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Store.Save(&Session{
+		Workspace:   workspace.Root,
+		Environment: "dev",
+		CreatedAt:   time.Now(),
+		Selected:    []string{"api"},
+		Services:    []ServiceProcess{oldService},
+		Connection:  connection,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	_, err = Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	})
+	var conflict *RunningServicesError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %v, want RunningServicesError", err)
+	}
+	replacement, err := ReplaceStart(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	}, conflict.SessionToken)
+	if err != nil {
+		t.Fatalf("replace start: %v\n%s", err, output.String())
+	}
+	defer Stop(context.Background(), workspace, nil, true, false, &output)
+	if replacement.Connection == nil || replacement.Connection.PID != connection.PID || replacement.Connection.PGID != connection.PGID || replacement.Connection.Fingerprint != fingerprint {
+		t.Fatalf("replacement connection = %#v, want retained %#v", replacement.Connection, connection)
+	}
+	if !ProcessAlive(connection.PID) || VerifyProcess(ServiceProcess{Name: "connection/ktctl", PID: connection.PID, PGID: connection.PGID, Command: connection.Command, Identity: connection.Identity}) != nil {
+		t.Fatalf("retained ktctl connection is not running: %#v", connection)
+	}
+	record, err := loadConnectionRecord(fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record == nil {
+		t.Fatal("replacement removed the managed ktctl record")
+	}
+	if _, found := record.Leases[workspace.Store.Root]; !found {
+		t.Fatalf("replacement removed the workspace ktctl lease: %#v", record.Leases)
+	}
+	if strings.Contains(output.String(), "connection stopped after its final workspace lease was released") {
+		t.Fatalf("replacement stopped the retained ktctl connection:\n%s", output.String())
+	}
+
+	runningReplacement := replacement.Services[0]
+	service := workspace.Manifest.Services["api"]
+	service.Runner.Prepare = []string{"sh", "-c", "exit 7"}
+	workspace.Manifest.Services["api"] = service
+	_, err = Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	})
+	var failedReplacementConflict *RunningServicesError
+	if !errors.As(err, &failedReplacementConflict) {
+		t.Fatalf("error = %v, want RunningServicesError before failed replacement", err)
+	}
+	_, err = ReplaceStart(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	}, failedReplacementConflict.SessionToken)
+	if err == nil || !strings.Contains(err.Error(), "prepare api") {
+		t.Fatalf("failed replacement error = %v\n%s", err, output.String())
+	}
+	if ProcessGroupAlive(runningReplacement.PGID) {
+		t.Fatalf("failed replacement left the previous service group %d active", runningReplacement.PGID)
+	}
+	failedSession, err := workspace.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failedSession == nil || len(failedSession.Services) != 0 || failedSession.Connection == nil || failedSession.Connection.PID != connection.PID {
+		t.Fatalf("failed replacement session = %#v, want retained connection only", failedSession)
+	}
+	if !ProcessAlive(connection.PID) {
+		t.Fatalf("failed replacement stopped retained ktctl connection: %#v", connection)
+	}
+	failedRecord, err := loadConnectionRecord(fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failedRecord == nil {
+		t.Fatal("failed replacement removed the managed ktctl record")
+	}
+	if _, found := failedRecord.Leases[workspace.Store.Root]; !found {
+		t.Fatalf("failed replacement removed the workspace ktctl lease: %#v", failedRecord.Leases)
+	}
+	if !strings.Contains(output.String(), "Pre-existing managed ktctl connection lease was kept after replacement startup failed") {
+		t.Fatalf("failed replacement did not report retained ktctl lease:\n%s", output.String())
+	}
+}
+
 func TestStartStaticValidationFailurePreservesCurrent(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
@@ -1229,4 +1558,24 @@ func testWorkspace(t *testing.T, root string, manifest *model.Manifest) *Workspa
 		Manifest:   manifest,
 		Store:      store,
 	}
+}
+
+func startReplacementWorkspace(t *testing.T, names ...string) *WorkspaceData {
+	t.Helper()
+	root := t.TempDir()
+	services := make(map[string]model.Service, len(names))
+	for _, name := range names {
+		if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		services[name] = model.Service{
+			Path:   name,
+			Runner: model.Runner{Run: []string{"sleep", "600"}},
+		}
+	}
+	return testWorkspace(t, root, &model.Manifest{
+		Version:   1,
+		Workspace: model.Workspace{Name: "start-replacement"},
+		Services:  services,
+	})
 }

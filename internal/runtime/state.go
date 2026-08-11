@@ -231,6 +231,57 @@ func (store *Store) ResetCurrent() error {
 	return nil
 }
 
+func (store *Store) CleanupCurrentOutputs() error {
+	if err := store.ensureRoot(); err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(store.Root, store.CurrentDir)
+	if err != nil || relative != "current" {
+		return fmt.Errorf("refuse to clean unexpected current runtime path %q", store.CurrentDir)
+	}
+	info, err := os.Lstat(store.CurrentDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect current runtime directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("current runtime path %q must be a real directory", store.CurrentDir)
+	}
+	targets := []string{
+		filepath.Join(store.CurrentDir, "artifacts"),
+		filepath.Join(store.CurrentDir, "logs"),
+	}
+	for _, target := range targets {
+		info, err := os.Lstat(target)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect cleanup target %q: %w", target, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("cleanup target %q must be a real directory", target)
+		}
+	}
+	if err := os.Chmod(store.CurrentDir, 0700); err != nil {
+		return fmt.Errorf("protect current runtime directory: %w", err)
+	}
+	for _, target := range targets {
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("clear runtime output %q: %w", target, err)
+		}
+		if err := os.Mkdir(target, 0700); err != nil {
+			return fmt.Errorf("recreate runtime output %q: %w", target, err)
+		}
+		if err := os.Chmod(target, 0700); err != nil {
+			return fmt.Errorf("protect runtime output %q: %w", target, err)
+		}
+	}
+	return nil
+}
+
 func (store *Store) InspectCurrent() error {
 	if err := store.ensureRoot(); err != nil {
 		return err

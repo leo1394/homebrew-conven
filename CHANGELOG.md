@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.2.7 - 2026-08-11
+
+- 新增 `conven services --cleanup`：执行 `services --stop-all` 后清理当前 workspace 的
+  构建产物和服务日志，保留运行配置与共享连接日志；存在 session、并发命令、symlink
+  或越界路径时拒绝清理。
+- 改进 CLI 参数诊断：Go `flag` 生成的未知参数、缺少参数值、非法值和帮助选项统一
+  使用 `--name`；restart 收到 `--dev`、`--test` 或 `--env` 时，会在参数错误前高亮
+  提示复用当前 session 环境，并给出对应的 `services --start` 用法。合法短选项
+  `-h`、`-v` 保持不变。
+- Dashboard 底部操作提示保持黄色，提示两侧的分隔线改为白色，与顶部一致。
+- `services --start` 遇到可信运行 session 时，会先校验替换计划，再在交互终端提示
+  `Stop then start` 或默认 `Cancel`；非 TTY 保持 fail-closed。确认后会在 workspace 锁内
+  复核 session，若已变化则拒绝替换；配置匹配且 endpoints 可达的 managed ktctl lease
+  会直接复用，不中断连接。
+
 ## 0.2.6 - 2026-08-11
 
 - Dashboard 超出终端宽度的长日志按视觉行自动换行，不再用省略号隐藏内容，滚动和

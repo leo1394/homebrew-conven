@@ -24,6 +24,7 @@ type App struct {
 	Cwd          string
 	Version      string
 	PolicyEditor func(context.Context, string) error
+	StartReplacementConfirmer func(context.Context, []string) (bool, error)
 }
 
 type commonFlags struct {
@@ -143,6 +144,8 @@ func (app App) runServices(arguments []string) int {
 		return app.runStop(remaining)
 	case "--stop-all":
 		return app.runStop(append([]string{"--all"}, remaining...))
+	case "--cleanup":
+		return app.runCleanup(remaining)
 	default:
 		style := terminal.New(app.Error)
 		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: unknown services action %q", action)))
@@ -162,6 +165,7 @@ func (app App) runStart(arguments []string) int {
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --start [flags] [service...]")
 		flags.PrintDefaults()
+		fmt.Fprintln(flags.Output(), "\nIf verified services are already running, an interactive terminal offers Stop then start or Cancel after the replacement plan passes static validation.")
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
@@ -202,14 +206,27 @@ func (app App) runStart(arguments []string) int {
 		}
 		services = selected
 	}
-	session, err := convenruntime.Start(app.Context, workspace, convenruntime.StartOptions{
+	startOptions := convenruntime.StartOptions{
 		Common:     options,
 		Services:   services,
 		DryRun:     *dryRun,
 		SkipBuild:  *skipBuild,
 		SkipVerify: *skipVerify,
 		Output:     app.Output,
-	})
+	}
+	session, err := convenruntime.Start(app.Context, workspace, startOptions)
+	var running *convenruntime.RunningServicesError
+	if errors.As(err, &running) {
+		replace, promptErr := app.StartReplacementConfirmer(app.Context, running.Services)
+		if promptErr != nil {
+			return app.fail(promptErr)
+		}
+		if !replace {
+			fmt.Fprintln(app.Error, "Cancelled; running services were left unchanged.")
+			return 0
+		}
+		session, err = convenruntime.ReplaceStart(app.Context, workspace, startOptions, running.SessionToken)
+	}
 	if err != nil {
 		return app.fail(err)
 	}
@@ -520,6 +537,10 @@ type booleanFlag interface {
 }
 
 func parseCommandFlags(flags *flag.FlagSet, arguments []string, helpOutput io.Writer) (bool, int) {
+	return parseCommandFlagsWithHint(flags, arguments, helpOutput, nil)
+}
+
+func parseCommandFlagsWithHint(flags *flag.FlagSet, arguments []string, helpOutput io.Writer, hint func(error) string) (bool, int) {
 	normalized, err := intersperseFlags(flags, arguments)
 	if err != nil {
 		fmt.Fprintln(flags.Output(), err)
@@ -535,7 +556,12 @@ func parseCommandFlags(flags *flag.FlagSet, arguments []string, helpOutput io.Wr
 		if errors.Is(err, flag.ErrHelp) {
 			output = helpOutput
 		}
-		fmt.Fprint(output, parseOutput.String())
+		if hint != nil && err != nil && !errors.Is(err, flag.ErrHelp) {
+			if message := hint(err); message != "" {
+				fmt.Fprintln(output, terminal.New(output).Warning(message))
+			}
+		}
+		fmt.Fprint(output, canonicalFlagOutput(parseOutput.String()))
 	}
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -544,6 +570,76 @@ func parseCommandFlags(flags *flag.FlagSet, arguments []string, helpOutput io.Wr
 		return false, 2
 	}
 	return true, 0
+}
+
+func canonicalFlagOutput(value string) string {
+	lines := strings.SplitAfter(value, "\n")
+	for index, line := range lines {
+		lines[index] = canonicalFlagOutputLine(line)
+	}
+	return strings.Join(lines, "")
+}
+
+func canonicalFlagOutputLine(line string) string {
+	if strings.HasPrefix(line, "  -") && !strings.HasPrefix(line, "  --") {
+		end := flagNameEnd(line, 3)
+		if canonicalLongFlagName(line[3:end]) {
+			return line[:2] + "--" + line[3:]
+		}
+	}
+	for _, prefix := range []string{
+		"flag provided but not defined: -",
+		"flag needs an argument: -",
+	} {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		return canonicalFlagNameAt(line, len(prefix))
+	}
+	if strings.HasPrefix(line, "invalid value ") {
+		const marker = " for flag -"
+		if start := strings.LastIndex(line, marker); start >= 0 {
+			return canonicalFlagNameAt(line, start+len(marker))
+		}
+	}
+	if strings.HasPrefix(line, "invalid boolean value ") {
+		const marker = " for -"
+		if start := strings.LastIndex(line, marker); start >= 0 {
+			return canonicalFlagNameAt(line, start+len(marker))
+		}
+	}
+	return line
+}
+
+func canonicalFlagNameAt(line string, nameStart int) string {
+	if nameStart >= len(line) || line[nameStart] == '-' {
+		return line
+	}
+	nameEnd := flagNameEnd(line, nameStart)
+	if !canonicalLongFlagName(line[nameStart:nameEnd]) {
+		return line
+	}
+	return line[:nameStart] + "-" + line[nameStart:]
+}
+
+func flagNameEnd(value string, start int) int {
+	end := start
+	for end < len(value) {
+		character := value[end]
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '-' && character != '_' {
+			break
+		}
+		end++
+	}
+	return end
+}
+
+func canonicalLongFlagName(name string) bool {
+	if len(name) < 2 {
+		return false
+	}
+	first := name[0]
+	return (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z')
 }
 
 func intersperseFlags(flags *flag.FlagSet, arguments []string) ([]string, error) {
@@ -620,6 +716,13 @@ func (app App) withDefaults() App {
 		errorOutput := app.Error
 		app.PolicyEditor = func(ctx context.Context, path string) error {
 			return launchPolicyEditor(ctx, input, output, errorOutput, path)
+		}
+	}
+	if app.StartReplacementConfirmer == nil {
+		input := app.Input
+		errorOutput := app.Error
+		app.StartReplacementConfirmer = func(ctx context.Context, services []string) (bool, error) {
+			return confirmStartReplacement(ctx, input, errorOutput, services)
 		}
 	}
 	return app
@@ -762,6 +865,7 @@ available actions
    --restart    Restart selected or changed services; opens the dashboard on a TTY
    --stop       Stop selected local services
    --stop-all   Stop all services and release the workspace connection
+   --cleanup    Remove saved build artifacts and service logs
 
 The action flag must be the first argument after "conven services".
 Run 'conven services <action> --help' for action-specific usage and flags.
@@ -769,5 +873,8 @@ Without service names, --start opens an interactive selector and asks for
 confirmation; --restart restarts only changed services in the current session.
 After a successful interactive --start or --restart, the dashboard opens by
 default; pass --tail to stream plain-text logs instead.
+If --start finds a verified running session, it validates the replacement plan
+before offering Stop then start or Cancel (default). Non-interactive conflicts
+leave the current session unchanged.
 `)
 }

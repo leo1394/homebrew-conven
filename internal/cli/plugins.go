@@ -157,7 +157,7 @@ func askPluginOverwriteContext(ctx context.Context, input *os.File, output io.Wr
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		ready, err := waitForPluginOverwriteInput(reader, int(input.Fd()), 100*time.Millisecond)
+		ready, err := waitForConfirmationInput(reader, int(input.Fd()), 100*time.Millisecond)
 		if err != nil {
 			return false, fmt.Errorf("wait for plugin overwrite confirmation: %w", err)
 		}
@@ -175,7 +175,7 @@ func askPluginOverwriteContext(ctx context.Context, input *os.File, output io.Wr
 	return pluginOverwriteAnswer(answer), nil
 }
 
-func waitForPluginOverwriteInput(reader *bufio.Reader, fd int, timeout time.Duration) (bool, error) {
+func waitForConfirmationInput(reader *bufio.Reader, fd int, timeout time.Duration) (bool, error) {
 	if reader.Buffered() > 0 {
 		return true, nil
 	}
@@ -195,7 +195,7 @@ func waitForPluginOverwriteInput(reader *bufio.Reader, fd int, timeout time.Dura
 			return false, nil
 		}
 		if descriptors[0].Revents&unix.POLLNVAL != 0 {
-			return false, errors.New("plugin overwrite terminal input descriptor is invalid")
+			return false, errors.New("confirmation terminal input descriptor is invalid")
 		}
 		return descriptors[0].Revents&(unix.POLLIN|unix.POLLHUP) != 0, nil
 	}

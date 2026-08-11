@@ -37,7 +37,6 @@ const (
 	dashboardYellow        = "\x1b[33m"
 	dashboardRed           = "\x1b[31m"
 	dashboardWhite         = "\x1b[37m"
-	dashboardRule          = "\x1b[2;36m"
 )
 
 type dashboardSegment struct {
@@ -1286,11 +1285,11 @@ func dashboardDividerLine(width int, hint string) dashboardLine {
 	leftRuleWidth := ruleWidth / 2
 	rightRuleWidth := ruleWidth - leftRuleWidth
 	return dashboardLine{Segments: []dashboardSegment{
-		{Text: strings.Repeat("─", leftRuleWidth), Style: dashboardRule},
+		{Text: strings.Repeat("─", leftRuleWidth), Style: dashboardWhite},
 		{Text: " "},
 		{Text: hint, Style: dashboardYellow},
 		{Text: " "},
-		{Text: strings.Repeat("─", rightRuleWidth), Style: dashboardRule},
+		{Text: strings.Repeat("─", rightRuleWidth), Style: dashboardWhite},
 	}}
 }
 

@@ -826,6 +826,101 @@ func signalConnection(process *ConnectionProcess, target int, signal syscall.Sig
 	return nil
 }
 
+func validateConnectionForReplacement(ctx context.Context, process *ConnectionProcess, lease string) error {
+	if process == nil || !process.Managed {
+		if process != nil && process.Owned {
+			_, unverified := connectionRecordState(&connectionRecord{Process: *process})
+			if unverified {
+				return fmt.Errorf("workspace has an unverified %s connection; use conven services --stop --all before starting a new session", process.Driver)
+			}
+		}
+		return nil
+	}
+	unlock, err := acquireConnectionLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	record, err := loadConnectionRecord(process.Fingerprint)
+	if err != nil {
+		return err
+	}
+	if record == nil {
+		current, unverified := connectionRecordState(&connectionRecord{Process: *process})
+		if current || unverified {
+			return fmt.Errorf("managed connection record %s is missing while its saved process group %d is still active", process.Fingerprint, process.PGID)
+		}
+		return nil
+	}
+	if !sameConnectionProcess(process, &record.Process) {
+		return fmt.Errorf("workspace managed %s connection does not match registry record %s", process.Driver, process.Fingerprint)
+	}
+	current, unverified := connectionRecordState(record)
+	if unverified {
+		return unverifiedConnectionError(record)
+	}
+	if current {
+		if _, found := record.Leases[lease]; !found {
+			return fmt.Errorf("managed %s connection record %s does not contain this workspace lease", process.Driver, process.Fingerprint)
+		}
+	}
+	return nil
+}
+
+func renewRetainedKtctlConnection(ctx context.Context, process *ConnectionProcess, config ConnectionConfig, lease string) (bool, error) {
+	if process == nil || !process.Managed || process.Driver != "ktctl" || config.Driver != "ktctl" || process.Fingerprint != connectionFingerprint(config) {
+		return false, nil
+	}
+	unlock, err := acquireConnectionLock(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	record, err := loadConnectionRecord(process.Fingerprint)
+	if err != nil {
+		return false, err
+	}
+	if record == nil {
+		return false, fmt.Errorf("managed connection record %s is missing while preparing the fresh start", process.Fingerprint)
+	}
+	if !sameConnectionProcess(process, &record.Process) {
+		return false, fmt.Errorf("workspace managed ktctl connection does not match registry record %s", process.Fingerprint)
+	}
+	current, unverified := connectionRecordState(record)
+	if unverified {
+		return false, unverifiedConnectionError(record)
+	}
+	if !current {
+		return false, nil
+	}
+	if _, found := record.Leases[lease]; !found {
+		return false, fmt.Errorf("managed ktctl connection record %s does not contain this workspace lease", process.Fingerprint)
+	}
+	if !endpointsReady(ctx, config.Readiness) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	record.Leases[lease] = time.Now()
+	if err := saveConnectionRecord(record); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func sameConnectionProcess(left *ConnectionProcess, right *ConnectionProcess) bool {
+	if left == nil || right == nil || left.Driver != right.Driver || left.PID != right.PID || left.PGID != right.PGID || left.Identity != right.Identity || left.Fingerprint != right.Fingerprint || len(left.Command) != len(right.Command) {
+		return false
+	}
+	for index := range left.Command {
+		if left.Command[index] != right.Command[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func releaseConnection(ctx context.Context, process *ConnectionProcess, lease string, force bool, output io.Writer) error {
 	if process == nil {
 		return nil

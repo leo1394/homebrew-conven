@@ -124,6 +124,12 @@ func TestDashboardBannerUsesWhiteLabelsGreenCountAndCenteredYellowHint(t *testin
 	if !strings.Contains(divider, dashboardYellow+hint+dashboardReset) {
 		t.Fatalf("dashboard hint is not yellow: %q", divider)
 	}
+	if strings.Count(divider, dashboardWhite) != 2 {
+		t.Fatalf("dashboard footer rules are not white: %q", divider)
+	}
+	if strings.Contains(divider, "\x1b[2;36m") {
+		t.Fatalf("dashboard footer retained the dim cyan rule style: %q", divider)
+	}
 	plain := plainDashboardText(divider)
 	hintStart := strings.Index(plain, hint)
 	if hintStart < 0 {

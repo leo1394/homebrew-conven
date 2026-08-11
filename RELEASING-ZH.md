@@ -381,7 +381,7 @@ for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION" "$CONVEN_FI
   grep -Fq -- "services" "$completion"
   grep -Fq -- "plugins" "$completion"
 done
-for action in list registry status dashboard logs start restart stop stop-all; do
+for action in list registry status dashboard logs start restart stop stop-all cleanup; do
   for completion in "$CONVEN_BASH_COMPLETION" "$CONVEN_ZSH_COMPLETION"; do
     grep -Fq -- "--$action" "$completion"
   done
@@ -606,8 +606,8 @@ TTY 中默认打开 Dashboard。同时向 logs 或 restart 传入两个模式参
   的一级子目录，不能扫描命令调用目录的子目录。
 - `services` 的动作参数必须位于其后的第一个参数，并且必须且只能指定 `--list`、
   `--registry`、`--status`、`--dashboard`、`--logs`、`--start`、`--restart`、`--stop`、
-  `--stop-all` 之一。原顶层服务命令必须以用法错误状态 2 退出，并从 help 和补全顶层
-  候选中消失。
+  `--stop-all`、`--cleanup` 之一。原顶层服务命令必须以用法错误状态 2 退出，并从 help
+  和补全顶层候选中消失。
 - 已移除的 workspace 和 manifest 参数在每个 workspace 命令中都必须以用法错误
   状态 2 退出，并且不出现在命令 help 或任何补全中。设置 `CONVEN_WORKSPACE` 不能
   改变 CLI 发现：位于 workspace 内时仍选择当前 workspace，位于 workspace 外时仍失败。
@@ -658,6 +658,9 @@ TTY 中默认打开 Dashboard。同时向 logs 或 restart 传入两个模式参
   终止 ownership 记录确认的 ktctl connection，其他 workspace 仍在租用的连接不能终止。
   对同时记录为 `Owned=false` 且 `Managed=false` 的外部 ktctl 进程或网络可达性，
   两种写法都只清理 session 引用，不能终止外部连接。
+- 执行 `services --stop-all` 后，`services --cleanup` 只能删除
+  `runtime/current/artifacts` 和 `runtime/current/logs`，必须保留运行配置和共享连接日志；
+  仍存在 session、清理目标为 symlink 或路径越出 workspace runtime 时必须拒绝清理。
 
 在支持 `ktctl` 的一次性环境中，还要验证 readiness、
 kubeconfig/context/namespace 传递、共享连接租约、最后一个租约释放时停止连接，

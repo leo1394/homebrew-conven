@@ -252,7 +252,7 @@ func TestServicesHelpUsesStdout(t *testing.T) {
 		if code := app.Run(arguments); code != 0 {
 			t.Fatalf("%v exit code = %d", arguments, code)
 		}
-		for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard"} {
+		for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard", "--cleanup"} {
 			if !strings.Contains(output.String(), action) {
 				t.Fatalf("%v help is missing %s: %q", arguments, action, output.String())
 			}
@@ -272,7 +272,7 @@ func TestServicesHelpUsesStdout(t *testing.T) {
 }
 
 func TestServiceActionHelpUsesStdout(t *testing.T) {
-	for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard"} {
+	for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard", "--cleanup"} {
 		t.Run(action, func(t *testing.T) {
 			var output bytes.Buffer
 			var errorOutput bytes.Buffer
@@ -708,6 +708,175 @@ func TestInvalidSubcommandFlagUsesStderr(t *testing.T) {
 	}
 }
 
+func TestLeafFlagErrorsUseCanonicalDoubleDash(t *testing.T) {
+	commands := []struct {
+		name      string
+		arguments []string
+	}{
+		{name: "init", arguments: []string{"init"}},
+		{name: "config", arguments: []string{"config"}},
+		{name: "doctor", arguments: []string{"doctor"}},
+		{name: "registry", arguments: []string{"services", "--registry"}},
+		{name: "start", arguments: []string{"services", "--start"}},
+		{name: "restart", arguments: []string{"services", "--restart"}},
+		{name: "cleanup", arguments: []string{"services", "--cleanup"}},
+		{name: "status", arguments: []string{"services", "--status"}},
+		{name: "stop", arguments: []string{"services", "--stop"}},
+		{name: "stop-all", arguments: []string{"services", "--stop-all"}},
+		{name: "logs", arguments: []string{"services", "--logs"}},
+		{name: "dashboard", arguments: []string{"services", "--dashboard"}},
+		{name: "list", arguments: []string{"services", "--list"}},
+		{name: "policy edit", arguments: []string{"policy", "--edit"}},
+		{name: "policy import", arguments: []string{"policy", "--import"}},
+		{name: "policy reset", arguments: []string{"policy", "--reset"}},
+	}
+	for _, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Cwd: t.TempDir(), Version: "test-version"}
+			arguments := append(append([]string(nil), command.arguments...), "--unknown-long")
+			if code := app.Run(arguments); code != 2 {
+				t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+			}
+			if !strings.Contains(errorOutput.String(), "flag provided but not defined: --unknown-long\n") {
+				t.Fatalf("stderr does not preserve the long option spelling: %q", errorOutput.String())
+			}
+			if strings.Contains(errorOutput.String(), "flag provided but not defined: -unknown-long\n") {
+				t.Fatalf("stderr retained a single-dash long option: %q", errorOutput.String())
+			}
+			if output.Len() != 0 {
+				t.Fatalf("stdout = %q", output.String())
+			}
+		})
+	}
+}
+
+func TestFlagHelpUsesCanonicalDoubleDashForLongOptions(t *testing.T) {
+	commands := []struct {
+		name      string
+		arguments []string
+		flag      string
+	}{
+		{name: "config", arguments: []string{"config", "--help"}, flag: "global"},
+		{name: "doctor", arguments: []string{"doctor", "--help"}, flag: "env"},
+		{name: "registry", arguments: []string{"services", "--registry", "--help"}, flag: "prune"},
+		{name: "start", arguments: []string{"services", "--start", "--help"}, flag: "dry-run"},
+		{name: "restart", arguments: []string{"services", "--restart", "--help"}, flag: "dashboard"},
+		{name: "stop", arguments: []string{"services", "--stop", "--help"}, flag: "force"},
+		{name: "logs", arguments: []string{"services", "--logs", "--help"}, flag: "tail"},
+		{name: "policy import", arguments: []string{"policy", "--import", "--help"}, flag: "edit"},
+	}
+	for _, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
+			if code := app.Run(command.arguments); code != 0 {
+				t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+			}
+			if !strings.Contains(output.String(), "\n  --"+command.flag) {
+				t.Fatalf("help does not show --%s: %q", command.flag, output.String())
+			}
+			if strings.Contains(output.String(), "\n  -"+command.flag) {
+				t.Fatalf("help retained -%s: %q", command.flag, output.String())
+			}
+			if errorOutput.Len() != 0 {
+				t.Fatalf("stderr = %q", errorOutput.String())
+			}
+		})
+	}
+}
+
+func TestFlagValueErrorsUseCanonicalDoubleDash(t *testing.T) {
+	tests := []struct {
+		name      string
+		arguments []string
+		want      string
+	}{
+		{name: "unknown with value", arguments: []string{"init", "--unknown=value"}, want: "flag provided but not defined: --unknown\n"},
+		{name: "invalid boolean", arguments: []string{"services", "--start", "--test=wat"}, want: `invalid boolean value "wat" for --test: parse error`},
+		{name: "invalid boolean preserves value", arguments: []string{"services", "--start", "--test=value for -decoy"}, want: `invalid boolean value "value for -decoy" for --test: parse error`},
+		{name: "missing value", arguments: []string{"services", "--start", "--env"}, want: "flag needs an argument: --env\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
+			if code := app.Run(test.arguments); code != 2 {
+				t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+			}
+			if !strings.Contains(errorOutput.String(), test.want) {
+				t.Fatalf("stderr does not contain %q: %q", test.want, errorOutput.String())
+			}
+		})
+	}
+}
+
+func TestCanonicalFlagOutputPreservesShortFlagsAndProse(t *testing.T) {
+	input := "flag provided but not defined: -h\n  -x\n  -long-name\nnon-interactive -123 --already-long\ninvalid value \"value for flag -decoy\" for flag -timeout: parse error\n"
+	want := "flag provided but not defined: -h\n  -x\n  --long-name\nnon-interactive -123 --already-long\ninvalid value \"value for flag -decoy\" for flag --timeout: parse error\n"
+	if got := canonicalFlagOutput(input); got != want {
+		t.Fatalf("canonical flag output = %q, want %q", got, want)
+	}
+}
+
+func TestRestartEnvironmentFlagHintPrecedesParseError(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		arguments []string
+		hint      string
+	}{
+		{name: "test", arguments: []string{"--test"}, hint: "Hint: --restart reuses the current session environment; switch with conven services --start --test."},
+		{name: "dev", arguments: []string{"--dev"}, hint: "Hint: --restart reuses the current session environment; switch with conven services --start --dev."},
+		{name: "env value", arguments: []string{"--env", "staging"}, hint: "Hint: --restart reuses the current session environment; switch with conven services --start --env NAME."},
+		{name: "env equals", arguments: []string{"--env=staging"}, hint: "Hint: --restart reuses the current session environment; switch with conven services --start --env NAME."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
+			arguments := append([]string{"services", "--restart"}, test.arguments...)
+			if code := app.Run(arguments); code != 2 {
+				t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+			}
+			hintIndex := strings.Index(errorOutput.String(), test.hint)
+			errorIndex := strings.Index(errorOutput.String(), "flag provided but not defined:")
+			if hintIndex < 0 || errorIndex < 0 || hintIndex >= errorIndex {
+				t.Fatalf("restart hint does not precede the parse error: %q", errorOutput.String())
+			}
+			if output.Len() != 0 {
+				t.Fatalf("stdout = %q", output.String())
+			}
+		})
+	}
+}
+
+func TestRestartEnvironmentFlagHintOnlyDescribesTheActualError(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		arguments []string
+		code      int
+	}{
+		{name: "other unknown flag", arguments: []string{"services", "--restart", "--unknown"}, code: 2},
+		{name: "help first", arguments: []string{"services", "--restart", "--help", "--test"}, code: 0},
+		{name: "invalid known flag first", arguments: []string{"services", "--restart", "--skip-build=wat", "--test"}, code: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
+			if code := app.Run(test.arguments); code != test.code {
+				t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+			}
+			if strings.Contains(output.String(), "--restart reuses the current session environment") || strings.Contains(errorOutput.String(), "--restart reuses the current session environment") {
+				t.Fatalf("unrelated parse result received a restart environment hint: stdout=%q stderr=%q", output.String(), errorOutput.String())
+			}
+		})
+	}
+}
+
 func TestWorkspaceOverrideFlagsWereRemoved(t *testing.T) {
 	commands := []struct {
 		name      string
@@ -722,6 +891,7 @@ func TestWorkspaceOverrideFlagsWereRemoved(t *testing.T) {
 		{name: "logs", arguments: []string{"services", "--logs"}},
 		{name: "dashboard", arguments: []string{"services", "--dashboard"}},
 		{name: "list", arguments: []string{"services", "--list"}},
+		{name: "cleanup", arguments: []string{"services", "--cleanup"}},
 		{name: "doctor", arguments: []string{"doctor"}},
 	}
 	for _, command := range commands {
@@ -734,7 +904,7 @@ func TestWorkspaceOverrideFlagsWereRemoved(t *testing.T) {
 			if code := app.Run(arguments); code != 0 {
 				t.Fatalf("exit code = %d", code)
 			}
-			for _, removed := range []string{"-workspace", "-config"} {
+			for _, removed := range []string{"--workspace", "--config"} {
 				if strings.Contains(output.String(), removed) {
 					t.Fatalf("%s help still exposes %s: %q", command.name, removed, output.String())
 				}
@@ -757,7 +927,7 @@ func TestWorkspaceOverrideFlagsWereRemoved(t *testing.T) {
 				if output.Len() != 0 {
 					t.Fatalf("stdout = %q", output.String())
 				}
-				if !strings.Contains(errorOutput.String(), "flag provided but not defined: -"+removed) {
+				if !strings.Contains(errorOutput.String(), "flag provided but not defined: --"+removed) {
 					t.Fatalf("stderr = %q", errorOutput.String())
 				}
 			})
@@ -786,7 +956,7 @@ func TestTailFlagReplacesFollow(t *testing.T) {
 			if code := app.Run([]string{"services", action, "--help"}); code != 0 {
 				t.Fatalf("exit code = %d", code)
 			}
-			if !strings.Contains(output.String(), "-tail") {
+			if !strings.Contains(output.String(), "\n  --tail") {
 				t.Fatalf("%s help does not expose --tail: %q", action, output.String())
 			}
 			if strings.Contains(output.String(), "follow") {
@@ -808,7 +978,7 @@ func TestTailFlagReplacesFollow(t *testing.T) {
 			if output.Len() != 0 {
 				t.Fatalf("stdout = %q", output.String())
 			}
-			if !strings.Contains(errorOutput.String(), "flag provided but not defined: -follow") {
+			if !strings.Contains(errorOutput.String(), "flag provided but not defined: --follow") {
 				t.Fatalf("stderr = %q", errorOutput.String())
 			}
 		})
@@ -832,7 +1002,7 @@ func TestRestartHelpExposesDashboardMode(t *testing.T) {
 	if code := app.Run([]string{"services", "--restart", "--help"}); code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
-	if !strings.Contains(output.String(), "-dashboard") || !strings.Contains(output.String(), "last --tail or --dashboard flag wins") {
+	if !strings.Contains(output.String(), "\n  --dashboard") || !strings.Contains(output.String(), "last --tail or --dashboard flag wins") {
 		t.Fatalf("restart help does not expose dashboard mode: %q", output.String())
 	}
 	if errorOutput.Len() != 0 {
@@ -1215,6 +1385,7 @@ func TestServiceActionsRejectInvalidPositionalsBeforeWorkspaceLookup(t *testing.
 		{name: "list", arguments: []string{"services", "--list", "api"}, message: "does not accept service arguments"},
 		{name: "registry", arguments: []string{"services", "--registry", "api"}, message: "does not accept service arguments"},
 		{name: "status", arguments: []string{"services", "--status", "api"}, message: "does not accept service arguments"},
+		{name: "cleanup", arguments: []string{"services", "--cleanup", "api"}, message: "does not accept service arguments"},
 		{name: "stop all", arguments: []string{"services", "--stop", "--all", "api"}, message: "cannot be combined with service names"},
 		{name: "stop-all", arguments: []string{"services", "--stop-all", "api"}, message: "cannot be combined with service names"},
 	} {
@@ -1272,7 +1443,63 @@ func TestServicesListStatusRestartAndStopRoutes(t *testing.T) {
 					}
 				}
 			})
+	}
+}
+
+func TestServicesCleanupRequiresStoppedSessionAndPreservesConfigs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := environmentShortcutWorkspace(t)
+	store, err := convenruntime.NewStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResetCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	artifact := filepath.Join(store.CurrentDir, "artifacts", "api")
+	log := filepath.Join(store.CurrentDir, "logs", "api.log")
+	configPath := filepath.Join(store.CurrentDir, "configs", "api", "application.yaml")
+	for _, path := range []string{artifact, log, configPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
 		}
+		if err := os.WriteFile(path, []byte("runtime\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Save(&convenruntime.Session{Workspace: workspace}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	app := App{Output: &output, Error: &output, Cwd: workspace, Version: "test-version"}
+	if code := app.Run([]string{"services", "--cleanup"}); code != 1 {
+		t.Fatalf("active-session cleanup exit code = %d: %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "conven services --stop-all") {
+		t.Fatalf("active-session cleanup output = %q", output.String())
+	}
+	if _, err := os.Stat(artifact); err != nil {
+		t.Fatalf("rejected cleanup changed artifact: %v", err)
+	}
+	if err := store.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if code := app.Run([]string{"services", "--cleanup"}); code != 0 {
+		t.Fatalf("cleanup exit code = %d: %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "Cleared build artifacts and service logs") {
+		t.Fatalf("cleanup output = %q", output.String())
+	}
+	for _, path := range []string{artifact, log} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("cleanup target %q still exists: %v", path, err)
+		}
+	}
+	if data, err := os.ReadFile(configPath); err != nil || string(data) != "runtime\n" {
+		t.Fatalf("cleanup changed config: data=%q err=%v", data, err)
+	}
 }
 
 func TestStartWithoutServicesRejectsNonTerminal(t *testing.T) {
@@ -1320,6 +1547,226 @@ services:
 	}
 }
 
+func TestAskStartReplacementOffersStopOrCancel(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		answer  string
+		replace bool
+	}{
+		{name: "short stop", answer: "s\n", replace: true},
+		{name: "short stop eof", answer: "s", replace: true},
+		{name: "stop", answer: "STOP\n", replace: true},
+		{name: "yes", answer: "yes\n", replace: true},
+		{name: "short cancel", answer: "c\n"},
+		{name: "cancel", answer: "cancel\n"},
+		{name: "no", answer: "no\n"},
+		{name: "default", answer: "\n"},
+		{name: "eof"},
+		{name: "retry invalid", answer: "later\ns\n", replace: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			replace, err := askStartReplacement(strings.NewReader(test.answer), &output, []string{"api", "worker"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replace != test.replace {
+				t.Fatalf("replace = %t, want %t", replace, test.replace)
+			}
+			for _, expected := range []string{"api, worker", "Stop then start", "Cancel"} {
+				if !strings.Contains(output.String(), expected) {
+					t.Fatalf("prompt = %q, want %q", output.String(), expected)
+				}
+			}
+			if test.name == "retry invalid" && !strings.Contains(output.String(), "Please choose") {
+				t.Fatalf("invalid answer was not retried: %q", output.String())
+			}
+		})
+	}
+}
+
+func TestAskStartReplacementContextStopsWhenCancelledWithoutInput(t *testing.T) {
+	input, inputWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer inputWriter.Close()
+	promptReader, promptWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer promptReader.Close()
+	defer promptWriter.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		replace bool
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		replace, err := askStartReplacementContext(ctx, input, promptWriter, []string{"api"})
+		done <- result{replace: replace, err: err}
+	}()
+
+	expectedPrompt := "Workspace already has running services: api\nChoose: [s] Stop then start  [c] Cancel (default): "
+	prompt := make([]byte, len(expectedPrompt))
+	if _, err := io.ReadFull(promptReader, prompt); err != nil {
+		t.Fatal(err)
+	}
+	if string(prompt) != expectedPrompt {
+		t.Fatalf("prompt = %q", string(prompt))
+	}
+	cancel()
+
+	select {
+	case got := <-done:
+		if got.replace {
+			t.Fatal("cancelled confirmation allowed replacement")
+		}
+		if !errors.Is(got.err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled confirmation remained blocked waiting for input")
+	}
+}
+
+func TestStartRunningSessionUsesInjectedReplacementConfirmation(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		replace    bool
+		confirmErr error
+	}{
+		{name: "cancel"},
+		{name: "stop then start", replace: true},
+		{name: "confirmation cancelled", confirmErr: context.Canceled},
+	} {
+			t.Run(test.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			workspaceRoot := environmentShortcutWorkspace(t)
+			var output bytes.Buffer
+			initialApp := App{Output: &output, Error: &output, Cwd: workspaceRoot, Version: "test"}
+			if code := initialApp.Run([]string{"services", "--start", "--dev", "api"}); code != 0 {
+				t.Fatalf("initial start exit code = %d: %s", code, output.String())
+			}
+			workspace, err := convenruntime.OpenWorkspace(convenruntime.CommonOptions{Cwd: workspaceRoot, Environment: "dev"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer convenruntime.Stop(context.Background(), workspace, nil, true, false, &output)
+			initial, err := workspace.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldProcess := initial.Services[0]
+			confirmed := 0
+			output.Reset()
+			var errorOutput bytes.Buffer
+			app := App{
+				Output:  &output,
+				Error:   &errorOutput,
+				Cwd:     workspaceRoot,
+				Version: "test",
+				StartReplacementConfirmer: func(_ context.Context, services []string) (bool, error) {
+					confirmed++
+					if strings.Join(services, ",") != "api" {
+						t.Fatalf("running services = %v", services)
+					}
+					return test.replace, test.confirmErr
+				},
+			}
+			code := app.Run([]string{"services", "--start", "--dev", "api"})
+			if test.confirmErr != nil {
+				if code != 1 {
+					t.Fatalf("replacement confirmation error exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
+				}
+				if !strings.Contains(errorOutput.String(), context.Canceled.Error()) {
+					t.Fatalf("replacement confirmation stderr = %q", errorOutput.String())
+				}
+			} else if code != 0 {
+				t.Fatalf("replacement start exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
+			}
+			if confirmed != 1 {
+				t.Fatalf("replacement confirmation calls = %d", confirmed)
+			}
+			current, err := workspace.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.confirmErr != nil {
+				if current.Services[0].PID != oldProcess.PID || !convenruntime.ProcessAlive(oldProcess.PID) {
+					t.Fatalf("confirmation error changed the running process: old=%#v current=%#v", oldProcess, current.Services)
+				}
+				return
+			}
+			if !test.replace {
+				if current.Services[0].PID != oldProcess.PID || !convenruntime.ProcessAlive(oldProcess.PID) {
+					t.Fatalf("cancel changed the running process: old=%#v current=%#v", oldProcess, current.Services)
+				}
+				if !strings.Contains(errorOutput.String(), "Cancelled; running services were left unchanged.") {
+					t.Fatalf("cancel stderr = %q; stdout = %q", errorOutput.String(), output.String())
+				}
+				if strings.Contains(output.String(), "Cancelled; running services were left unchanged.") {
+					t.Fatalf("cancel message was written to stdout: %q", output.String())
+				}
+				return
+			}
+			if current.Services[0].PID == oldProcess.PID || convenruntime.ProcessAlive(oldProcess.PID) {
+				t.Fatalf("replacement did not replace process: old=%#v current=%#v", oldProcess, current.Services)
+			}
+		})
+	}
+}
+
+func TestStartRunningSessionNonTerminalDoesNotConsumeConfirmationInput(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspaceRoot := environmentShortcutWorkspace(t)
+	var output bytes.Buffer
+	initialApp := App{Output: &output, Error: &output, Cwd: workspaceRoot, Version: "test"}
+	if code := initialApp.Run([]string{"services", "--start", "--dev", "api"}); code != 0 {
+		t.Fatalf("initial start exit code = %d: %s", code, output.String())
+	}
+	workspace, err := convenruntime.OpenWorkspace(convenruntime.CommonOptions{Cwd: workspaceRoot, Environment: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer convenruntime.Stop(context.Background(), workspace, nil, true, false, &output)
+	initial, err := workspace.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputPath := filepath.Join(t.TempDir(), "confirmation")
+	if err := os.WriteFile(inputPath, []byte("stop\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.Open(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	output.Reset()
+	app := App{Input: input, Output: &output, Error: &output, Cwd: workspaceRoot, Version: "test"}
+	if code := app.Run([]string{"services", "--start", "--dev", "api"}); code != 1 {
+		t.Fatalf("non-terminal replacement exit code = %d: %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "replacement confirmation requires an interactive terminal") {
+		t.Fatalf("non-terminal output = %q", output.String())
+	}
+	position, err := input.Seek(0, io.SeekCurrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if position != 0 {
+		t.Fatalf("non-terminal replacement consumed input: offset=%d", position)
+	}
+	if !convenruntime.ProcessAlive(initial.Services[0].PID) {
+		t.Fatalf("non-terminal replacement stopped the current service: %#v", initial.Services[0])
+	}
+}
+
 func TestCompletions(t *testing.T) {
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		t.Run(shell, func(t *testing.T) {
@@ -1335,7 +1782,7 @@ func TestCompletions(t *testing.T) {
 					t.Fatalf("completion for %s is missing %s", shell, command)
 				}
 			}
-			for _, action := range []string{"--list", "--registry", "--status", "--logs", "--dashboard", "--start", "--restart", "--stop", "--stop-all"} {
+			for _, action := range []string{"--list", "--registry", "--status", "--logs", "--dashboard", "--start", "--restart", "--stop", "--stop-all", "--cleanup"} {
 				marker := action
 				if shell == "fish" {
 					marker = "-l " + strings.TrimPrefix(action, "--")
@@ -1377,7 +1824,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`compgen -W "init services config policy plugins doctor help version"`,
 		`if [ "$subcommand" = "help" ]`,
 		`if [ "$subcommand" = "services" ]`,
-		`--list|--status|--dashboard)`,
+		`--list|--status|--dashboard|--cleanup)`,
 		`--registry)`,
 		`options="--prune --help"`,
 		`--logs)`,
@@ -1421,7 +1868,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`'policy:edit, import, or rebuild the workspace policy manifest'`,
 		`'plugins:install, list, remove, or run Conven plugins'`,
 		`case $action in`,
-		`--list|--status)`,
+		`--list|--status|--cleanup)`,
 		`--registry)`,
 		`--logs)`,
 		`--dashboard)`,
@@ -1429,6 +1876,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--restart)`,
 		`--stop)`,
 		`--stop-all)`,
+		`--cleanup[remove saved build artifacts and service logs]`,
 		`--dev[use the dev environment profile]`,
 		`--test[use the test environment profile]`,
 		`--all[stop every service and release the workspace connection]`,
@@ -1473,6 +1921,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_services_without_action' -l list`,
 		`__conven_services_without_action' -l registry`,
 		`__conven_services_without_action' -l stop-all`,
+		`__conven_services_without_action' -l cleanup`,
 		`__conven_services_action --start' -l env`,
 		`__conven_services_action --start' -l dev`,
 		`__conven_services_action --start' -l test`,
@@ -2107,7 +2556,7 @@ func TestRegistryRejectsArgumentsAndUnknownFlags(t *testing.T) {
 		message   string
 	}{
 		{[]string{"services", "--registry", "service"}, 1, "does not accept service arguments"},
-		{[]string{"services", "--registry", "--workspace", "/tmp/elsewhere"}, 2, "flag provided but not defined: -workspace"},
+		{[]string{"services", "--registry", "--workspace", "/tmp/elsewhere"}, 2, "flag provided but not defined: --workspace"},
 	} {
 		var output bytes.Buffer
 		app := App{Output: &output, Error: &output, Cwd: t.TempDir(), Version: "test"}
@@ -2312,6 +2761,7 @@ func TestWorkspaceCommandsFailOutsideDotConvenBoundary(t *testing.T) {
 		{"services", "--stop-all"},
 		{"services", "--logs"},
 		{"services", "--dashboard"},
+		{"services", "--cleanup"},
 		{"doctor"},
 		{"services", "--list"},
 		{"services", "--registry"},

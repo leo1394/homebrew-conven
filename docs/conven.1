@@ -72,7 +72,8 @@ or
 .BR "\-\-run name [plugin-args...]" .
 .TP
 .B services
-List, start, restart, stop, and inspect services in the current workspace.
+List, start, restart, stop, clean, and inspect services in the current
+workspace.
 See
 .B SERVICES ACTIONS
 below.
@@ -158,6 +159,19 @@ one selects the effective mode.
 .B "\-\-start [options] [service...]"
 Start a fresh local service session.
 Without service names, open the interactive selector and require confirmation.
+If a verified session is already running, an interactive start first validates
+the replacement plan, then offers
+.B "Stop then start"
+or
+.BR Cancel ;
+Cancel is the default.
+A non-interactive conflict fails closed and leaves the current session
+unchanged. Unverified processes or connections are never eligible for automatic
+replacement. After confirmation, Conven rechecks the session under the
+workspace lock and refuses replacement if it changed. A compatible, available
+managed
+.B ktctl
+lease is reused without interrupting the connection.
 After safety and static validation, Conven rebuilds
 .IR runtime/current ,
 establishes the configured connection, materializes configuration, prepares and
@@ -192,6 +206,16 @@ until the next fresh start.
 .B "\-\-stop\-all [\-\-force]"
 Exact shorthand for
 .BR "conven services \-\-stop \-\-all" .
+.TP
+.B \-\-cleanup
+Remove saved files under
+.I runtime/current/artifacts
+and
+.IR runtime/current/logs .
+Cleanup refuses while a session is saved; run
+.B conven services \-\-stop\-all
+first. Materialized runtime configs and the shared connection log are
+preserved.
 .SH START, RESTART, AND DOCTOR OPTIONS
 The following options are available to
 .B services \-\-start
@@ -294,6 +318,8 @@ Private workspace runtime root containing the lock and session state.
 .TP
 .I <workspace>/.conven/runtime/current
 Current artifacts, materialized configurations, and service logs.
+.B services \-\-cleanup
+removes only the artifacts and service logs after the session has stopped.
 .TP
 .I ~/.conven/config
 User-global settings.
@@ -403,6 +429,7 @@ conven services \-\-start \-\-test \-\-namespace test \-\-tail api service-a
 conven services \-\-restart
 conven services \-\-logs \-\-tail api
 conven services \-\-stop\-all
+conven services \-\-cleanup
 .fi
 .SH SEE ALSO
 .BR brew (1),
