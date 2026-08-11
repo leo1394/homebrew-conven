@@ -37,7 +37,7 @@ func Completion(shell string) (string, error) {
                 options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --skip-build --skip-verify --help"
                 ;;
             --restart)
-                options="--tail --skip-build --skip-verify --help"
+                options="--tail --dashboard --skip-build --skip-verify --help"
                 ;;
             --stop)
                 options="--all --force --help"
@@ -201,6 +201,7 @@ _conven() {
                 --restart)
                     _arguments \
                         '--tail[stream aggregated logs as plain text]' \
+                        '--dashboard[open the interactive log dashboard]' \
                         '--skip-build[skip build when artifacts are reusable]' \
                         '--skip-verify[skip health checks]' \
                         '--help[show command help]' \
@@ -449,6 +450,7 @@ complete -c conven -n '__conven_services_action --start' -l dry-run -d 'Show the
 complete -c conven -n '__conven_services_action --start' -l skip-build -d 'Skip build when artifacts are reusable'
 complete -c conven -n '__conven_services_action --start' -l skip-verify -d 'Skip health checks'
 complete -c conven -n '__conven_services_action --restart' -l tail -d 'Stream aggregated logs as plain text'
+complete -c conven -n '__conven_services_action --restart' -l dashboard -d 'Open the interactive log dashboard'
 complete -c conven -n '__conven_services_action --restart' -l skip-build -d 'Skip build when artifacts are reusable'
 complete -c conven -n '__conven_services_action --restart' -l skip-verify -d 'Skip health checks'
 complete -c conven -n '__conven_services_action --stop' -l all -d 'Stop every service and release the workspace connection'

@@ -45,7 +45,7 @@ func TestRenderDashboardFrameKeepsBannerAndLatestLogs(t *testing.T) {
 		"HTTP  18080  ·  METRICS  19090",
 		"    order-svc",
 		"HTTP  18081",
-		"  ── q / Ctrl-C: detach · FOLLOW · ↑/↓ scroll · / search",
+		"q / Ctrl-C: detach · FOLLOW · ↑/↓ scroll · / search",
 		"[order-svc] two",
 		"[user-svc] five",
 	} {
@@ -79,6 +79,60 @@ func TestRenderDashboardFrameKeepsBannerAndLatestLogs(t *testing.T) {
 	orderLine := dashboardLineContaining(banner, "order-svc")
 	if strings.Index(userLine, "HTTP") != strings.Index(orderLine, "HTTP") {
 		t.Fatalf("service protocol columns are not aligned: user=%q order=%q", userLine, orderLine)
+	}
+}
+
+func TestDashboardBannerUsesWhiteLabelsGreenCountAndCenteredYellowHint(t *testing.T) {
+	info := dashboardInfo{
+		Version:     "0.2.5",
+		Workspace:   "local-stack",
+		Environment: "test",
+		Address:     "10.0.0.8",
+		Interface:   "en0",
+		Cluster:     "test-cluster",
+		Color:       true,
+		Services: []dashboardService{
+			{Name: "api", Ports: map[string]int{"http": 18080}},
+			{Name: "rpc", Ports: map[string]int{"rpc": 18081}},
+			{Name: "worker"},
+			{Name: "jobs"},
+		},
+	}
+	const width = 100
+	hint := "q / Ctrl-C: detach · FOLLOW · ↑/↓ scroll · / search"
+	banner := dashboardBannerWithHint(info, width, 16, hint)
+	rendered := make([]string, 0, len(banner))
+	for _, line := range banner {
+		rendered = append(rendered, renderDashboardLine(line, width, true))
+	}
+	joined := strings.Join(rendered, "\n")
+	if !strings.Contains(joined, dashboardWhite+strings.Repeat("─", width-2)+dashboardReset) {
+		t.Fatalf("dashboard top rule is not white: %q", joined)
+	}
+	for _, label := range []string{"WORKSPACE", "ENV", "LAN", "CLUSTER", "SERVICES", "RPC", "HTTP"} {
+		if !strings.Contains(joined, dashboardWhite+label+dashboardReset) {
+			t.Fatalf("dashboard label %q is not white: %q", label, joined)
+		}
+	}
+	if !strings.Contains(joined, dashboardGreen+"4"+dashboardReset+dashboardDim+" local"+dashboardReset) {
+		t.Fatalf("dashboard local service count is not green: %q", joined)
+	}
+	if strings.Contains(joined, dashboardGreen+"4 local") {
+		t.Fatalf("dashboard highlighted the full service count instead of only the number: %q", joined)
+	}
+	divider := rendered[len(rendered)-1]
+	if !strings.Contains(divider, dashboardYellow+hint+dashboardReset) {
+		t.Fatalf("dashboard hint is not yellow: %q", divider)
+	}
+	plain := plainDashboardText(divider)
+	hintStart := strings.Index(plain, hint)
+	if hintStart < 0 {
+		t.Fatalf("dashboard hint is missing: %q", plain)
+	}
+	left := dashboardDisplayWidth(plain[:hintStart])
+	right := width - left - dashboardDisplayWidth(hint)
+	if left-right > 1 || right-left > 1 {
+		t.Fatalf("dashboard hint is not centered: left=%d right=%d line=%q", left, right, plain)
 	}
 }
 
@@ -143,14 +197,14 @@ func TestDashboardNoColorDisablesStylingButKeepsScreenControl(t *testing.T) {
 }
 
 func TestDashboardLogHighlightsOnlyPrefixAndSeverity(t *testing.T) {
-	slow := renderDashboardLogLine("[api] request SLOW after 900ms", 80, true)
+	slow := renderDashboardLogLine("[api] request SLOW after 900ms", true)
 	if !strings.Contains(slow, dashboardCyan+"[api]"+dashboardReset) {
 		t.Fatalf("dashboard log prefix is not highlighted: %q", slow)
 	}
 	if !strings.Contains(slow, dashboardYellow+"SLOW"+dashboardReset) {
 		t.Fatalf("dashboard slow severity is not highlighted: %q", slow)
 	}
-	failed := renderDashboardLogLine("[api] request ERROR after retry", 80, true)
+	failed := renderDashboardLogLine("[api] request ERROR after retry", true)
 	if !strings.Contains(failed, dashboardRed+"ERROR"+dashboardReset) {
 		t.Fatalf("dashboard error severity is not highlighted: %q", failed)
 	}
@@ -208,6 +262,66 @@ func TestDashboardFitsWideCharactersByTerminalCellWidth(t *testing.T) {
 	}
 	if width := dashboardDisplayWidth("e\u0301服务"); width != 5 {
 		t.Fatalf("combined display width = %d, want 5", width)
+	}
+}
+
+func TestDashboardLogFragmentsPreserveContentAndCellWidth(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		width int
+	}{
+		{value: "exact-width", width: 11},
+		{value: "服务日志详情", width: 5},
+		{value: "e\u0301-combined-value", width: 6},
+	} {
+		fragments := dashboardLogFragments(test.value, test.width)
+		var joined strings.Builder
+		for _, fragment := range fragments {
+			if width := dashboardDisplayWidth(fragment.Text); width > test.width {
+				t.Fatalf("fragment width = %d, want <= %d: %q", width, test.width, fragment.Text)
+			}
+			if strings.Contains(fragment.Text, "…") {
+				t.Fatalf("fragment contains viewport ellipsis: %q", fragment.Text)
+			}
+			joined.WriteString(fragment.Text)
+		}
+		if joined.String() != test.value {
+			t.Fatalf("wrapped content = %q, want %q", joined.String(), test.value)
+		}
+	}
+}
+
+func TestDashboardFrameWrapsLongJSONAndFollowsItsTail(t *testing.T) {
+	info := dashboardInfo{
+		Version:     "0.2.5",
+		Workspace:   "local",
+		Environment: "test",
+		Address:     "10.0.0.8",
+		Cluster:     "test",
+	}
+	longJSON := `[rea-api] {"@timestamp":"2026-08-11T11:30:54.363+08","level":"slow","duration":"926.3ms","content":"[RPC] ok - slowcall - 127.0.0.1:18082","payload":"` + strings.Repeat("segment-", 40) + `","requestId":"tail-marker-9f31"}`
+	frame := renderDashboardFrame(info, 52, 12, []string{longJSON})
+	lines := strings.Split(frame, "\r\n")
+	if len(lines) != 12 {
+		t.Fatalf("wrapped dashboard has %d rows, want 12", len(lines))
+	}
+	var visibleLog strings.Builder
+	for _, line := range lines[len(dashboardBanner(info, 52, 12)):] {
+		visibleLog.WriteString(plainDashboardText(line))
+	}
+	if !strings.Contains(visibleLog.String(), "tail-marker-9f31") {
+		t.Fatalf("dashboard follow view does not show the wrapped JSON tail: %q", plainDashboardFrame(frame))
+	}
+	if strings.Contains(visibleLog.String(), "@timestamp") {
+		t.Fatalf("dashboard follow view started at the head of an over-height JSON line: %q", visibleLog.String())
+	}
+	if strings.Contains(visibleLog.String(), "…") {
+		t.Fatalf("dashboard added a viewport ellipsis to wrapped JSON: %q", visibleLog.String())
+	}
+	for _, line := range lines {
+		if width := dashboardDisplayWidth(plainDashboardText(line)); width > 52 {
+			t.Fatalf("wrapped dashboard row width = %d, want <= 52: %q", width, plainDashboardText(line))
+		}
 	}
 }
 
@@ -397,38 +511,129 @@ func TestDashboardViewScrollSearchAndResumeFollow(t *testing.T) {
 		history.Append(line)
 	}
 	view := dashboardView{Follow: true, SearchMatch: -1}
-	view.Clamp(history.Len(), 2)
-	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputPageUp}, history, &view, 2)
+	view.Clamp(history, 80, 2)
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputPageUp}, history, &view, 80, 2)
 	if view.Follow || view.Top != 0 {
 		t.Fatalf("page-up view = %#v", view)
 	}
 	history.Append("four")
 	view.RecordAppend(history, 0)
-	view.Clamp(history.Len(), 2)
+	view.Clamp(history, 80, 2)
 	if view.Top != 0 || view.NewLines != 1 {
 		t.Fatalf("paused append view = %#v", view)
 	}
-	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputText, Text: "/"}, history, &view, 2)
-	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputText, Text: "target"}, history, &view, 2)
-	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputEnter}, history, &view, 2)
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputText, Text: "/"}, history, &view, 80, 2)
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputText, Text: "target"}, history, &view, 80, 2)
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputEnter}, history, &view, 80, 2)
 	if view.SearchQuery != "target" || view.SearchMatch != 1 || view.Follow {
 		t.Fatalf("initial search view = %#v", view)
 	}
-	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputText, Text: "n"}, history, &view, 2)
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputText, Text: "n"}, history, &view, 80, 2)
 	if view.SearchMatch != 3 {
 		t.Fatalf("next search match = %d", view.SearchMatch)
 	}
-	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputText, Text: "N"}, history, &view, 2)
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputText, Text: "N"}, history, &view, 80, 2)
 	if view.SearchMatch != 1 {
 		t.Fatalf("previous search match = %d", view.SearchMatch)
 	}
-	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputEscape}, history, &view, 2)
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputEscape}, history, &view, 80, 2)
 	if view.SearchQuery != "" || view.SearchMatch != -1 {
 		t.Fatalf("cleared search view = %#v", view)
 	}
-	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputEnd}, history, &view, 2)
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputEnd}, history, &view, 80, 2)
 	if !view.Follow || view.Top != 3 || view.NewLines != 0 {
 		t.Fatalf("resumed view = %#v", view)
+	}
+}
+
+func TestDashboardViewScrollsWithinWrappedLogicalLine(t *testing.T) {
+	history := newDashboardHistory(10)
+	history.Append("AAAAABBBBBCCCCCDDDDD")
+	view := dashboardView{Follow: true, SearchMatch: -1}
+	view.Clamp(history, 5, 2)
+	if view.Top != 0 || view.TopOffset != 10 {
+		t.Fatalf("follow cursor = %#v, want logical line 0 offset 10", view)
+	}
+
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputUp}, history, &view, 5, 2)
+	if view.Follow || view.Top != 0 || view.TopOffset != 5 {
+		t.Fatalf("wrapped line up view = %#v", view)
+	}
+	visible := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, 5, 2)
+	if len(visible) != 2 || visible[0].Text != "BBBBB" || visible[1].Text != "CCCCC" {
+		t.Fatalf("wrapped line up rows = %#v", visible)
+	}
+
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputPageUp}, history, &view, 5, 2)
+	if view.Top != 0 || view.TopOffset != 0 {
+		t.Fatalf("wrapped line page-up view = %#v", view)
+	}
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputPageDown}, history, &view, 5, 2)
+	if !view.Follow || view.TopOffset != 10 {
+		t.Fatalf("wrapped line page-down did not resume follow: %#v", view)
+	}
+}
+
+func TestDashboardSearchRevealsMatchInWrappedContinuation(t *testing.T) {
+	history := newDashboardHistory(10)
+	history.Append("0000000000abcdefghijNEEDLE-tail-value")
+	view := dashboardView{Follow: true, SearchMatch: -1, SearchQuery: "needle"}
+	selectDashboardMatch(history, &view, 10, 2, -1, 1)
+	if view.SearchMatch != 0 || view.Follow {
+		t.Fatalf("wrapped search view = %#v", view)
+	}
+	visible := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, 10, 2)
+	var text strings.Builder
+	for _, row := range visible {
+		text.WriteString(row.Text)
+	}
+	if !strings.Contains(text.String(), "NEEDLE") {
+		t.Fatalf("wrapped search match is outside viewport: rows=%#v view=%#v", visible, view)
+	}
+}
+
+func TestDashboardResizeRewrapsPausedOffsetAndFollowTail(t *testing.T) {
+	history := newDashboardHistory(10)
+	history.Append("abcdefghijklmnopqrstuvwx")
+	paused := dashboardView{Top: 0, TopOffset: 10, SearchMatch: -1}
+	paused.Clamp(history, 8, 2)
+	if paused.Top != 0 || paused.TopOffset != 8 {
+		t.Fatalf("resized paused cursor = %#v, want offset 8", paused)
+	}
+	visible := dashboardVisibleLogRows(history, dashboardCursor{Line: paused.Top, Offset: paused.TopOffset}, 8, 2)
+	if len(visible) != 2 || !strings.Contains(visible[0].Text, "k") {
+		t.Fatalf("resized paused anchor is not visible: %#v", visible)
+	}
+
+	follow := dashboardView{Follow: true, SearchMatch: -1}
+	follow.Clamp(history, 5, 2)
+	follow.Clamp(history, 8, 2)
+	visible = dashboardVisibleLogRows(history, dashboardCursor{Line: follow.Top, Offset: follow.TopOffset}, 8, 2)
+	if len(visible) != 2 || !strings.HasSuffix(visible[len(visible)-1].Text, "uvwx") {
+		t.Fatalf("resized follow view lost latest tail: view=%#v rows=%#v", follow, visible)
+	}
+}
+
+func TestDashboardWrappedCursorHandlesHistoryEviction(t *testing.T) {
+	history := newDashboardHistory(2)
+	history.Append("AAAAABBBBB")
+	history.Append("CCCCCDDDDD")
+	view := dashboardView{Top: 1, TopOffset: 5, SearchMatch: 1, SearchQuery: "DDDDD"}
+	evicted := history.Append("EEEEFFFFFF")
+	view.RecordAppend(history, evicted)
+	view.Clamp(history, 5, 1)
+	if view.Top != 0 || view.TopOffset != 5 || view.SearchMatch != 0 {
+		t.Fatalf("retained wrapped cursor after eviction = %#v", view)
+	}
+
+	view.Top = 0
+	view.TopOffset = 5
+	view.SearchMatch = 0
+	evicted = history.Append("GGGGGHHHHH")
+	view.RecordAppend(history, evicted)
+	view.Clamp(history, 5, 1)
+	if view.Top != 0 || view.TopOffset != 0 || view.SearchMatch != -1 || view.SearchMessage != "current match expired" {
+		t.Fatalf("expired wrapped cursor after eviction = %#v", view)
 	}
 }
 

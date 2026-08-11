@@ -626,7 +626,7 @@ redirect or pipeline:
 # Start opens the Dashboard by default. Exercise its controls, then press q.
 "$CONVEN_BIN" services --status
 "$CONVEN_BIN" services --restart user-svc
-# Restart returns without opening a viewer.
+# Restart opens the Dashboard by default. Exercise its controls, then press q.
 "$CONVEN_BIN" services --dashboard user-svc order-svc
 # Press Ctrl-C. The restarted service and unchanged service must remain running.
 "$CONVEN_BIN" services --status
@@ -642,9 +642,10 @@ Confirm that `services --logs --tail`, `services --start --tail`, and
 `--tail` remains a boolean switch rather than a line-count option. Plain output
 must enter native terminal scrollback and be searchable with Command+F.
 `services --logs --dashboard` must behave exactly like the independent
-`services --dashboard` action. When both logs mode flags are supplied, confirm
-that the last occurrence wins: `--tail --dashboard` opens the Dashboard and
-`--dashboard --tail` selects Plain.
+`services --dashboard` action. Restart also accepts `--dashboard` and defaults
+to the Dashboard on a usable TTY. When both mode flags are supplied to logs or
+restart, confirm that the last occurrence wins: `--tail --dashboard` opens the
+Dashboard and `--dashboard --tail` selects Plain.
 
 The full-screen Dashboard must keep a fixed banner for the
 workspace/environment, selected running services, their manifest-declared port
@@ -653,7 +654,12 @@ retain at most 10,000 received lines. Verify mouse-wheel, Up/Down, and PgUp/PgDn
 scrolling, Home or `g` for the oldest retained line, End or `G` for live follow,
 `/` search, `n`/`N` match navigation, and Esc to clear search. Terminal
 Command+F is not the Dashboard history search and need only see the currently
-rendered frame. Resizing the terminal must redraw the layout, and ANSI or other
+rendered frame. Use a JSON log longer than the terminal width and verify that it
+wraps into scrollable visual rows without a viewport ellipsis or lost content.
+The top rule and field/protocol labels must be white, only the numeric local
+service count green, and the centered control hint yellow; the banner must not
+use a background color.
+Resizing the terminal must rewrap and redraw the layout, and ANSI or other
 terminal control sequences written by a service must be sanitized. Both `q`
 and `Ctrl-C` must only detach, restore the terminal, and leave all services
 running, as verified by the following `services --status`.
@@ -713,9 +719,10 @@ Confirm the following behavior:
   `services --dashboard` and its `services --logs --dashboard` alias provide the
   fixed-banner TTY viewer and its application-owned 10,000-line history;
   `services --logs --tail` provides the Plain native-scrollback stream. If both
-  logs mode flags appear, the last one wins. Interactive start defaults to the
-  Dashboard, explicit start `--tail` selects Plain, non-TTY start returns, and
-  restart returns unless its Plain `--tail` was explicitly requested.
+  logs or restart mode flags appear, the last one wins. Interactive start and
+  restart default to the Dashboard, explicit `--tail` selects Plain, and their
+  non-TTY default returns after completing. Long Dashboard logs wrap into
+  scrollable visual rows without losing the original searchable logical line.
 - `services --status` reports saved PID/PGID data, and normal
   `services --stop` validates process identity.
 - The picker toggles with `f`, an empty selection remains in the picker, only

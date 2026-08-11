@@ -36,6 +36,7 @@ const (
 	dashboardGreen         = "\x1b[32m"
 	dashboardYellow        = "\x1b[33m"
 	dashboardRed           = "\x1b[31m"
+	dashboardWhite         = "\x1b[37m"
 	dashboardRule          = "\x1b[2;36m"
 )
 
@@ -80,12 +81,30 @@ type dashboardHistory struct {
 type dashboardView struct {
 	Follow        bool
 	Top           int
+	TopOffset     int
 	NewLines      int
 	SearchMode    bool
 	SearchDraft   string
 	SearchQuery   string
 	SearchMatch   int
 	SearchMessage string
+}
+
+type dashboardCursor struct {
+	Line   int
+	Offset int
+}
+
+type dashboardLogFragment struct {
+	Start int
+	End   int
+	Text  string
+}
+
+type dashboardVisibleLogRow struct {
+	HistoryIndex int
+	Offset       int
+	Text         string
 }
 
 type dashboardInputKind int
@@ -228,7 +247,7 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 			}
 			evicted := history.Append(fmt.Sprintf("[%s] %s", entry.Name, entry.Line))
 			view.RecordAppend(history, evicted)
-			view.Clamp(history.Len(), dashboardLogRows(info, width, height))
+			view.Clamp(history, width, dashboardLogRows(info, width, height))
 			dirty = true
 		case streamErr, open := <-logErrors:
 			if !open {
@@ -241,7 +260,7 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 				keys = nil
 				continue
 			}
-			if handleDashboardInput(key, history, &view, dashboardLogRows(info, width, height)) {
+			if handleDashboardInput(key, history, &view, width, dashboardLogRows(info, width, height)) {
 				return nil
 			}
 			dirty = true
@@ -256,7 +275,7 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 				width = nextWidth
 				height = nextHeight
 			}
-			view.Clamp(history.Len(), dashboardLogRows(info, width, height))
+			view.Clamp(history, width, dashboardLogRows(info, width, height))
 			if err := writeDashboardViewFrame(output, info, width, height, history, &view); err != nil {
 				return err
 			}
@@ -341,28 +360,13 @@ func (history *dashboardHistory) At(index int) string {
 	return history.lines[(history.start+index)%len(history.lines)]
 }
 
-func (history *dashboardHistory) Range(start int, end int) []string {
-	if history == nil || start >= history.count || end <= start {
-		return nil
-	}
-	if start < 0 {
-		start = 0
-	}
-	if end > history.count {
-		end = history.count
-	}
-	lines := make([]string, 0, end-start)
-	for index := start; index < end; index++ {
-		lines = append(lines, history.At(index))
-	}
-	return lines
-}
-
 func (view *dashboardView) RecordAppend(history *dashboardHistory, evicted int) {
 	if evicted > 0 {
-		view.Top -= evicted
-		if view.Top < 0 {
+		if view.Top < evicted {
 			view.Top = 0
+			view.TopOffset = 0
+		} else {
+			view.Top -= evicted
 		}
 		if view.SearchMatch >= 0 {
 			view.SearchMatch -= evicted
@@ -380,37 +384,42 @@ func (view *dashboardView) RecordAppend(history *dashboardHistory, evicted int) 
 	}
 }
 
-func (view *dashboardView) Clamp(length int, rows int) {
+func (view *dashboardView) Clamp(history *dashboardHistory, width int, rows int) {
 	if rows < 1 {
 		rows = 1
 	}
-	maximumTop := length - rows
-	if maximumTop < 0 {
-		maximumTop = 0
+	length := history.Len()
+	if length == 0 {
+		view.Top = 0
+		view.TopOffset = 0
+		view.NewLines = 0
+		if view.SearchMatch >= 0 {
+			view.SearchMatch = -1
+		}
+		return
 	}
+	maximumTop := dashboardFollowCursor(history, width, rows)
 	if view.Follow {
-		view.Top = maximumTop
+		view.Top = maximumTop.Line
+		view.TopOffset = maximumTop.Offset
 		view.NewLines = 0
 	} else {
-		if view.Top < 0 {
-			view.Top = 0
+		cursor := normalizeDashboardCursor(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width)
+		if compareDashboardCursors(cursor, maximumTop) > 0 {
+			cursor = maximumTop
 		}
-		if view.Top > maximumTop {
-			view.Top = maximumTop
-		}
+		view.Top = cursor.Line
+		view.TopOffset = cursor.Offset
 	}
 	if view.SearchMatch >= length {
 		view.SearchMatch = -1
 	}
 }
 
-func (view *dashboardView) Pause(length int, rows int) {
+func (view *dashboardView) Pause(history *dashboardHistory, width int, rows int) {
 	if view.Follow {
+		view.Clamp(history, width, rows)
 		view.Follow = false
-		view.Top = length - rows
-		if view.Top < 0 {
-			view.Top = 0
-		}
 		view.NewLines = 0
 	}
 }
@@ -420,7 +429,7 @@ func (view *dashboardView) Resume() {
 	view.NewLines = 0
 }
 
-func handleDashboardInput(event dashboardInputEvent, history *dashboardHistory, view *dashboardView, rows int) bool {
+func handleDashboardInput(event dashboardInputEvent, history *dashboardHistory, view *dashboardView, width int, rows int) bool {
 	if event.Kind == dashboardInputInterrupt {
 		return true
 	}
@@ -437,7 +446,7 @@ func handleDashboardInput(event dashboardInputEvent, history *dashboardHistory, 
 			view.SearchMatch = -1
 			view.SearchMessage = ""
 			if view.SearchQuery != "" {
-				selectDashboardMatch(history, view, rows, view.Top-1, 1)
+				selectDashboardMatch(history, view, width, rows, view.Top-1, 1)
 			}
 		case dashboardInputBackspace:
 			view.SearchDraft = removeDashboardLastRune(view.SearchDraft)
@@ -453,43 +462,47 @@ func handleDashboardInput(event dashboardInputEvent, history *dashboardHistory, 
 		view.SearchMatch = -1
 		view.SearchMessage = ""
 	case dashboardInputUp:
-		view.Pause(history.Len(), rows)
-		view.Top--
-		view.Clamp(history.Len(), rows)
+		view.Pause(history, width, rows)
+		cursor := moveDashboardCursor(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width, -1)
+		view.Top = cursor.Line
+		view.TopOffset = cursor.Offset
+		view.Clamp(history, width, rows)
 	case dashboardInputDown:
-		view.Pause(history.Len(), rows)
-		maximumTop := history.Len() - rows
-		if maximumTop < 0 {
-			maximumTop = 0
-		}
-		if view.Top >= maximumTop {
+		view.Pause(history, width, rows)
+		cursor := moveDashboardCursor(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width, 1)
+		maximumTop := dashboardFollowCursor(history, width, rows)
+		if compareDashboardCursors(cursor, maximumTop) >= 0 {
 			view.Resume()
 		} else {
-			view.Top++
+			view.Top = cursor.Line
+			view.TopOffset = cursor.Offset
 		}
-		view.Clamp(history.Len(), rows)
+		view.Clamp(history, width, rows)
 	case dashboardInputPageUp:
-		view.Pause(history.Len(), rows)
-		view.Top -= rows
-		view.Clamp(history.Len(), rows)
+		view.Pause(history, width, rows)
+		cursor := moveDashboardCursor(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width, -rows)
+		view.Top = cursor.Line
+		view.TopOffset = cursor.Offset
+		view.Clamp(history, width, rows)
 	case dashboardInputPageDown:
-		view.Pause(history.Len(), rows)
-		view.Top += rows
-		maximumTop := history.Len() - rows
-		if maximumTop < 0 {
-			maximumTop = 0
-		}
-		if view.Top >= maximumTop {
+		view.Pause(history, width, rows)
+		cursor := moveDashboardCursor(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width, rows)
+		maximumTop := dashboardFollowCursor(history, width, rows)
+		if compareDashboardCursors(cursor, maximumTop) >= 0 {
 			view.Resume()
+		} else {
+			view.Top = cursor.Line
+			view.TopOffset = cursor.Offset
 		}
-		view.Clamp(history.Len(), rows)
+		view.Clamp(history, width, rows)
 	case dashboardInputHome:
-		view.Pause(history.Len(), rows)
+		view.Pause(history, width, rows)
 		view.Top = 0
-		view.Clamp(history.Len(), rows)
+		view.TopOffset = 0
+		view.Clamp(history, width, rows)
 	case dashboardInputEnd:
 		view.Resume()
-		view.Clamp(history.Len(), rows)
+		view.Clamp(history, width, rows)
 	case dashboardInputText:
 		switch event.Text {
 		case "q", "Q":
@@ -499,23 +512,29 @@ func handleDashboardInput(event dashboardInputEvent, history *dashboardHistory, 
 			view.SearchDraft = ""
 			view.SearchMessage = ""
 		case "g":
-			view.Pause(history.Len(), rows)
+			view.Pause(history, width, rows)
 			view.Top = 0
-			view.Clamp(history.Len(), rows)
+			view.TopOffset = 0
+			view.Clamp(history, width, rows)
 		case "G":
 			view.Resume()
-			view.Clamp(history.Len(), rows)
+			view.Clamp(history, width, rows)
 		case "n":
 			if view.SearchQuery != "" {
-				selectDashboardMatch(history, view, rows, view.SearchMatch, 1)
+				selectDashboardMatch(history, view, width, rows, view.SearchMatch, 1)
 			}
 		case "N":
 			if view.SearchQuery != "" {
 				start := view.SearchMatch
 				if start < 0 {
-					start = view.Top + rows
+					visible := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width, rows)
+					if len(visible) > 0 {
+						start = visible[len(visible)-1].HistoryIndex + 1
+					} else {
+						start = view.Top + 1
+					}
 				}
-				selectDashboardMatch(history, view, rows, start, -1)
+				selectDashboardMatch(history, view, width, rows, start, -1)
 			}
 		}
 	}
@@ -533,7 +552,7 @@ func removeDashboardLastRune(value string) string {
 	return value[:len(value)-size]
 }
 
-func selectDashboardMatch(history *dashboardHistory, view *dashboardView, rows int, start int, direction int) {
+func selectDashboardMatch(history *dashboardHistory, view *dashboardView, width int, rows int, start int, direction int) {
 	match := findDashboardMatch(history, view.SearchQuery, start, direction)
 	if match < 0 {
 		view.SearchMatch = -1
@@ -544,8 +563,11 @@ func selectDashboardMatch(history *dashboardHistory, view *dashboardView, rows i
 	view.SearchMessage = ""
 	view.Follow = false
 	view.NewLines = 0
-	view.Top = match - rows/2
-	view.Clamp(history.Len(), rows)
+	cursor := normalizeDashboardCursor(history, dashboardCursor{Line: match, Offset: dashboardSearchOffset(history.At(match), view.SearchQuery)}, width)
+	cursor = moveDashboardCursor(history, cursor, width, -(rows / 2))
+	view.Top = cursor.Line
+	view.TopOffset = cursor.Offset
+	view.Clamp(history, width, rows)
 }
 
 func findDashboardMatch(history *dashboardHistory, query string, start int, direction int) int {
@@ -570,6 +592,171 @@ func findDashboardMatch(history *dashboardHistory, query string, start int, dire
 		}
 	}
 	return -1
+}
+
+func dashboardSearchOffset(value string, query string) int {
+	foldedValue := strings.ToLower(value)
+	foldedQuery := strings.ToLower(strings.TrimSpace(query))
+	index := strings.Index(foldedValue, foldedQuery)
+	if index <= 0 {
+		return 0
+	}
+	runeIndex := utf8.RuneCountInString(foldedValue[:index])
+	current := 0
+	for offset := range value {
+		if current == runeIndex {
+			return offset
+		}
+		current++
+	}
+	return len(value)
+}
+
+func dashboardLogFragments(value string, width int) []dashboardLogFragment {
+	value = sanitizeDashboardText(value)
+	if width < 1 {
+		width = 1
+	}
+	fragments := make([]dashboardLogFragment, 0, dashboardDisplayWidth(value)/width+1)
+	start := 0
+	used := 0
+	for offset, character := range value {
+		characterWidth := dashboardRuneWidth(character)
+		if used > 0 && used+characterWidth > width {
+			fragments = append(fragments, dashboardLogFragment{Start: start, End: offset, Text: value[start:offset]})
+			start = offset
+			used = 0
+		}
+		used += characterWidth
+	}
+	fragments = append(fragments, dashboardLogFragment{Start: start, End: len(value), Text: value[start:]})
+	return fragments
+}
+
+func dashboardFragmentIndex(fragments []dashboardLogFragment, offset int) int {
+	if len(fragments) == 0 || offset <= 0 {
+		return 0
+	}
+	for index, fragment := range fragments {
+		if offset < fragment.End {
+			return index
+		}
+	}
+	return len(fragments) - 1
+}
+
+func normalizeDashboardCursor(history *dashboardHistory, cursor dashboardCursor, width int) dashboardCursor {
+	length := history.Len()
+	if length == 0 {
+		return dashboardCursor{}
+	}
+	if cursor.Line < 0 {
+		cursor.Line = 0
+	}
+	if cursor.Line >= length {
+		cursor.Line = length - 1
+	}
+	fragments := dashboardLogFragments(history.At(cursor.Line), width)
+	fragment := fragments[dashboardFragmentIndex(fragments, cursor.Offset)]
+	cursor.Offset = fragment.Start
+	return cursor
+}
+
+func compareDashboardCursors(left dashboardCursor, right dashboardCursor) int {
+	if left.Line < right.Line {
+		return -1
+	}
+	if left.Line > right.Line {
+		return 1
+	}
+	if left.Offset < right.Offset {
+		return -1
+	}
+	if left.Offset > right.Offset {
+		return 1
+	}
+	return 0
+}
+
+func dashboardFollowCursor(history *dashboardHistory, width int, rows int) dashboardCursor {
+	if history.Len() == 0 {
+		return dashboardCursor{}
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	remaining := rows
+	for line := history.Len() - 1; line >= 0; line-- {
+		fragments := dashboardLogFragments(history.At(line), width)
+		if len(fragments) >= remaining {
+			fragment := fragments[len(fragments)-remaining]
+			return dashboardCursor{Line: line, Offset: fragment.Start}
+		}
+		remaining -= len(fragments)
+	}
+	return dashboardCursor{}
+}
+
+func moveDashboardCursor(history *dashboardHistory, cursor dashboardCursor, width int, distance int) dashboardCursor {
+	if history.Len() == 0 || distance == 0 {
+		return normalizeDashboardCursor(history, cursor, width)
+	}
+	cursor = normalizeDashboardCursor(history, cursor, width)
+	line := cursor.Line
+	fragments := dashboardLogFragments(history.At(line), width)
+	fragmentIndex := dashboardFragmentIndex(fragments, cursor.Offset)
+	if distance < 0 {
+		remaining := -distance
+		for {
+			if remaining <= fragmentIndex {
+				return dashboardCursor{Line: line, Offset: fragments[fragmentIndex-remaining].Start}
+			}
+			remaining -= fragmentIndex + 1
+			if line == 0 {
+				return dashboardCursor{}
+			}
+			line--
+			fragments = dashboardLogFragments(history.At(line), width)
+			fragmentIndex = len(fragments) - 1
+		}
+	}
+	remaining := distance
+	for {
+		available := len(fragments) - fragmentIndex - 1
+		if remaining <= available {
+			return dashboardCursor{Line: line, Offset: fragments[fragmentIndex+remaining].Start}
+		}
+		remaining -= available + 1
+		if line == history.Len()-1 {
+			return dashboardCursor{Line: line, Offset: fragments[len(fragments)-1].Start}
+		}
+		line++
+		fragments = dashboardLogFragments(history.At(line), width)
+		fragmentIndex = 0
+	}
+}
+
+func dashboardVisibleLogRows(history *dashboardHistory, cursor dashboardCursor, width int, rows int) []dashboardVisibleLogRow {
+	if history.Len() == 0 || rows <= 0 {
+		return nil
+	}
+	cursor = normalizeDashboardCursor(history, cursor, width)
+	visible := make([]dashboardVisibleLogRow, 0, rows)
+	for line := cursor.Line; line < history.Len() && len(visible) < rows; line++ {
+		fragments := dashboardLogFragments(history.At(line), width)
+		first := 0
+		if line == cursor.Line {
+			first = dashboardFragmentIndex(fragments, cursor.Offset)
+		}
+		for index := first; index < len(fragments) && len(visible) < rows; index++ {
+			visible = append(visible, dashboardVisibleLogRow{
+				HistoryIndex: line,
+				Offset:       fragments[index].Start,
+				Text:         fragments[index].Text,
+			})
+		}
+	}
+	return visible
 }
 
 func readDashboardInput(ctx context.Context, input *os.File) (<-chan dashboardInputEvent, <-chan error, <-chan struct{}) {
@@ -760,10 +947,10 @@ func renderDashboardViewFrame(info dashboardInfo, width int, height int, history
 		height = 2
 	}
 	logRows := dashboardLogRows(info, width, height)
-	view.Clamp(history.Len(), logRows)
+	view.Clamp(history, width, logRows)
 	hint := dashboardViewHint(view, history, logRows, width)
 	banner := dashboardBannerWithHint(info, width, height, hint)
-	visible := history.Range(view.Top, view.Top+logRows)
+	visible := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width, logRows)
 	var frame strings.Builder
 	frame.WriteString("\x1b[H")
 	for row := 0; row < height; row++ {
@@ -771,7 +958,7 @@ func renderDashboardViewFrame(info dashboardInfo, width int, height int, history
 		if row < len(banner) {
 			frame.WriteString(renderDashboardLine(banner[row], width, info.Color))
 		} else if index := row - len(banner); index < len(visible) {
-			frame.WriteString(renderDashboardLogLine(visible[index], width, info.Color))
+			frame.WriteString(renderDashboardLogLine(visible[index].Text, info.Color))
 		}
 		if row+1 < height {
 			frame.WriteString("\r\n")
@@ -808,12 +995,10 @@ func dashboardViewHint(view *dashboardView, history *dashboardHistory, rows int,
 	}
 	start := 0
 	end := 0
-	if history.Len() > 0 {
-		start = view.Top + 1
-		end = view.Top + rows
-		if end > history.Len() {
-			end = history.Len()
-		}
+	visible := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width, rows)
+	if len(visible) > 0 {
+		start = visible[0].HistoryIndex + 1
+		end = visible[len(visible)-1].HistoryIndex + 1
 	}
 	position := fmt.Sprintf("%d-%d/%d", start, end, history.Len())
 	newLines := ""
@@ -919,7 +1104,7 @@ func dashboardHorizontalRuleLine(width int) dashboardLine {
 	}
 	return dashboardLine{Segments: []dashboardSegment{
 		{Text: "  "},
-		{Text: strings.Repeat("─", ruleWidth), Style: dashboardRule},
+		{Text: strings.Repeat("─", ruleWidth), Style: dashboardWhite},
 	}}
 }
 
@@ -931,13 +1116,13 @@ func dashboardWorkspaceLines(info dashboardInfo, width int) []dashboardLine {
 	workspace := append(dashboardFieldPrefix("WORKSPACE"), dashboardSegment{Text: info.Workspace, Style: dashboardBold})
 	environment := []dashboardSegment{
 		{Text: "     "},
-		{Text: "ENV", Style: dashboardDim},
+		{Text: "ENV", Style: dashboardWhite},
 		{Text: "  "},
 		{Text: info.Environment, Style: dashboardYellow},
 	}
 	network := []dashboardSegment{
 		{Text: "     "},
-		{Text: "LAN", Style: dashboardDim},
+		{Text: "LAN", Style: dashboardWhite},
 		{Text: "  "},
 		{Text: info.Address + interfaceLabel, Style: dashboardGreen},
 	}
@@ -965,11 +1150,11 @@ func dashboardCompactWorkspaceLine(info dashboardInfo) dashboardLine {
 	segments := append(dashboardFieldPrefix("WORKSPACE"), dashboardSegment{Text: info.Workspace, Style: dashboardBold})
 	segments = append(segments,
 		dashboardSegment{Text: "     "},
-		dashboardSegment{Text: "ENV", Style: dashboardDim},
+		dashboardSegment{Text: "ENV", Style: dashboardWhite},
 		dashboardSegment{Text: "  "},
 		dashboardSegment{Text: info.Environment, Style: dashboardYellow},
 		dashboardSegment{Text: "     "},
-		dashboardSegment{Text: "LAN", Style: dashboardDim},
+		dashboardSegment{Text: "LAN", Style: dashboardWhite},
 		dashboardSegment{Text: "  "},
 		dashboardSegment{Text: info.Address + interfaceLabel, Style: dashboardGreen},
 	)
@@ -983,7 +1168,7 @@ func dashboardFieldPrefix(label string) []dashboardSegment {
 	}
 	return []dashboardSegment{
 		{Text: "  "},
-		{Text: label, Style: dashboardDim},
+		{Text: label, Style: dashboardWhite},
 		{Text: strings.Repeat(" ", padding)},
 	}
 }
@@ -995,7 +1180,12 @@ func dashboardFieldLine(label string, value string, valueStyle string) dashboard
 }
 
 func dashboardServicesTitleLine(count int) dashboardLine {
-	return dashboardFieldLine("SERVICES", fmt.Sprintf("%d local", count), dashboardDim)
+	segments := dashboardFieldPrefix("SERVICES")
+	segments = append(segments,
+		dashboardSegment{Text: fmt.Sprintf("%d", count), Style: dashboardGreen},
+		dashboardSegment{Text: " local", Style: dashboardDim},
+	)
+	return dashboardLine{Segments: segments}
 }
 
 func dashboardServiceLines(services []dashboardService, width int, rows int) []dashboardLine {
@@ -1075,7 +1265,7 @@ func dashboardPortSegments(ports map[string]int) []dashboardSegment {
 			protocolPadding = 2
 		}
 		segments = append(segments,
-			dashboardSegment{Text: protocol, Style: dashboardDim},
+			dashboardSegment{Text: protocol, Style: dashboardWhite},
 			dashboardSegment{Text: strings.Repeat(" ", protocolPadding)},
 			dashboardSegment{Text: fmt.Sprintf("%d", ports[name]), Style: dashboardGreen},
 		)
@@ -1088,17 +1278,19 @@ func dashboardDetachLine(width int) dashboardLine {
 }
 
 func dashboardDividerLine(width int, hint string) dashboardLine {
-	used := dashboardDisplayWidth("  ── " + hint + " ")
-	ruleWidth := width - used
-	if ruleWidth < 1 {
-		ruleWidth = 1
+	hintWidth := dashboardDisplayWidth(hint)
+	ruleWidth := width - hintWidth - 2
+	if ruleWidth < 0 {
+		ruleWidth = 0
 	}
+	leftRuleWidth := ruleWidth / 2
+	rightRuleWidth := ruleWidth - leftRuleWidth
 	return dashboardLine{Segments: []dashboardSegment{
-		{Text: "  "},
-		{Text: "── ", Style: dashboardRule},
-		{Text: hint, Style: dashboardDim},
+		{Text: strings.Repeat("─", leftRuleWidth), Style: dashboardRule},
 		{Text: " "},
-		{Text: strings.Repeat("─", ruleWidth), Style: dashboardRule},
+		{Text: hint, Style: dashboardYellow},
+		{Text: " "},
+		{Text: strings.Repeat("─", rightRuleWidth), Style: dashboardRule},
 	}}
 }
 
@@ -1169,8 +1361,8 @@ func renderDashboardLine(line dashboardLine, width int, color bool) string {
 	return rendered.String()
 }
 
-func renderDashboardLogLine(value string, width int, color bool) string {
-	line := fitDashboardLine(value, width, false)
+func renderDashboardLogLine(value string, color bool) string {
+	line := sanitizeDashboardText(value)
 	if !color || line == "" {
 		return line
 	}

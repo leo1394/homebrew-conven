@@ -172,11 +172,13 @@ func (app App) runRestart(arguments []string) int {
 	flags.SetOutput(app.Error)
 	common := bindCommonFlags(flags, false)
 	tail := flags.Bool("tail", false, "stream plain-text logs after restart")
+	dashboard := flags.Bool("dashboard", false, "open the interactive log dashboard after restart")
 	skipBuild := flags.Bool("skip-build", false, "skip build and reuse artifacts from the fixed current runtime")
 	skipVerify := flags.Bool("skip-verify", false, "skip service health checks")
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --restart [flags] [service...]")
 		flags.PrintDefaults()
+		fmt.Fprintln(flags.Output(), "\nWithout a mode flag, restart opens the Dashboard on an interactive terminal. When both modes are present, the last --tail or --dashboard flag wins.")
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
@@ -196,10 +198,28 @@ func (app App) runRestart(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
-	if *tail && session != nil {
+	if session == nil {
+		return 0
+	}
+	mode := resolveRestartLogDisplayMode(arguments, *tail, *dashboard, convenruntime.DashboardAvailable(app.Input, app.Output))
+	if mode == logDisplayPlain {
 		if err := convenruntime.ShowLogs(app.Context, session, flags.Args(), true, app.Output); err != nil {
+			return app.fail(err)
+		}
+		return 0
+	}
+	if mode == logDisplayDashboard {
+		if err := convenruntime.TailLogs(app.Context, workspace, session, convenruntime.TailOptions{Names: flags.Args(), Version: app.Version}, app.Input, app.Output); err != nil {
 			return app.fail(err)
 		}
 	}
 	return 0
+}
+
+func resolveRestartLogDisplayMode(arguments []string, tail bool, dashboard bool, dashboardAvailable bool) logDisplayMode {
+	mode := resolveLogDisplayMode(arguments, tail, dashboard)
+	if mode == logDisplaySnapshot && dashboardAvailable {
+		return logDisplayDashboard
+	}
+	return mode
 }

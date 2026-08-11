@@ -759,7 +759,7 @@ available actions
    --logs       Show logs; --tail streams plain text, --dashboard opens the UI
    --dashboard  Open the interactive log dashboard
    --start      Select and start local services; opens the dashboard on a TTY
-   --restart    Restart selected or changed local services
+   --restart    Restart selected or changed services; opens the dashboard on a TTY
    --stop       Stop selected local services
    --stop-all   Stop all services and release the workspace connection
 
@@ -767,7 +767,7 @@ The action flag must be the first argument after "conven services".
 Run 'conven services <action> --help' for action-specific usage and flags.
 Without service names, --start opens an interactive selector and asks for
 confirmation; --restart restarts only changed services in the current session.
-After a successful interactive --start, the dashboard opens by default; pass
---tail to stream plain-text logs instead.
+After a successful interactive --start or --restart, the dashboard opens by
+default; pass --tail to stream plain-text logs instead.
 `)
 }

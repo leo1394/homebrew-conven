@@ -824,6 +824,22 @@ func TestTailFlagReplacesFollow(t *testing.T) {
 	}
 }
 
+func TestRestartHelpExposesDashboardMode(t *testing.T) {
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Version: "test-version"}
+
+	if code := app.Run([]string{"services", "--restart", "--help"}); code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if !strings.Contains(output.String(), "-dashboard") || !strings.Contains(output.String(), "last --tail or --dashboard flag wins") {
+		t.Fatalf("restart help does not expose dashboard mode: %q", output.String())
+	}
+	if errorOutput.Len() != 0 {
+		t.Fatalf("stderr = %q", errorOutput.String())
+	}
+}
+
 func TestLogsTailNonTerminalOutputContainsOnlyPrefixedLogs(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
@@ -931,6 +947,28 @@ func TestLogsUsesLastDisplayModeFlag(t *testing.T) {
 		}
 		if got := resolveLogDisplayMode(test.arguments, tail, dashboard); got != test.want {
 			t.Fatalf("resolve mode %v = %v, want %v", test.arguments, got, test.want)
+		}
+	}
+}
+
+func TestRestartDefaultsToDashboardOnlyOnInteractiveTerminal(t *testing.T) {
+	tests := []struct {
+		arguments          []string
+		tail               bool
+		dashboard          bool
+		dashboardAvailable bool
+		want               logDisplayMode
+	}{
+		{dashboardAvailable: true, want: logDisplayDashboard},
+		{dashboardAvailable: false, want: logDisplaySnapshot},
+		{arguments: []string{"--tail"}, tail: true, dashboardAvailable: true, want: logDisplayPlain},
+		{arguments: []string{"--dashboard"}, dashboard: true, dashboardAvailable: false, want: logDisplayDashboard},
+		{arguments: []string{"--tail", "--dashboard"}, tail: true, dashboard: true, dashboardAvailable: true, want: logDisplayDashboard},
+		{arguments: []string{"--dashboard", "--tail"}, tail: true, dashboard: true, dashboardAvailable: true, want: logDisplayPlain},
+	}
+	for _, test := range tests {
+		if got := resolveRestartLogDisplayMode(test.arguments, test.tail, test.dashboard, test.dashboardAvailable); got != test.want {
+			t.Fatalf("resolve restart mode %v available=%t = %v, want %v", test.arguments, test.dashboardAvailable, got, test.want)
 		}
 	}
 }
@@ -1347,7 +1385,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--start)`,
 		`options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --skip-build --skip-verify --help"`,
 		`--restart)`,
-		`options="--tail --skip-build --skip-verify --help"`,
+		`options="--tail --dashboard --skip-build --skip-verify --help"`,
 		`--stop)`,
 		`options="--all --force --help"`,
 		`--stop-all)`,
@@ -1441,6 +1479,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_services_action --start' -l tail`,
 		`__conven_services_action --start' -l dry-run`,
 		`__conven_services_action --restart' -l tail`,
+		`__conven_services_action --restart' -l dashboard`,
 		`__conven_services_action --logs' -l tail`,
 		`__conven_services_action --logs' -l dashboard`,
 		`__conven_using_subcommand config' -l global`,

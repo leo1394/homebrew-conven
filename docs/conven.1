@@ -116,6 +116,8 @@ The equivalent alias is
 Its fixed banner remains visible while the application retains and scrolls up
 to 10,000 lines received by the viewer. The initial replay budget is shared
 across selected log sources; subsequent lines are retained in arrival order.
+Long logical log lines wrap to the terminal width and can be scrolled by visual
+row instead of being replaced by a viewport ellipsis.
 Use the mouse wheel, Up/Down, or PgUp/PgDn to browse, Home or
 .B g
 for the oldest retained line, and End or
@@ -171,10 +173,15 @@ Restart named services, or detect changed and exited services in the current
 session when no names are supplied.
 The fixed runtime directory and existing connection are reused; unchanged
 service artifacts, configuration, processes, and logs remain untouched.
-Restart returns after completing by default; use
+On a usable interactive terminal, restart opens the Dashboard after completing.
+Without such a terminal it returns and leaves services running. Use
 .B \-\-tail
 to follow selected logs in the plain stream, or all current-session logs when
 no service names were supplied.
+Use
+.B \-\-dashboard
+to request the Dashboard explicitly. If both mode options appear, the last one
+selects the effective mode.
 .TP
 .B "\-\-stop [\-\-force] (service...|\-\-all)"
 Stop selected services or the entire current workspace session.
@@ -226,10 +233,14 @@ Available to start and doctor.
 .TP
 .B \-\-tail
 Follow aggregated service logs in a plain continuous stream after a successful
-start or restart, overriding start's automatic TTY Dashboard.
+start or restart, overriding their automatic TTY Dashboard.
 Also accepted by
 .BR "services \-\-logs" .
 It is a boolean switch, not a line-count option.
+.TP
+.B \-\-dashboard
+Open the interactive Dashboard after restart. Also accepted by
+.BR "services \-\-logs" .
 .TP
 .B \-\-dry\-run
 Resolve and validate a start plan without creating or modifying runtime state,

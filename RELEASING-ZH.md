@@ -565,7 +565,7 @@ start 刻意使用非 TTY 标准输入：启动成功后必须直接返回并让
 # Start 默认打开 Dashboard；验收其控制键后按 q。
 "$CONVEN_BIN" services --status
 "$CONVEN_BIN" services --restart user-svc
-# Restart 完成后直接返回，不打开日志查看器。
+# Restart 默认打开 Dashboard；验收其控制键后按 q。
 "$CONVEN_BIN" services --dashboard user-svc order-svc
 # 按 Ctrl-C；已重启服务和未变化服务都必须继续运行。
 "$CONVEN_BIN" services --status
@@ -580,7 +580,8 @@ start 刻意使用非 TTY 标准输入：启动成功后必须直接返回并让
 `services --restart --tail` 即使在 TTY 中也使用持续输出的 Plain 日志流；`--tail`
 仍是布尔开关，不是日志行数选项。Plain 输出必须进入终端原生 scrollback，并可使用
 Command+F 搜索。`services --logs --dashboard` 必须与独立的
-`services --dashboard` action 行为完全一致。同时传入两个 logs 模式参数时，必须以最后
+`services --dashboard` action 行为完全一致。restart 也支持 `--dashboard`，并在可用
+TTY 中默认打开 Dashboard。同时向 logs 或 restart 传入两个模式参数时，必须以最后
 出现的参数为准：`--tail --dashboard` 打开 Dashboard，`--dashboard --tail` 选择 Plain。
 
 全屏 Dashboard 必须用固定 banner 展示 workspace/environment、所选的运行中服务、
@@ -588,10 +589,13 @@ Command+F 搜索。`services --logs --dashboard` 必须与独立的
 已接收日志。验收鼠标滚轮、`↑`/`↓` 和 `PgUp`/`PgDn` 滚动、`Home` 或 `g` 跳到最早保留日志、
 `End` 或 `G` 返回实时跟随、`/` 搜索、`n`/`N` 切换匹配项，以及 `Esc` 清除搜索。
 终端 Command+F 不是 Dashboard 历史搜索，只需看到当前渲染的一屏。调整终端窗口大小
-必须触发布局重绘，服务写出的 ANSI 或其他终端控制序列必须先净化。`q` 和 `Ctrl-C`
-都只能脱离并恢复终端，不能停止服务，随后执行的 `services --status` 必须证明服务仍在
-运行。显示端口是配置快照，不是实时监听 socket 探测；LAN 地址与端口同时显示，本身
-不能证明 endpoint 已绑定或可达。
+必须触发布局重绘。使用一条超过终端宽度的 JSON 日志，确认它会折成可滚动的视觉行，
+不会出现视口省略号或内容丢失。服务写出的 ANSI 或其他终端控制序列必须先净化。
+顶部横线和字段/协议标签必须使用白色，仅本地服务数量数字使用绿色，居中的操作提示
+使用黄色；Banner 不能使用背景色。
+`q` 和 `Ctrl-C` 都只能脱离并恢复终端，不能停止服务，随后执行的 `services --status`
+必须证明服务仍在运行。显示端口是配置快照，不是实时监听 socket 探测；LAN 地址与端口
+同时显示，本身不能证明 endpoint 已绑定或可达。
 
 确认以下行为：
 
@@ -630,9 +634,9 @@ Command+F 搜索。`services --logs --dashboard` 必须与独立的
 - 可通过 `conven services --logs` 查看所有选中服务的日志。`services --dashboard`
   及其 `services --logs --dashboard` 别名提供固定 banner 的 TTY 查看器和应用内最近
   10,000 行历史；`services --logs --tail` 提供使用原生 scrollback 的 Plain 日志流。
-  同时出现两个 logs 模式参数时以最后一个为准。交互式 start 默认打开 Dashboard，
-  显式指定 start `--tail` 会选择 Plain；非 TTY start 直接返回，restart 也默认返回，
-  只有显式指定 `--tail` 才连接 Plain 日志流。
+  logs 或 restart 同时出现两个模式参数时以最后一个为准。交互式 start/restart 默认
+  打开 Dashboard，显式指定 `--tail` 会选择 Plain；非 TTY 缺省模式在执行完成后返回。
+  Dashboard 中的长日志会折成可滚动的视觉行，同时保留原始可搜索的逻辑行。
 - `services --status` 显示保存的 PID/PGID，普通 `services --stop` 会校验进程身份。
 - PathPicker 使用 `f` 切换；空选择仍停留在选择页；仅 `y` 或 `yes` 确认启动；
   非 TTY 且未显式给出服务时安全失败。

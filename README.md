@@ -261,7 +261,7 @@ Conven offers two deliberately different viewers:
 
 | Mode | Best for | Behavior |
 | --- | --- | --- |
-| Dashboard | Live overview | Fixed workspace banner, app-owned scrolling, `/` search, up to 10,000 retained lines |
+| Dashboard | Live overview | Fixed workspace banner, wrapped long lines, app-owned scrolling and `/` search, up to 10,000 retained logical lines |
 | Plain | Terminal-native search/export | Normal scrollback, `Command+F`, pipes and redirects, up to 10,000 replayed lines before following |
 
 ```bash
@@ -273,15 +273,17 @@ conven services --logs --dashboard
 conven services --logs --tail
 ```
 
-Interactive `services --start` opens the Dashboard by default. Explicit
-`services --start --tail` selects Plain mode; a non-interactive start returns
-after startup and leaves services running. If `--dashboard` and `--tail` both
-appear under `services --logs`, the last one wins.
+Interactive `services --start` and `services --restart` open the Dashboard by
+default. Explicit `--tail` selects Plain mode; a non-interactive start or
+restart returns after completing and leaves services running. Restart also
+accepts an explicit `--dashboard`. If `--dashboard` and `--tail` both appear
+under `services --logs` or `services --restart`, the last one wins.
 
-Dashboard keys: arrows or mouse wheel scroll, `PgUp`/`PgDn` page, `g`/`G` jump,
-`/` searches, `n`/`N` navigates matches, and `Esc` clears search. `q` or
-`Ctrl-C` detaches. In Plain mode, `Ctrl-C` detaches. Neither action stops the
-services.
+Dashboard wraps long logical log lines to the terminal width without replacing
+their hidden content with an ellipsis. Its arrows and mouse wheel scroll by
+visual row; `PgUp`/`PgDn` page, `g`/`G` jump, `/` searches, `n`/`N` navigates
+matches, and `Esc` clears search. `q` or `Ctrl-C` detaches. In Plain mode,
+`Ctrl-C` detaches. Neither action stops the services.
 
 ## Configuration and plugins
 

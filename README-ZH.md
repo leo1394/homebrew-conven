@@ -242,7 +242,7 @@ Conven 提供两种用途明确的日志查看模式：
 
 | 模式 | 适用场景 | 行为 |
 | --- | --- | --- |
-| Dashboard | 实时概览 | 固定 workspace banner、应用内滚动和 `/` 搜索，最多保留 10,000 行 |
+| Dashboard | 实时概览 | 固定 workspace banner、长日志自动换行、应用内滚动和 `/` 搜索，最多保留 10,000 条原始日志 |
 | Plain | 使用终端原生搜索或导出 | 使用正常终端 scrollback、`Command+F`、管道和重定向，follow 前最多回放 10,000 行 |
 
 ```bash
@@ -254,14 +254,15 @@ conven services --logs --dashboard
 conven services --logs --tail
 ```
 
-交互式 `services --start` 默认打开 Dashboard。显式指定
-`services --start --tail` 会使用 Plain 模式；非交互式启动会在服务就绪后返回，
-并让服务继续运行。如果 `services --logs` 同时出现 `--dashboard` 和 `--tail`，
-最后一个参数生效。
+交互式 `services --start` 和 `services --restart` 默认打开 Dashboard。显式指定
+`--tail` 会使用 Plain 模式；非交互式 start 或 restart 会在执行完成后返回，并让服务
+继续运行。restart 也支持显式指定 `--dashboard`。如果 `services --logs` 或
+`services --restart` 同时出现 `--dashboard` 和 `--tail`，最后一个参数生效。
 
-Dashboard 操作：方向键或鼠标滚轮滚动，`PgUp`/`PgDn` 翻页，`g`/`G` 跳转，
-`/` 搜索，`n`/`N` 切换匹配项，`Esc` 清除搜索。按 `q` 或 `Ctrl-C` 退出查看。
-Plain 模式使用 `Ctrl-C` 退出查看。这些操作都不会停止服务。
+Dashboard 会按终端宽度自动折行显示长日志，不再用省略号隐藏超出一行的内容。
+方向键或鼠标滚轮按视觉行滚动，`PgUp`/`PgDn` 翻页，`g`/`G` 跳转，`/` 搜索，
+`n`/`N` 切换匹配项，`Esc` 清除搜索。按 `q` 或 `Ctrl-C` 退出查看。Plain 模式使用
+`Ctrl-C` 退出查看。这些操作都不会停止服务。
 
 ## 配置与插件
 
