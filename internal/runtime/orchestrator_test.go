@@ -1230,7 +1230,7 @@ func TestForceStopAllRecoversUnleasedSharedConnectionWithoutSession(t *testing.T
 	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{})
 	directory := t.TempDir()
 	argv := []string{"sh", "-c", "trap '' HUP; sleep 600 & sleep 0.2"}
-	process, err := startConnection(context.Background(), "command", argv, argv, filepath.Join(directory, "connection.log"), "orphaned-shared", false)
+	process, completed, err := startConnectionObserved(context.Background(), "command", argv, argv, filepath.Join(directory, "connection.log"), "orphaned-shared", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1238,7 +1238,14 @@ func TestForceStopAllRecoversUnleasedSharedConnectionWithoutSession(t *testing.T
 		_ = stopConnection(process, true)
 		_ = removeConnectionRecord(process.Fingerprint)
 	}()
-	time.Sleep(300 * time.Millisecond)
+	select {
+	case waitErr := <-completed:
+		if waitErr != nil {
+			t.Fatal(waitErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for connection leader to exit")
+	}
 	if ProcessAlive(process.PID) || !ProcessGroupAlive(process.PGID) {
 		t.Fatalf("connection did not reach orphaned group state: %#v", process)
 	}

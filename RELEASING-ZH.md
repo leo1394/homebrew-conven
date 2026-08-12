@@ -53,9 +53,10 @@ rebuild 为 `0`，同时更新临时 block。该流程不会移动或重建源�
 
 仓库 Actions 设置必须允许 `GITHUB_TOKEN` 写入 contents 和 pull requests；如果
 `master` 存在 ruleset，还必须允许 publish workflow 推送生成的 Formula/bottle commit。
-`brew test-bot` workflow 运行于 `macos-15`（Apple Silicon）、
-`macos-15-intel`、`macos-26`（Apple Silicon）和 `ubuntu-latest`
-（x86_64 Linux）。Bottle 发布到 GitHub Releases，不使用 GHCR。
+`brew test-bot` workflow 运行于 `macos-15`、`macos-26`（Apple Silicon）和
+`ubuntu-latest`（x86_64 Linux）。由于 Homebrew 的 Go 构建依赖当前没有适用于
+标准 macOS Intel runner 的 bottle，Intel macOS 暂时回退为源码构建。Bottle
+发布到 GitHub Releases，不使用 GHCR。
 
 `ci.yml` 保留为 Go 及 stable/HEAD 的快速回归 workflow；`tests.yml` 负责 Homebrew
 打包。Formula PR 会有意同时运行二者；只有 `tests.yml` 生成可供 `brew pr-pull`
