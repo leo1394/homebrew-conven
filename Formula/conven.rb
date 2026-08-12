@@ -73,9 +73,7 @@ class Conven < Formula
       assert_equal expected_manifest, import_backups.first.read
     end
 
-    if new_cli
-      system bin/"conven", "-C", workspace, "services", "--list"
-    end
+    system bin/"conven", "-C", workspace, "services", "--list" if new_cli
 
     assert_path_exists bash_completion/"conven"
     assert_path_exists zsh_completion/"_conven"
