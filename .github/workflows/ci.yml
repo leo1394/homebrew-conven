@@ -49,6 +49,7 @@ jobs:
           cp Formula/conven.rb "$formula"
           git update-ref refs/heads/conven-ci-head "$GITHUB_SHA"
           test "$(git rev-parse refs/heads/conven-ci-head)" = "$GITHUB_SHA"
+          # shellcheck disable=SC2016
           ruby -pi -e 'url = "file://" + ENV.fetch("GITHUB_WORKSPACE"); $_ = $_.sub(/^  head .*$/, "  head #{url.inspect}, using: :git, branch: \"conven-ci-head\"")' "$formula"
           grep -F "head \"file://$GITHUB_WORKSPACE\", using: :git, branch: \"conven-ci-head\"" "$formula"
           brew install "$tap/conven"
@@ -82,8 +83,14 @@ jobs:
             case " $bash_top " in
               *" $command "*) echo "retained bash top-level completion: $command" >&2; exit 1 ;;
             esac
-            ! grep -Fq "        '$command:" "$completion_dir/_conven"
-            ! grep -Fq "complete -c conven -f -n '__fish_use_subcommand' -a $command " "$completion_dir/conven.fish"
+            if grep -Fq "        '$command:" "$completion_dir/_conven"; then
+              echo "retained zsh top-level completion: $command" >&2
+              exit 1
+            fi
+            if grep -Fq "complete -c conven -f -n '__fish_use_subcommand' -a $command " "$completion_dir/conven.fish"; then
+              echo "retained fish top-level completion: $command" >&2
+              exit 1
+            fi
           done
           for action in list registry status logs dashboard start restart stop stop-all cleanup; do
             grep -Fq -- "--$action" "$completion_dir/conven.bash"
@@ -112,10 +119,31 @@ jobs:
           grep -Fq -- "--prune" "$completion_dir/conven.bash"
           grep -Fq -- "--prune" "$completion_dir/_conven"
           grep -Fq -- "-l prune" "$completion_dir/conven.fish"
-          ! grep -Fq -- "--follow" "$completion_dir/conven.bash" "$completion_dir/_conven"
-          ! grep -Fq -- "-l follow" "$completion_dir/conven.fish"
-          ! grep -Fq -- "--workspace" "$completion_dir/conven.bash" "$completion_dir/_conven"
-          ! grep -Fq -- "--config" "$completion_dir/conven.bash" "$completion_dir/_conven"
-          ! grep -Fq -- "-l workspace" "$completion_dir/conven.fish"
-          ! grep -Fq -- "-l config" "$completion_dir/conven.fish"
-          ! grep -Fq "convening" "$completion_dir/conven.bash" "$completion_dir/_conven" "$completion_dir/conven.fish"
+          if grep -Fq -- "--follow" "$completion_dir/conven.bash" "$completion_dir/_conven"; then
+            echo "retained removed --follow completion" >&2
+            exit 1
+          fi
+          if grep -Fq -- "-l follow" "$completion_dir/conven.fish"; then
+            echo "retained removed fish --follow completion" >&2
+            exit 1
+          fi
+          if grep -Fq -- "--workspace" "$completion_dir/conven.bash" "$completion_dir/_conven"; then
+            echo "retained removed --workspace completion" >&2
+            exit 1
+          fi
+          if grep -Fq -- "--config" "$completion_dir/conven.bash" "$completion_dir/_conven"; then
+            echo "retained removed --config completion" >&2
+            exit 1
+          fi
+          if grep -Fq -- "-l workspace" "$completion_dir/conven.fish"; then
+            echo "retained removed fish --workspace completion" >&2
+            exit 1
+          fi
+          if grep -Fq -- "-l config" "$completion_dir/conven.fish"; then
+            echo "retained removed fish --config completion" >&2
+            exit 1
+          fi
+          if grep -Fq "convening" "$completion_dir/conven.bash" "$completion_dir/_conven" "$completion_dir/conven.fish"; then
+            echo "retained removed convening completion" >&2
+            exit 1
+          fi
