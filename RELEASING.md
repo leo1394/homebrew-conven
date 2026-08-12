@@ -2,15 +2,16 @@
 
 **English** | [简体中文](RELEASING-ZH.md)
 
-This document adapts the release discipline used by `homebrew-gits` to Conven's
-Go source build and Homebrew Formula.
+This document covers Conven's Go source release, Homebrew Formula, and
+precompiled Homebrew bottles.
 
 ## Release model
 
 - Release source from `master` with an immutable annotated tag named
   `vX.Y.Z`.
-- The stable Formula downloads the tagged source archive, verifies its SHA-256,
-  builds `./cmd/conven` with Go, and generates Bash, Zsh, and Fish completions.
+- The stable Formula downloads the tagged source archive and verifies its
+  SHA-256. CI builds and publishes bottles for supported macOS and Linux
+  platforms; source fallback builds `./cmd/conven` with Go.
 - Keep the `head` stanza so development builds remain available through
   `brew install --formula --HEAD leo1394/conven/conven`.
 - Homebrew infers the version from the tag in the stable URL. Do not add a
@@ -22,18 +23,34 @@ The first stable release adds `url` and `sha256` after its tag exists. Later
 releases replace those two values with the new tag archive.
 
 Because the Formula lives in the same repository as the Go source, its final
-SHA cannot be written into the source commit being hashed. Conven therefore uses
-two commits:
+SHA cannot be written into the source commit being hashed. The preferred bottle
+release therefore has two phases:
 
-1. A source release commit, referenced by the immutable tag.
-2. A Formula commit that points to that tag and contains its published SHA-256.
+1. Run `--prepare --bottle`, review its changes, then commit and push the
+   prepared source to `master`. Besides the normal checks, this validates the
+   bottle workflows.
+2. Run `--apply --bottle`. It creates and pushes the source tag, finalizes the
+   Formula on `bottle/conven-X.Y.Z`, opens a Formula pull request, waits for
+   `brew test-bot`, dispatches `brew pr-pull` with the exact PR head SHA, waits
+   for publication, synchronizes local `master`, and verifies the GitHub
+   Release and bottle metadata.
 
-The normal release flow has two script actions:
+`--bottle` is a modifier and is invalid without `--prepare` or `--apply`.
+Commands without `--bottle` retain the source-build release path: plain
+`--apply` commits the finalized Formula directly to `master` and publishes no
+bottles.
 
-1. Run `--prepare`, review its changes, then commit and push the prepared source
-   to `master`.
-2. Run `--apply`. It creates and pushes the source tag, finalizes the Formula,
-   commits it as `update formula for vX.Y.Z`, and pushes `origin/master`.
+If plain `--apply` already pushed the source tag for the same version, a later
+`--apply --bottle` safely reuses that immutable annotated tag. If Formula
+finalization had not started, it continues through the normal Formula branch.
+If finalization also completed, the script verifies that `master` contains
+exactly one Formula-only commit and that the complete Formula matches the
+deterministic tag finalization, including its archive URL and SHA-256. It then
+opens a Formula PR with temporary bottle bootstrap metadata; `brew pr-pull`
+replaces that metadata with the published platform
+checksums. The test and publish workflows both use `--keep-old` so this first
+bottle publication for an existing version keeps bottle rebuild `0` while
+updating the bootstrap block. The flow never moves or recreates the source tag.
 
 `--finalize-formula` is a standalone manual and recovery action. It updates the
 Formula but never stages, commits, or pushes it.
@@ -41,9 +58,24 @@ Formula but never stages, commits, or pushes it.
 ## Prerequisites
 
 - Push access to `git@github.com:leo1394/homebrew-conven.git`.
-- Go 1.23 or later, Homebrew, Ruby, Git, ripgrep, `curl`, and `shasum`.
+- Go 1.23 or later, Homebrew, Ruby, Git, GitHub CLI (`gh`), ripgrep, `curl`,
+  and `shasum`.
+- GitHub CLI authenticated as a user that can create pull requests and dispatch
+  Actions workflows in the repository.
 - A clean local `master` synchronized with `origin/master`.
 - A public GitHub repository and green CI on the current branch.
+
+The repository Actions configuration must allow `GITHUB_TOKEN` to write
+contents and pull requests, and any `master` ruleset must allow the publish
+workflow to push the generated Formula/bottle commit. The `brew test-bot` workflow runs on
+`macos-15` (Apple Silicon), `macos-15-intel`, `macos-26` (Apple Silicon), and
+`ubuntu-latest` (x86_64 Linux). Bottle publication uses GitHub Releases, not
+GHCR.
+
+`ci.yml` remains the fast Go and stable/HEAD regression workflow.
+`tests.yml` is the Homebrew packaging workflow. Both run on a Formula PR by
+design; only `tests.yml` produces artifacts consumable by `brew pr-pull`, and
+its push run performs syntax checks without publishing bottles.
 
 ### One-time repository bootstrap
 
@@ -128,12 +160,14 @@ working directory unchanged:
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --prepare
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --prepare --bottle
 )
 ```
 
 The action updates `cmd/conven/main.go`, `VERSION.txt`, and the Formula version
-assertion, then runs the release checks. It does not commit, tag, or push.
+assertion, runs the release checks, and validates `.github/workflows/tests.yml`
+and `.github/workflows/publish.yml`. It does not commit, tag, push, open a pull
+request, or dispatch a workflow.
 
 Check every version occurrence:
 
@@ -144,7 +178,7 @@ rg -n "$CONVEN_RELEASE_VERSION|version =|assert_equal \"conven " \
 
 ## 2. Run local checks
 
-`--prepare` runs the Go and Formula checks below. Keep the full list available
+`--prepare --bottle` runs the Go and Formula checks below. Keep the full list available
 for diagnosis and for the repository-specific example checks that are not part
 of the generic publisher:
 
@@ -204,7 +238,7 @@ git fetch origin master
 test "$CONVEN_SOURCE_COMMIT" = "$(git rev-parse origin/master)"
 ```
 
-Wait for CI on `$CONVEN_SOURCE_COMMIT` to pass before running `--apply`. Do not
+Wait for CI on `$CONVEN_SOURCE_COMMIT` to pass before running `--apply --bottle`. Do not
 change the working tree after this point. The apply preflight requires a clean
 local `master`, synchronized `origin/master`, and no local or remote release
 tag.
@@ -216,48 +250,90 @@ Run the apply action from the clean repository root:
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --apply
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --apply --bottle
 )
 ```
 
-For a Go-source release, `--apply` performs the complete publication sequence:
+For a bottle release, `--apply --bottle` performs the complete publication
+sequence:
 
 1. Repeats the release checks and verifies the clean, synchronized `master`.
 2. Creates an annotated `vX.Y.Z` tag on `$CONVEN_SOURCE_COMMIT` and pushes it.
 3. Downloads the public GitHub tag archive, verifies its top-level
    `VERSION.txt`, and calculates its SHA-256.
-4. Updates the stable Formula URL and checksum, then runs Ruby syntax,
-   `brew style`, and Git whitespace checks.
-5. Verifies that only `Formula/conven.rb` changed, stages it, and commits it with
-   the exact message `update formula for vX.Y.Z`.
-6. Pushes `origin/master` and verifies that the remote points to the Formula
-   commit.
+4. Creates `bottle/conven-X.Y.Z` from the source release, updates the stable
+   Formula URL and checksum, validates it, commits it, and pushes the branch.
+5. Opens a Formula pull request and records its number and exact head SHA.
+6. Waits for every required `brew test-bot` job. The workflow builds and uploads
+   platform-specific `*.bottle.*` artifacts only for the pull request.
+7. Dispatches `.github/workflows/publish.yml` with the PR number and recorded
+   head SHA. `brew pr-pull` rejects a changed PR head, publishes the bottles to
+   a `conven-X.Y.Z` GitHub Release, applies the generated `bottle do` metadata,
+   and pushes `master`.
+8. Waits for the publish workflow, fast-forwards local `master`, and verifies
+   the release assets and Formula bottle metadata.
+
+If the command fails after creating the Formula PR, it deliberately preserves
+the PR and `bottle/conven-X.Y.Z` branch. Fix or rerun from that state; do not
+move the source tag or create a second PR for the same version.
 
 Keep the existing Go build and completion generation. Do not copy the
 single-file installation used by `homebrew-gits`, and do not make optional
 tools such as `ktctl` or `sudo` hard Formula dependencies.
 
-Verify the two-commit result:
+Verify the published result:
 
 ```bash
-CONVEN_FORMULA_COMMIT=$(git rev-parse HEAD)
 test "$(git rev-parse "$CONVEN_RELEASE_TAG^{commit}")" = "$CONVEN_SOURCE_COMMIT"
-test "$(git log -1 --pretty=%s)" = "update formula for $CONVEN_RELEASE_TAG"
-test "$(git rev-parse HEAD^)" = "$CONVEN_SOURCE_COMMIT"
 CONVEN_REMOTE_TAG_COMMIT=$(git ls-remote --tags origin \
   "refs/tags/$CONVEN_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }')
 test "$CONVEN_REMOTE_TAG_COMMIT" = "$CONVEN_SOURCE_COMMIT"
 git fetch origin master
-test "$CONVEN_FORMULA_COMMIT" = "$(git rev-parse origin/master)"
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)"
+grep -q '^  bottle do$' Formula/conven.rb
+gh release view "conven-$CONVEN_RELEASE_VERSION"
 git status --short
 ```
 
 The final command must print nothing. Never move, delete, or recreate the
 published tag. A source correction requires a new patch release.
 
-### Standalone Formula finalization and failure recovery
+### Bottle publication recovery
 
-`--apply` cannot make the tag publication and later Formula commit atomic,
+The bottle path is resumable. Inspect the immutable source tag, Formula branch,
+pull request, and Actions runs before retrying:
+
+```bash
+git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG" \
+  "refs/tags/$CONVEN_RELEASE_TAG^{}"
+git ls-remote --heads origin "refs/heads/bottle/conven-$CONVEN_RELEASE_VERSION"
+gh pr list --head "bottle/conven-$CONVEN_RELEASE_VERSION" --state all
+gh run list --workflow tests.yml --limit 10
+gh run list --workflow publish.yml --limit 10
+```
+
+- Before the PR exists, rerun `--apply --bottle`; it reuses the verified source
+  tag and Formula branch.
+- If `brew test-bot` fails transiently, rerun the failed workflow and then rerun
+  `--apply --bottle`. The Formula branch is deterministic and must not be edited
+  by hand. A source or Formula defect requires a new patch release because the
+  source tag is immutable.
+- If test-bot is green but publication failed, rerun `--apply --bottle`; it
+  dispatches or resumes `publish.yml` against the current verified PR head. If
+  the failed run already uploaded part of the `conven-X.Y.Z` Release, remove
+  that incomplete Release before retrying; GitHub rejects duplicate assets.
+- If publication succeeded but the local checkout is stale, fast-forward
+  `master` from `origin/master` and rerun verification. Do not republish assets
+  or move the source tag.
+- If `origin/master` already contains bottle metadata but the GitHub Release is
+  incomplete or invalid, the script refuses to move the local checkout. Repair
+  or remove that incomplete Release, then rerun `--apply --bottle`; successful
+  verification will fast-forward the local `master` without moving the source
+  tag.
+
+### Source-build Formula finalization and failure recovery
+
+Plain `--apply` cannot make the tag publication and later Formula commit atomic,
 because GitHub must first materialize the tagged archive. If it fails, inspect
 the tag, branch, and working tree before taking another action:
 
@@ -298,11 +374,12 @@ release.
 
 ### Stable Formula gate
 
-Current CI installs and tests both the stable URL and the HEAD Formula path from
-the checkout. Immediately after `--apply` or before manually committing a
-standalone finalization, also run the following stricter stable Formula gate on
-a disposable Homebrew test machine; it adds a strict audit and an explicit
-source build:
+The existing `ci.yml` installs and tests both the stable URL and HEAD Formula
+path from the checkout. `tests.yml` additionally runs the official Homebrew
+Formula lifecycle and produces bottle artifacts on Formula pull requests.
+For a plain source-build `--apply`, or before manually committing a standalone
+finalization, also run the following stricter stable Formula gate on a
+disposable Homebrew test machine:
 
 ```bash
 CONVEN_TEST_TAP="conven-release/conven"
@@ -335,8 +412,9 @@ CONVEN_FORMULA_COMMIT=$(git rev-parse HEAD)
 git push origin master
 ```
 
-Wait for the tag and final `master` workflows to pass. Then synchronize locally
-and verify the ancestry:
+The `GITHUB_TOKEN` push created by `brew pr-pull` does not trigger another push
+workflow. Treat the successful publish workflow as the final gate, then
+synchronize locally and verify the ancestry:
 
 ```bash
 git switch master
@@ -348,7 +426,7 @@ git status --short
 
 ## 5. Verify the published artifact
 
-Download the archive again after `--apply` and compare it with the
+Download the archive again after `--apply --bottle` and compare it with the
 Formula:
 
 ```bash
@@ -375,18 +453,21 @@ CONVEN_ARCHIVE_DIR=$(mktemp -d /tmp/homebrew-conven-release.XXXXXX)
 
 ## 6. Verify the Homebrew tap
 
-Refresh the tap and audit the published Formula:
+Install the published Formula by its fully qualified name. This installs the tap
+when needed and trusts only the requested Formula:
 
 ```bash
-brew tap leo1394/conven
 brew update
 brew audit --formula --strict --online "$CONVEN_FORMULA"
+brew fetch --formula --force-bottle "$CONVEN_FORMULA"
 ```
 
 For a machine without Conven installed:
 
 ```bash
-brew install --formula --build-from-source "$CONVEN_FORMULA"
+CONVEN_GO_BEFORE=$(brew list --versions go || true)
+brew install --formula "$CONVEN_FORMULA"
+test "$CONVEN_GO_BEFORE" = "$(brew list --versions go || true)"
 ```
 
 For an existing stable or HEAD installation, switch explicitly rather than
@@ -394,8 +475,12 @@ using `reinstall`, which preserves the original install options:
 
 ```bash
 brew uninstall --formula "$CONVEN_FORMULA"
-brew install --formula --build-from-source "$CONVEN_FORMULA"
+brew install --formula "$CONVEN_FORMULA"
 ```
+
+Do not use `--build-from-source` for this bottle acceptance check. If
+`brew fetch --force-bottle` cannot select a bottle for the host, that platform
+is not covered and a normal install will fall back to the Go build dependency.
 
 Then verify the Formula and binary:
 
@@ -790,16 +875,18 @@ afterward:
 
 ```bash
 brew uninstall --formula "$CONVEN_FORMULA"
-brew install --formula --build-from-source "$CONVEN_FORMULA"
+brew install --formula "$CONVEN_FORMULA"
 brew test "$CONVEN_FORMULA"
 "$(brew --prefix "$CONVEN_FORMULA")/bin/conven" --version
 ```
 
 ## 8. Complete the release
 
-- Confirm CI passes for the prepared source commit, the tag, the Formula commit,
-  and the final `origin/master`.
-- Record the tag, source archive URL, and SHA-256 in the release notes.
+- Confirm CI passes for the prepared source commit, Formula PR, every test-bot
+  platform, and the `brew pr-pull` workflow. Confirm the final `origin/master`
+  Formula and bottle installation with the verification gates above.
+- Record the source tag, archive URL and SHA-256, Formula PR, and
+  `conven-X.Y.Z` bottle Release in the release notes.
 - Confirm the English and Chinese README installation instructions describe the
   newly available stable Formula.
 - Keep the tag immutable. Publish a patch release for any correction.

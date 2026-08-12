@@ -2,13 +2,13 @@
 
 [English](RELEASING.md) | **简体中文**
 
-本文把 `homebrew-gits` 的发布纪律适配到 Conven 的 Go 源码构建和 Homebrew Formula。
+本文说明 Conven 的 Go 源码、Homebrew Formula 和预编译 Homebrew bottle 发布流程。
 
 ## 发布模型
 
 - 从 `master` 发布源码，使用不可变 annotated tag `vX.Y.Z`。
-- 稳定 Formula 下载带 tag 的源码归档，校验 SHA-256，使用 Go 构建
-  `./cmd/conven`，并生成 Bash、Zsh 和 Fish 补全。
+- 稳定 Formula 下载带 tag 的源码归档并校验 SHA-256。CI 为支持的 macOS 和
+  Linux 平台构建并发布 bottle；源码回退路径使用 Go 构建 `./cmd/conven`。
 - 保留 `head`，开发版本仍可通过
   `brew install --formula --HEAD leo1394/conven/conven` 安装。
 - Homebrew 会从稳定 URL 中的 tag 推断版本，不要重复声明 `version`。
@@ -18,16 +18,26 @@
 新的 tag 归档。
 
 Formula 和 Go 源码位于同一个仓库，因此不能把最终 SHA 写入被该 SHA 校验的源码
-commit。Conven 使用两个 commit 完成发布：
+commit。推荐的 bottle 发布分为两个阶段：
 
-1. 源码发布 commit，由不可变 tag 引用。
-2. Formula commit，指向该 tag 并写入公开归档的 SHA-256。
+1. 执行 `--prepare --bottle`，审阅修改，然后把准备好的源码提交并推送到
+   `master`。除常规检查外，该动作还会校验 bottle workflow。
+2. 执行 `--apply --bottle`。它会创建并推送源码 tag，在
+   `bottle/conven-X.Y.Z` 上完成 Formula，创建 Formula PR，等待
+   `brew test-bot`，使用准确的 PR head SHA 调度 `brew pr-pull`，等待发布完成，
+   同步本地 `master`，并验证 GitHub Release 和 bottle 元数据。
 
-正常发布流程包含两个脚本动作：
+`--bottle` 是修饰参数，不能脱离 `--prepare` 或 `--apply` 单独使用。不带
+`--bottle` 的命令保留源码构建发布路径：普通 `--apply` 仍将完成后的 Formula
+直接提交到 `master`，但不会发布 bottle。
 
-1. 执行 `--prepare`，审阅修改，然后把准备好的源码提交并推送到 `master`。
-2. 执行 `--apply`。它会创建并推送源码 tag，完成 Formula，使用
-   `update formula for vX.Y.Z` 提交，然后推送 `origin/master`。
+如果同一版本此前普通 `--apply` 已经推送源码 tag，后续的 `--apply --bottle` 会安全
+复用该不可变 annotated tag。若 Formula 尚未完成，则继续走正常 Formula 分支；若
+Formula 也已完成，脚本会确认 `master` 只包含一个 Formula 提交，并校验完整 Formula
+与 tag 的确定性完成结果一致，包括归档 URL 和 SHA-256；随后通过 Formula PR 加入
+临时 bottle bootstrap 元数据，由 `brew pr-pull` 替换为已发布平台的校验和。测试与
+发布 workflow 都使用 `--keep-old`，确保已有版本首次补发 bottle 时保持 bottle
+rebuild 为 `0`，同时更新临时 block。该流程不会移动或重建源码 tag。
 
 `--finalize-formula` 是独立的手动及故障恢复动作。它只修改 Formula，绝不会暂存、
 提交或推送。
@@ -35,9 +45,21 @@ commit。Conven 使用两个 commit 完成发布：
 ## 前置条件
 
 - 拥有 `git@github.com:leo1394/homebrew-conven.git` 的推送权限。
-- 已安装 Go 1.23 或更高版本、Homebrew、Ruby、Git、ripgrep、`curl` 和 `shasum`。
+- 已安装 Go 1.23 或更高版本、Homebrew、Ruby、Git、GitHub CLI（`gh`）、ripgrep、
+  `curl` 和 `shasum`。
+- GitHub CLI 已登录，并且当前用户可以在仓库中创建 PR 和调度 Actions workflow。
 - 本地 `master` 干净，并与 `origin/master` 同步。
 - GitHub 仓库已公开，当前分支 CI 全部通过。
+
+仓库 Actions 设置必须允许 `GITHUB_TOKEN` 写入 contents 和 pull requests；如果
+`master` 存在 ruleset，还必须允许 publish workflow 推送生成的 Formula/bottle commit。
+`brew test-bot` workflow 运行于 `macos-15`（Apple Silicon）、
+`macos-15-intel`、`macos-26`（Apple Silicon）和 `ubuntu-latest`
+（x86_64 Linux）。Bottle 发布到 GitHub Releases，不使用 GHCR。
+
+`ci.yml` 保留为 Go 及 stable/HEAD 的快速回归 workflow；`tests.yml` 负责 Homebrew
+打包。Formula PR 会有意同时运行二者；只有 `tests.yml` 生成可供 `brew pr-pull`
+使用的 artifact，它在 push 事件中只做语法检查，不发布 bottle。
 
 ### 一次性仓库初始化
 
@@ -114,12 +136,13 @@ git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG"
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --prepare
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --prepare --bottle
 )
 ```
 
-该动作更新 `cmd/conven/main.go`、`VERSION.txt` 和 Formula 版本断言，然后执行发布检查；
-不会提交、创建 tag 或推送。
+该动作更新 `cmd/conven/main.go`、`VERSION.txt` 和 Formula 版本断言，执行发布检查，
+并校验 `.github/workflows/tests.yml` 和 `.github/workflows/publish.yml`；不会提交、
+创建 tag、推送、创建 PR 或调度 workflow。
 
 检查所有版本位置：
 
@@ -130,7 +153,7 @@ rg -n "$CONVEN_RELEASE_VERSION|version =|assert_equal \"conven " \
 
 ## 2. 本地检查
 
-`--prepare` 会执行下列 Go 和 Formula 检查。保留完整命令，便于诊断，以及执行通用发布
+`--prepare --bottle` 会执行下列 Go 和 Formula 检查。保留完整命令，便于诊断，以及执行通用发布
 脚本未包含的仓库专用 example 检查：
 
 ```bash
@@ -185,7 +208,7 @@ git fetch origin master
 test "$CONVEN_SOURCE_COMMIT" = "$(git rev-parse origin/master)"
 ```
 
-等待 `$CONVEN_SOURCE_COMMIT` 的 CI 通过后再执行 `--apply`。此后不要修改工作树。apply
+等待 `$CONVEN_SOURCE_COMMIT` 的 CI 通过后再执行 `--apply --bottle`。此后不要修改工作树。apply
 预检要求本地 `master` 干净、与 `origin/master` 同步，并且本地和远程都不存在发布
 tag。
 
@@ -196,44 +219,80 @@ tag。
 ```bash
 (
   cd ..
-  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --apply
+  ./publish.sh --target homebrew-conven --version "$CONVEN_RELEASE_VERSION" --apply --bottle
 )
 ```
 
-对于 Go 源码发布，`--apply` 会执行完整发布顺序：
+对于 bottle 发布，`--apply --bottle` 会执行完整发布顺序：
 
 1. 再次运行发布检查，并验证干净且同步的 `master`。
 2. 在 `$CONVEN_SOURCE_COMMIT` 上创建 annotated `vX.Y.Z` tag 并推送。
 3. 下载 GitHub 公开 tag 归档，验证顶层 `VERSION.txt` 并计算 SHA-256。
-4. 更新稳定 Formula URL 和校验和，然后执行 Ruby 语法、`brew style` 和 Git 空白检查。
-5. 验证只有 `Formula/conven.rb` 发生修改，将其暂存，并使用准确消息
-   `update formula for vX.Y.Z` 提交。
-6. 推送 `origin/master`，并验证远程指向 Formula commit。
+4. 从源码发布创建 `bottle/conven-X.Y.Z`，更新稳定 Formula URL 和校验和，校验、
+   提交并推送该分支。
+5. 创建 Formula PR，并记录 PR 编号及准确的 head SHA。
+6. 等待全部 `brew test-bot` job。该 workflow 只在 PR 上构建并上传各平台的
+   `*.bottle.*` artifact。
+7. 使用 PR 编号和已记录的 head SHA 调度 `.github/workflows/publish.yml`。
+   `brew pr-pull` 会拒绝已经变化的 PR head，把 bottle 发布到
+   `conven-X.Y.Z` GitHub Release，应用生成的 `bottle do` 元数据，并推送
+   `master`。
+8. 等待 publish workflow 完成，快进本地 `master`，并验证 Release asset 和
+   Formula bottle 元数据。
+
+如果命令在 Formula PR 创建后失败，会有意保留 PR 和 `bottle/conven-X.Y.Z`
+分支。应从该状态修复或重试；不得移动源码 tag，也不要为同一版本创建第二个 PR。
 
 保留已有 Go 构建和补全生成逻辑。不要复制 `homebrew-gits` 的单文件安装方式，也不要
 把可选工具 `ktctl` 或 `sudo` 设为 Formula 强依赖。
 
-验证两个 commit 的结果：
+验证发布结果：
 
 ```bash
-CONVEN_FORMULA_COMMIT=$(git rev-parse HEAD)
 test "$(git rev-parse "$CONVEN_RELEASE_TAG^{commit}")" = "$CONVEN_SOURCE_COMMIT"
-test "$(git log -1 --pretty=%s)" = "update formula for $CONVEN_RELEASE_TAG"
-test "$(git rev-parse HEAD^)" = "$CONVEN_SOURCE_COMMIT"
 CONVEN_REMOTE_TAG_COMMIT=$(git ls-remote --tags origin \
   "refs/tags/$CONVEN_RELEASE_TAG^{}" | awk 'NR == 1 { print $1 }')
 test "$CONVEN_REMOTE_TAG_COMMIT" = "$CONVEN_SOURCE_COMMIT"
 git fetch origin master
-test "$CONVEN_FORMULA_COMMIT" = "$(git rev-parse origin/master)"
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)"
+grep -q '^  bottle do$' Formula/conven.rb
+gh release view "conven-$CONVEN_RELEASE_VERSION"
 git status --short
 ```
 
 最后一个命令必须没有输出。已经发布的 tag 绝不能移动、删除或重建；源码修正必须发布
 新的 patch 版本。
 
-### 独立 Formula 完成及故障恢复
+### Bottle 发布故障恢复
 
-`--apply` 无法让 tag 发布与之后的 Formula commit 成为原子操作，因为 GitHub 必须先
+Bottle 路径可以续跑。重试前检查不可变源码 tag、Formula 分支、PR 和 Actions run：
+
+```bash
+git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG" \
+  "refs/tags/$CONVEN_RELEASE_TAG^{}"
+git ls-remote --heads origin "refs/heads/bottle/conven-$CONVEN_RELEASE_VERSION"
+gh pr list --head "bottle/conven-$CONVEN_RELEASE_VERSION" --state all
+gh run list --workflow tests.yml --limit 10
+gh run list --workflow publish.yml --limit 10
+```
+
+- PR 尚未创建时，重新执行 `--apply --bottle`；它会复用已验证的源码 tag 和
+  Formula 分支。
+- `brew test-bot` 因瞬时问题失败时，重新运行失败的 workflow，再重试
+  `--apply --bottle`。Formula 分支由脚本确定性生成，不应手工修改；如果源码或
+  Formula 本身有缺陷，由于源码 tag 不可变，必须发布新的 patch 版本。
+- test-bot 已通过但发布失败时，重新执行 `--apply --bottle`；它会针对当前已验证的
+  PR head 调度或续接 `publish.yml`。如果失败的 run 已上传部分
+  `conven-X.Y.Z` Release，重试前先删除该不完整 Release；GitHub 会拒绝重名 asset。
+- 发布已经成功但本地 checkout 落后时，从 `origin/master` 快进 `master` 后重新
+  验证。不要重复发布 asset，也不要移动源码 tag。
+- 如果 `origin/master` 已包含 bottle metadata，但 GitHub Release 不完整或无效，
+  脚本不会移动本地 checkout。修复或删除该不完整 Release 后重新执行
+  `--apply --bottle`；验证通过后会安全快进本地 `master`，且不会移动源码 tag。
+
+### 源码构建 Formula 完成及故障恢复
+
+普通 `--apply` 无法让 tag 发布与之后的 Formula commit 成为原子操作，因为 GitHub 必须先
 生成带 tag 的归档。如果执行失败，采取后续动作前先检查 tag、分支和工作树：
 
 ```bash
@@ -268,9 +327,10 @@ git diff -- Formula/conven.rb
 
 ### 稳定 Formula 门禁
 
-当前 CI 会从 checkout 同时安装并测试稳定 URL 和 HEAD Formula。执行 `--apply` 后应立即
-在一次性 Homebrew 测试机上额外执行以下更严格的稳定 Formula 门禁；手动提交独立完成
-结果前也必须执行。该门禁增加严格 audit 和显式源码构建：
+现有 `ci.yml` 会从 checkout 同时安装并测试稳定 URL 和 HEAD Formula；`tests.yml`
+还会在 Formula PR 上执行 Homebrew 官方 Formula 生命周期并生成 bottle artifact。
+对于普通源码构建 `--apply`，或手动提交独立完成结果前，还应在一次性 Homebrew
+测试机上执行以下更严格的稳定 Formula 门禁：
 
 ```bash
 CONVEN_TEST_TAP="conven-release/conven"
@@ -301,7 +361,8 @@ CONVEN_FORMULA_COMMIT=$(git rev-parse HEAD)
 git push origin master
 ```
 
-等待 tag 和最终 `master` workflow 通过，然后同步本地并检查祖先关系：
+`brew pr-pull` 使用 `GITHUB_TOKEN` 推送后不会再次触发 push workflow。将成功的
+publish workflow 作为最终门禁，然后同步本地并检查祖先关系：
 
 ```bash
 git switch master
@@ -313,7 +374,7 @@ git status --short
 
 ## 5. 验证公开产物
 
-`--apply` 后重新下载归档，并与 Formula 比较：
+`--apply --bottle` 后重新下载归档，并与 Formula 比较：
 
 ```bash
 curl -fL --retry 5 --retry-all-errors --retry-delay 2 \
@@ -338,26 +399,32 @@ CONVEN_ARCHIVE_DIR=$(mktemp -d /tmp/homebrew-conven-release.XXXXXX)
 
 ## 6. 验证 Homebrew tap
 
-刷新 tap 并审计公开 Formula：
+使用完整名称安装已发布的 Formula。需要时该命令会自动安装 tap，并且只信任请求的
+Formula：
 
 ```bash
-brew tap leo1394/conven
 brew update
 brew audit --formula --strict --online "$CONVEN_FORMULA"
+brew fetch --formula --force-bottle "$CONVEN_FORMULA"
 ```
 
 未安装 Conven 时：
 
 ```bash
-brew install --formula --build-from-source "$CONVEN_FORMULA"
+CONVEN_GO_BEFORE=$(brew list --versions go || true)
+brew install --formula "$CONVEN_FORMULA"
+test "$CONVEN_GO_BEFORE" = "$(brew list --versions go || true)"
 ```
 
 已安装稳定版或 HEAD 时，应显式切换，不要使用会保留原安装选项的 `reinstall`：
 
 ```bash
 brew uninstall --formula "$CONVEN_FORMULA"
-brew install --formula --build-from-source "$CONVEN_FORMULA"
+brew install --formula "$CONVEN_FORMULA"
 ```
+
+Bottle 验收不能使用 `--build-from-source`。如果 `brew fetch --force-bottle` 无法为
+当前主机选择 bottle，说明该平台尚未覆盖，普通安装会回退源码构建并安装 Go 构建依赖。
 
 然后验证 Formula 和程序：
 
@@ -687,15 +754,17 @@ channel。随后恢复并验证稳定版本：
 
 ```bash
 brew uninstall --formula "$CONVEN_FORMULA"
-brew install --formula --build-from-source "$CONVEN_FORMULA"
+brew install --formula "$CONVEN_FORMULA"
 brew test "$CONVEN_FORMULA"
 "$(brew --prefix "$CONVEN_FORMULA")/bin/conven" --version
 ```
 
 ## 8. 完成发布
 
-- 确认准备好的源码 commit、tag、Formula commit，以及最终 `origin/master` 的 CI
-  都通过。
-- 在 release notes 中记录 tag、源码归档 URL 和 SHA-256。
+- 确认准备好的源码 commit、Formula PR、每个 test-bot 平台和 `brew pr-pull`
+  workflow 的 CI 都通过，并使用前述验收门禁确认最终 `origin/master` Formula
+  和 bottle 安装。
+- 在 release notes 中记录源码 tag、归档 URL 和 SHA-256、Formula PR，以及
+  `conven-X.Y.Z` bottle Release。
 - 确认中英文 README 的安装说明已经描述新发布的稳定 Formula。
 - 保持 tag 不可变；任何修复都发布新的 patch 版本。

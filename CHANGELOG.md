@@ -1,9 +1,14 @@
 # Changelog
 
-## Unreleased
-
 ## 0.2.8 - 2026-08-12
 
+- Add Homebrew bottle CI for macOS and Linux through `brew test-bot` and
+  `brew pr-pull`, using GitHub Releases for bottle assets.
+- Recommend the one-command, formula-scoped trusted install
+  `brew install leo1394/conven/conven`; matching bottles no longer require Go
+  on the client.
+- Allow `--apply --bottle` to reuse the immutable source tag left by an earlier
+  plain `--apply`, both before and after its Formula finalization completes.
 - Service Selector 改用终端 alternate screen，确认或取消后不再把每次选择过程留在主屏
   scrollback；已选服务使用绿色背景，当前光标指向的已选服务使用红色背景，选中数量
   使用绿色高亮。操作提示精简为 `f`/`A`、Enter 和 `q`/Esc，原有方向键、`j`/`k`

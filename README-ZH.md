@@ -70,11 +70,11 @@ Conven 内置的 materializer 只将生成的 YAML 写入
 ## 安装
 
 ```bash
-brew tap leo1394/conven
-brew install conven
+brew install leo1394/conven/conven
 ```
 
-后续升级：
+完整名称会在需要时自动安装 tap，并且只信任 `conven` Formula。首次安装后，升级可以
+直接使用短名称：
 
 ```bash
 brew update
@@ -82,8 +82,8 @@ brew upgrade conven
 ```
 
 Conven 支持 macOS 和 Linux。只有环境使用 `ktctl` connection driver 时才需要
-安装 `ktctl`；只有 Python 插件需要 Python 3。从源码构建 Conven 需要 Go 1.23
-或更高版本。
+安装 `ktctl`；只有 Python 插件需要 Python 3。匹配 Homebrew bottle 时，客户端
+不需要安装 Go；从源码构建 Conven 需要 Go 1.23 或更高版本。
 
 ## 快速上手
 

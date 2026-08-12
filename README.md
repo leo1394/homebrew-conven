@@ -80,11 +80,11 @@ with the user's normal authority and may modify their working directory.
 ## Install
 
 ```bash
-brew tap leo1394/conven
-brew install conven
+brew install leo1394/conven/conven
 ```
 
-Upgrade later with:
+The fully qualified command installs the tap when needed and trusts only the
+`conven` Formula. After that, the short name works for upgrades:
 
 ```bash
 brew update
@@ -93,7 +93,8 @@ brew upgrade conven
 
 Conven supports macOS and Linux. `ktctl` is required only when the selected
 environment uses the `ktctl` connection driver; Python 3 is required only for
-Python plugins. Building Conven from source requires Go 1.23 or later.
+Python plugins. A matching Homebrew bottle does not require Go on the client;
+building Conven from source requires Go 1.23 or later.
 
 ## Quick start
 
