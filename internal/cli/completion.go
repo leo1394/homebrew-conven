@@ -6,15 +6,33 @@ func Completion(shell string) (string, error) {
 	switch shell {
 	case "bash":
 		return `_conven() {
-    local cur subcommand action options i source_set candidate
+    local cur subcommand action options i source_set candidate command_index action_index
     cur="${COMP_WORDS[COMP_CWORD]}"
-    if [ "$COMP_CWORD" -eq 1 ]; then
-        COMPREPLY=( $(compgen -W "init services config policy plugins doctor help version" -- "$cur") )
+    command_index=0
+    for ((i=1; i<COMP_CWORD; )); do
+        if [ "${COMP_WORDS[i]}" = "-C" ]; then
+            if [ $((i + 1)) -eq "$COMP_CWORD" ]; then
+                compopt -o filenames 2>/dev/null
+                COMPREPLY=()
+                while IFS= read -r candidate; do
+                    COMPREPLY+=("$candidate")
+                done < <(compgen -d -- "$cur")
+                return
+            fi
+            ((i += 2))
+            continue
+        fi
+        command_index=$i
+        break
+    done
+    if [ "$command_index" -eq 0 ]; then
+        COMPREPLY=( $(compgen -W "-C init services config policy plugins doctor help version" -- "$cur") )
         return
     fi
-    subcommand="${COMP_WORDS[1]}"
+    subcommand="${COMP_WORDS[command_index]}"
+    action_index=$((command_index + 1))
     if [ "$subcommand" = "help" ]; then
-        if [ "$COMP_CWORD" -eq 2 ]; then
+        if [ "$COMP_CWORD" -eq "$action_index" ]; then
             COMPREPLY=( $(compgen -W "init services config policy plugins doctor help version" -- "$cur") )
         else
             COMPREPLY=()
@@ -22,7 +40,7 @@ func Completion(shell string) (string, error) {
         return
     fi
     if [ "$subcommand" = "services" ]; then
-        action="${COMP_WORDS[2]}"
+        action="${COMP_WORDS[action_index]}"
         case "$action" in
             --list|--status|--dashboard|--cleanup)
                 options="--help"
@@ -46,7 +64,7 @@ func Completion(shell string) (string, error) {
                 options="--force --help"
                 ;;
             *)
-                if [ "$COMP_CWORD" -eq 2 ]; then
+                if [ "$COMP_CWORD" -eq "$action_index" ]; then
                     options="--list --registry --status --logs --dashboard --start --restart --stop --stop-all --cleanup --help"
                 else
                     options=""
@@ -57,8 +75,8 @@ func Completion(shell string) (string, error) {
         return
     fi
     if [ "$subcommand" = "policy" ]; then
-        action="${COMP_WORDS[2]}"
-        if [ "$COMP_CWORD" -eq 2 ]; then
+        action="${COMP_WORDS[action_index]}"
+        if [ "$COMP_CWORD" -eq "$action_index" ]; then
             options="--edit --import --reset --help"
         else
             case "$action" in
@@ -68,7 +86,7 @@ func Completion(shell string) (string, error) {
                 --import)
                     options="--edit --help"
                     source_set=0
-                    for ((i=3; i<COMP_CWORD; i++)); do
+                    for ((i=action_index + 1; i<COMP_CWORD; i++)); do
                         if [ "${COMP_WORDS[i]}" = "--edit" ]; then
                             options="--help"
                         elif [[ "${COMP_WORDS[i]}" != -* ]]; then
@@ -90,10 +108,10 @@ func Completion(shell string) (string, error) {
         return
     fi
     if [ "$subcommand" = "plugins" ]; then
-        action="${COMP_WORDS[2]}"
-        if [ "$COMP_CWORD" -eq 2 ]; then
+        action="${COMP_WORDS[action_index]}"
+        if [ "$COMP_CWORD" -eq "$action_index" ]; then
             options="--install --list --remove --run --help"
-        elif [ "$action" = "--install" ] && [ "$COMP_CWORD" -eq 3 ]; then
+        elif [ "$action" = "--install" ] && [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
             compopt -o filenames 2>/dev/null
             COMPREPLY=()
             while IFS= read -r candidate; do
@@ -133,8 +151,8 @@ complete -F _conven conven
 		return `#compdef conven
 
 _conven() {
-    local -a commands
-    local action
+    local -a commands root_candidates
+    local action scan
     commands=(
         'init:initialize a Conven workspace'
         'services:manage workspace services'
@@ -145,8 +163,28 @@ _conven() {
         'help:show conven usage'
         'version:show conven version'
     )
+    root_candidates=(
+        '-C:run as if conven was started in a different directory'
+        $commands
+    )
+    scan=2
+    while (( scan < CURRENT )) && [[ $words[scan] == -C ]]; do
+        if (( scan + 1 == CURRENT )); then
+            _directories
+            return
+        fi
+        (( scan += 2 ))
+    done
+    if (( scan == CURRENT )); then
+        _describe 'command or global option' root_candidates
+        return
+    fi
+    if (( scan > 2 )); then
+        words=($words[1] $words[scan,-1])
+        (( CURRENT -= scan - 2 ))
+    fi
     if (( CURRENT == 2 )); then
-        _describe 'command' commands
+        _describe 'command or global option' root_candidates
         return
     fi
     case $words[2] in
@@ -341,58 +379,92 @@ _conven() {
 compdef _conven conven
 `, nil
 	case "fish":
-		return `function __conven_using_subcommand
+		return `function __conven_command_tokens
     set -l tokens (commandline -opc)
+    set -l normalized $tokens[1]
+    set -l index 2
+    while test $index -le (count $tokens)
+        if test "$tokens[$index]" = -C
+            set index (math $index + 2)
+            continue
+        end
+        set -a normalized $tokens[$index..-1]
+        break
+    end
+    printf '%s\n' $normalized
+end
+
+function __conven_global_context
+    set -l tokens (commandline -opc)
+    set -l index 2
+    while test $index -le (count $tokens)
+        test "$tokens[$index]" = -C; or return 1
+        set index (math $index + 2)
+    end
+    return 0
+end
+
+function __conven_without_command
+    set -l raw_tokens (commandline -opc)
+    if test (count $raw_tokens) -ge 2; and test "$raw_tokens[-1]" = -C
+        return 1
+    end
+    set -l tokens (__conven_command_tokens)
+    test (count $tokens) -eq 1
+end
+
+function __conven_using_subcommand
+    set -l tokens (__conven_command_tokens)
     test (count $tokens) -ge 2; or return 1
     contains -- $tokens[2] $argv
 end
 
 function __conven_help_without_command
-    set -l tokens (commandline -opc)
+    set -l tokens (__conven_command_tokens)
     test (count $tokens) -eq 2; or return 1
     test "$tokens[2]" = help
 end
 
 function __conven_services_action
-    set -l tokens (commandline -opc)
+    set -l tokens (__conven_command_tokens)
     test (count $tokens) -ge 3; or return 1
     test "$tokens[2]" = services; or return 1
     test "$tokens[3]" = "$argv[1]"
 end
 
 function __conven_services_without_action
-    set -l tokens (commandline -opc)
+    set -l tokens (__conven_command_tokens)
     test (count $tokens) -eq 2; or return 1
     test "$tokens[2]" = services; or return 1
 end
 
 function __conven_policy_without_action
-    set -l tokens (commandline -opc)
+    set -l tokens (__conven_command_tokens)
     test (count $tokens) -eq 2; or return 1
     test "$tokens[2]" = policy; or return 1
 end
 
 function __conven_plugins_without_action
-    set -l tokens (commandline -opc)
+    set -l tokens (__conven_command_tokens)
     test (count $tokens) -eq 2; or return 1
     test "$tokens[2]" = plugins; or return 1
 end
 
 function __conven_policy_action
-    set -l tokens (commandline -opc)
+    set -l tokens (__conven_command_tokens)
     test (count $tokens) -ge 3; or return 1
     test "$tokens[2]" = policy; or return 1
     test "$tokens[3]" = "$argv[1]"
 end
 
 function __conven_policy_action_without_edit
-    set -l tokens (commandline -opc)
+    set -l tokens (__conven_command_tokens)
     __conven_policy_action "$argv[1]"; or return 1
     not contains -- --edit $tokens[4..-1]
 end
 
 function __conven_policy_import_without_source
-    set -l tokens (commandline -opc)
+    set -l tokens (__conven_command_tokens)
     __conven_policy_action --import; or return 1
     for token in $tokens[4..-1]
         string match -q -- '-*' "$token"; or return 1
@@ -400,14 +472,15 @@ function __conven_policy_import_without_source
     return 0
 end
 
-complete -c conven -f -n '__fish_use_subcommand' -a init -d 'Initialize a Conven workspace'
-complete -c conven -f -n '__fish_use_subcommand' -a services -d 'Manage workspace services'
-complete -c conven -f -n '__fish_use_subcommand' -a config -d 'Read or write Conven configuration'
-complete -c conven -f -n '__fish_use_subcommand' -a policy -d 'Edit, import, or rebuild the workspace policy manifest'
-complete -c conven -f -n '__fish_use_subcommand' -a plugins -d 'Install, list, remove, or run Conven plugins'
-complete -c conven -f -n '__fish_use_subcommand' -a doctor -d 'Validate workspace configuration'
-complete -c conven -f -n '__fish_use_subcommand' -a help -d 'Show conven usage'
-complete -c conven -f -n '__fish_use_subcommand' -a version -d 'Show conven version'
+complete -c conven -f -n '__conven_global_context' -s C -r -a '(__fish_complete_directories)' -d 'Run as if conven was started in another directory'
+complete -c conven -f -n '__conven_without_command' -a init -d 'Initialize a Conven workspace'
+complete -c conven -f -n '__conven_without_command' -a services -d 'Manage workspace services'
+complete -c conven -f -n '__conven_without_command' -a config -d 'Read or write Conven configuration'
+complete -c conven -f -n '__conven_without_command' -a policy -d 'Edit, import, or rebuild the workspace policy manifest'
+complete -c conven -f -n '__conven_without_command' -a plugins -d 'Install, list, remove, or run Conven plugins'
+complete -c conven -f -n '__conven_without_command' -a doctor -d 'Validate workspace configuration'
+complete -c conven -f -n '__conven_without_command' -a help -d 'Show conven usage'
+complete -c conven -f -n '__conven_without_command' -a version -d 'Show conven version'
 complete -c conven -f -n '__conven_using_subcommand help; and __conven_help_without_command' -a 'init services config policy plugins doctor help version' -d 'Show detailed command help'
 complete -c conven -n '__conven_using_subcommand init services config policy plugins doctor' -s h -l help -d 'Show command help'
 complete -c conven -n '__conven_using_subcommand config' -l global -d 'Use the current user global config'

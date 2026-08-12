@@ -18,13 +18,153 @@ import (
 )
 
 func TestVersion(t *testing.T) {
-	var output bytes.Buffer
-	app := App{Output: &output, Error: &output, Version: "test-version"}
-	if code := app.Run([]string{"--version"}); code != 0 {
-		t.Fatalf("exit code = %d", code)
+	for _, arguments := range [][]string{{"version"}, {"-v"}, {"--version"}} {
+		t.Run(arguments[0], func(t *testing.T) {
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Version: "0.2.8", VersionDate: "2026-08-12"}
+			if code := app.Run(arguments); code != 0 {
+				t.Fatalf("exit code = %d", code)
+			}
+			const want = "conven version 0.2.8 (2026-08-12)\nhttps://github.com/leo1394/homebrew-conven\n"
+			if output.String() != want {
+				t.Fatalf("output = %q, want %q", output.String(), want)
+			}
+			if errorOutput.Len() != 0 {
+				t.Fatalf("stderr = %q", errorOutput.String())
+			}
+		})
 	}
-	if output.String() != "conven test-version\n" {
-		t.Fatalf("output = %q", output.String())
+}
+
+func TestWorkingDirectoryOptionSelectsEffectiveWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	workspace := environmentShortcutWorkspaceAt(t, filepath.Join(root, "workspace with spaces"))
+	outside := t.TempDir()
+	t.Setenv("CONVEN_WORKSPACE", outside)
+
+	for _, test := range []struct {
+		name      string
+		arguments []string
+		cwd       string
+	}{
+		{name: "absolute", arguments: []string{"-C", workspace, "services", "--list"}, cwd: outside},
+		{name: "workspace child", arguments: []string{"-C", filepath.Join(workspace, "api"), "services", "--list"}, cwd: outside},
+		{name: "relative and repeated", arguments: []string{"-C", filepath.Base(workspace), "-C", "api", "-C", "..", "services", "--list"}, cwd: root},
+		{name: "empty path leaves directory unchanged", arguments: []string{"-C", "", "services", "--list"}, cwd: workspace},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Cwd: test.cwd, Version: "test"}
+			if code := app.Run(test.arguments); code != 0 {
+				t.Fatalf("exit code = %d: %s", code, errorOutput.String())
+			}
+			if !strings.Contains(output.String(), "api") {
+				t.Fatalf("stdout = %q", output.String())
+			}
+			if errorOutput.Len() != 0 {
+				t.Fatalf("stderr = %q", errorOutput.String())
+			}
+		})
+	}
+}
+
+func TestWorkingDirectoryOptionControlsInitTarget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	outside := t.TempDir()
+	target := filepath.Join(t.TempDir(), "new workspace")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: outside, Version: "test"}
+	if code := app.Run([]string{"-C", target, "init"}); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
+	}
+	if _, err := os.Stat(filepath.Join(target, ".conven", "conven.yaml")); err != nil {
+		t.Fatalf("target manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, ".conven")); !os.IsNotExist(err) {
+		t.Fatalf("init changed original cwd: %v", err)
+	}
+}
+
+func TestWorkingDirectoryOptionAppliesToServiceStart(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := environmentShortcutWorkspace(t)
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: t.TempDir(), Version: "test"}
+	arguments := []string{"-C", workspace, "services", "--start", "--dry-run", "--test", "api"}
+	if code := app.Run(arguments); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
+	}
+	if !strings.Contains(output.String(), "Environment: test\n") || !strings.Contains(output.String(), "Local services: api\n") {
+		t.Fatalf("stdout = %q", output.String())
+	}
+}
+
+func TestWorkingDirectoryOptionResolvesSymlinksLikeChangingDirectory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	workspace := environmentShortcutWorkspaceAt(t, filepath.Join(root, "real-workspace"))
+	aliasRoot := filepath.Join(root, "aliases")
+	if err := os.Mkdir(aliasRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(aliasRoot, "api")
+	if err := os.Symlink(filepath.Join(workspace, "api"), alias); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, arguments := range [][]string{
+		{"-C", alias, "services", "--list"},
+		{"-C", alias, "-C", "..", "services", "--list"},
+	} {
+		var output bytes.Buffer
+		var errorOutput bytes.Buffer
+		app := App{Output: &output, Error: &errorOutput, Cwd: root, Version: "test"}
+		if code := app.Run(arguments); code != 0 {
+			t.Fatalf("%v exit code = %d: %s", arguments, code, errorOutput.String())
+		}
+		if !strings.Contains(output.String(), "api") {
+			t.Fatalf("%v stdout = %q", arguments, output.String())
+		}
+	}
+}
+
+func TestWorkingDirectoryOptionValidatesSyntaxAndPath(t *testing.T) {
+	directory := t.TempDir()
+	file := filepath.Join(t.TempDir(), "workspace-file")
+	if err := os.WriteFile(file, []byte("not a directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name      string
+		arguments []string
+		code      int
+		want      string
+	}{
+		{name: "missing operand", arguments: []string{"-C"}, code: 2, want: "option -C requires a path"},
+		{name: "missing directory", arguments: []string{"-C", filepath.Join(directory, "missing"), "--version"}, code: 1, want: "cannot change to directory"},
+		{name: "file", arguments: []string{"-C", file, "--version"}, code: 1, want: "is not a directory"},
+		{name: "missing command", arguments: []string{"-C", directory}, code: 2, want: "usage:"},
+		{name: "not leading", arguments: []string{"services", "--list", "-C", directory}, code: 2, want: "flag provided but not defined: -C"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Cwd: directory, Version: "test"}
+			if code := app.Run(test.arguments); code != test.code {
+				t.Fatalf("exit code = %d, want %d: stdout=%q stderr=%q", code, test.code, output.String(), errorOutput.String())
+			}
+			if !strings.Contains(errorOutput.String(), test.want) {
+				t.Fatalf("stderr = %q, want %q", errorOutput.String(), test.want)
+			}
+		})
 	}
 }
 
@@ -130,9 +270,12 @@ func TestRootHelpIsConciseAndDescriptive(t *testing.T) {
 		t.Fatalf("exit code = %d", code)
 	}
 	const want = `usage:
-  conven <command> [<args>]
-  conven help [<command>]
-  conven [--help | --version]
+  conven [-C <path>]... <command> [<args>]
+  conven [-C <path>]... help [<command>]
+  conven [-C <path>]... [-h | --help | -v | --version]
+
+Global option:
+   -C <path>  Run as if conven was started in <path> instead of the current working directory
 
 These are common Conven commands:
 
@@ -189,7 +332,7 @@ func TestHelpCommandHandlesHelpAndVersionTopics(t *testing.T) {
 	}{
 		{arguments: []string{"help", "help"}, want: "usage:\n  conven help [<command>]\n"},
 		{arguments: []string{"help", "--help"}, want: "usage:\n  conven help [<command>]\n"},
-		{arguments: []string{"help", "version"}, want: "usage:\n  conven version\n  conven --version\n"},
+		{arguments: []string{"help", "version"}, want: "usage:\n  conven version\n  conven -v\n  conven --version\n"},
 	} {
 		var output bytes.Buffer
 		var errorOutput bytes.Buffer
@@ -1777,6 +1920,13 @@ func TestCompletions(t *testing.T) {
 			if !strings.Contains(completion, "conven") {
 				t.Fatalf("completion for %s is empty", shell)
 			}
+			workingDirectoryMarker := "-C"
+			if shell == "fish" {
+				workingDirectoryMarker = "-s C"
+			}
+			if !strings.Contains(completion, workingDirectoryMarker) {
+				t.Fatalf("completion for %s is missing -C", shell)
+			}
 			for _, command := range []string{"init", "services", "config", "policy", "plugins", "doctor"} {
 				if !strings.Contains(completion, command) {
 					t.Fatalf("completion for %s is missing %s", shell, command)
@@ -1822,6 +1972,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`compgen -W "init services config policy plugins doctor help version"`,
+		`compgen -W "-C init services config policy plugins doctor help version"`,
+		`compgen -d -- "$cur"`,
 		`if [ "$subcommand" = "help" ]`,
 		`if [ "$subcommand" = "services" ]`,
 		`--list|--status|--dashboard|--cleanup)`,
@@ -1862,6 +2014,9 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
+		`root_candidates=(`,
+		`'-C:run as if conven was started in a different directory'`,
+		`_directories`,
 		`case $words[2] in`,
 		`'1:command:(init services config policy plugins doctor help version)'`,
 		`'services:manage workspace services'`,
@@ -1905,6 +2060,9 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
+		`function __conven_command_tokens`,
+		`function __conven_without_command`,
+		`__conven_global_context' -s C -r`,
 		`function __conven_using_subcommand`,
 		`function __conven_help_without_command`,
 		`__conven_using_subcommand help; and __conven_help_without_command`,
@@ -1915,9 +2073,9 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`function __conven_policy_action_without_edit`,
 		`function __conven_policy_import_without_source`,
 		`function __conven_plugins_without_action`,
-		`__fish_use_subcommand' -a services`,
-		`__fish_use_subcommand' -a policy`,
-		`__fish_use_subcommand' -a plugins`,
+		`__conven_without_command' -a services`,
+		`__conven_without_command' -a policy`,
+		`__conven_without_command' -a plugins`,
 		`__conven_services_without_action' -l list`,
 		`__conven_services_without_action' -l registry`,
 		`__conven_services_without_action' -l stop-all`,
@@ -1954,6 +2112,56 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		if strings.Contains(fish, removed) {
 			t.Fatalf("fish completion still exposes legacy top-level command marker %q", removed)
 		}
+	}
+}
+
+func TestBashCompletionSupportsWorkingDirectoryOption(t *testing.T) {
+	completion, err := Completion("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		words string
+		want  string
+	}{
+		{name: "command", words: "conven -C /tmp ser", want: "services\n"},
+		{name: "repeated command", words: "conven -C /tmp -C .. doc", want: "doctor\n"},
+		{name: "service action", words: "conven -C /tmp services --sta", want: "--status\n--start\n"},
+		{name: "service flag", words: "conven -C /tmp services --start --tes", want: "--test\n"},
+		{name: "help topic", words: "conven -C /tmp help ser", want: "services\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := completion + "\nCOMP_WORDS=(" + test.words + ")\nCOMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_conven\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
+			output, err := exec.Command("bash", "-c", script).CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash completion failed: %v: %s", err, output)
+			}
+			if string(output) != test.want {
+				t.Fatalf("completion = %q, want %q", output, test.want)
+			}
+		})
+	}
+}
+
+func TestBashCompletionPreservesSpacesInWorkingDirectoryCandidates(t *testing.T) {
+	completion, err := Completion("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.Mkdir(filepath.Join(directory, "workspace with spaces"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := completion + "\nCOMP_WORDS=(conven -C workspace)\nCOMP_CWORD=2\n_conven\nprintf '<%s>\\n' \"${COMPREPLY[@]}\"\n"
+	command := exec.Command("bash", "-c", script)
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash completion failed: %v: %s", err, output)
+	}
+	if string(output) != "<workspace with spaces>\n" {
+		t.Fatalf("completion = %q", output)
 	}
 }
 
@@ -2078,7 +2286,11 @@ func TestFlagsMayFollowServiceArguments(t *testing.T) {
 
 func environmentShortcutWorkspace(t *testing.T) string {
 	t.Helper()
-	workspace := t.TempDir()
+	return environmentShortcutWorkspaceAt(t, t.TempDir())
+}
+
+func environmentShortcutWorkspaceAt(t *testing.T, workspace string) string {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Join(workspace, ".conven"), 0700); err != nil {
 		t.Fatal(err)
 	}

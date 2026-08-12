@@ -129,10 +129,10 @@ git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG"
 
 | 位置 | 必须修改的内容 |
 | --- | --- |
-| `cmd/conven/main.go` | 设置 `version` 变量 |
+| `cmd/conven/main.go` | 设置 `version` 和 `versionDate` 变量 |
 | `VERSION.txt` | 仅保留 `X.Y.Z` 和末尾换行 |
 | `CHANGELOG.md` | 添加发布日期及用户可见变化 |
-| `Formula/conven.rb` test | HEAD 构建应断言 `conven X.Y.Z` |
+| `Formula/conven.rb` test | HEAD 构建应断言准确的两行版本输出 |
 | `README.md` / `README-ZH.md` | 仅在安装方式或行为变化时更新 |
 | `RELEASING.md` / `RELEASING-ZH.md` | 发布流程变化时保持中英文同步 |
 
@@ -148,14 +148,14 @@ git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG"
 )
 ```
 
-该动作更新 `cmd/conven/main.go`、`VERSION.txt` 和 Formula 版本断言，执行发布检查，
-并校验 `.github/workflows/tests.yml` 和 `.github/workflows/publish.yml`；不会提交、
-创建 tag、推送、创建 PR 或调度 workflow。
+该动作更新 `cmd/conven/main.go` 中的 `version` 和 `versionDate` 变量、`VERSION.txt`
+以及 Formula 版本断言，执行发布检查，并校验 `.github/workflows/tests.yml` 和
+`.github/workflows/publish.yml`；不会提交、创建 tag、推送、创建 PR 或调度 workflow。
 
 检查所有版本位置：
 
 ```bash
-rg -n "$CONVEN_RELEASE_VERSION|version =|assert_equal \"conven " \
+rg -n "$CONVEN_RELEASE_VERSION|version(Date)? =|assert_equal \"conven " \
   cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb README.md README-ZH.md
 ```
 
@@ -185,10 +185,12 @@ git diff
 git status --short
 ```
 
-构建出的程序必须输出目标版本，例如：
+构建出的程序必须输出目标版本、发布日期和规范项目 URL。`conven --version`、
+`conven -v` 与 `conven version` 必须输出完全相同的两行内容，例如：
 
 ```text
-conven X.Y.Z
+conven version X.Y.Z (YYYY-MM-DD)
+https://github.com/leo1394/homebrew-conven
 ```
 
 不能只依赖自动检查，还要人工审阅 diff，确认其中没有凭据、运行状态、日志或无关文件。

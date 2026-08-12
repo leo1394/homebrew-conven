@@ -155,10 +155,10 @@ Update these locations:
 
 | Location | Required change |
 | --- | --- |
-| `cmd/conven/main.go` | Set the `version` variable |
+| `cmd/conven/main.go` | Set the `version` and `versionDate` variables |
 | `VERSION.txt` | Write only `X.Y.Z` and a trailing newline |
 | `CHANGELOG.md` | Add the release date and user-visible changes |
-| `Formula/conven.rb` test | Expect `conven X.Y.Z` for the HEAD build |
+| `Formula/conven.rb` test | Expect the exact two-line version output for the HEAD build |
 | `README.md` / `README-ZH.md` | Update only when installation or behavior changed |
 | `RELEASING.md` / `RELEASING-ZH.md` | Keep both languages aligned when the release workflow changes |
 
@@ -176,15 +176,16 @@ working directory unchanged:
 )
 ```
 
-The action updates `cmd/conven/main.go`, `VERSION.txt`, and the Formula version
-assertion, runs the release checks, and validates `.github/workflows/tests.yml`
-and `.github/workflows/publish.yml`. It does not commit, tag, push, open a pull
+The action updates the `version` and `versionDate` variables in
+`cmd/conven/main.go`, `VERSION.txt`, and the Formula version assertion, runs the
+release checks, and validates `.github/workflows/tests.yml` and
+`.github/workflows/publish.yml`. It does not commit, tag, push, open a pull
 request, or dispatch a workflow.
 
 Check every version occurrence:
 
 ```bash
-rg -n "$CONVEN_RELEASE_VERSION|version =|assert_equal \"conven " \
+rg -n "$CONVEN_RELEASE_VERSION|version(Date)? =|assert_equal \"conven " \
   cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb README.md README-ZH.md
 ```
 
@@ -215,10 +216,13 @@ git diff
 git status --short
 ```
 
-The built binary must print the intended version, for example:
+The built binary must print the intended version, release date, and canonical
+project URL. `conven --version`, `conven -v`, and `conven version` must produce
+the same exact two-line output, for example:
 
 ```text
-conven X.Y.Z
+conven version X.Y.Z (YYYY-MM-DD)
+https://github.com/leo1394/homebrew-conven
 ```
 
 Review the diff rather than relying only on automated checks. In particular,

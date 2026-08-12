@@ -60,6 +60,15 @@ jobs:
 
           conven_prefix="$(brew --prefix "$tap/conven")"
           conven_bin="$conven_prefix/bin/conven"
+          expected_version="$(<VERSION.txt)"
+          expected_version_date="$(sed -nE 's/^var versionDate = "([0-9]{4}-[0-9]{2}-[0-9]{2})"$/\1/p' cmd/conven/main.go)"
+          test -n "$expected_version_date"
+          test "$("$conven_bin" --version)" = "$(printf 'conven version %s (%s)\n%s' "$expected_version" "$expected_version_date" 'https://github.com/leo1394/homebrew-conven')"
+          c_workspace="$RUNNER_TEMP/conven-c-workspace"
+          mkdir -p "$c_workspace"
+          "$conven_bin" -C "$c_workspace" init
+          c_services="$("$conven_bin" -C "$c_workspace" services --list)"
+          grep -Fq user-svc <<< "$c_services"
           test -s "$conven_prefix/share/man/man1/conven.1"
           MANPATH="$conven_prefix/share/man" man -w conven | grep -Fq "$conven_prefix/share/man/man1/conven.1"
           completion_dir="$RUNNER_TEMP/conven-completions"
@@ -70,6 +79,9 @@ jobs:
           grep -Fq "complete -F _conven conven" "$completion_dir/conven.bash"
           grep -Fq "#compdef conven" "$completion_dir/_conven"
           grep -Fq "complete -c conven" "$completion_dir/conven.fish"
+          grep -Fq -- "-C init services" "$completion_dir/conven.bash"
+          grep -Fq -- "'-C:run as if conven was started" "$completion_dir/_conven"
+          grep -Fq -- "-s C" "$completion_dir/conven.fish"
           bash_top="$(grep -m 1 -F 'compgen -W "' "$completion_dir/conven.bash" | sed -E 's/.*compgen -W "([^"]+)".*/\1/')"
           for command in init services config policy plugins doctor help version; do
             case " $bash_top " in
@@ -77,7 +89,7 @@ jobs:
               *) echo "missing bash top-level completion: $command" >&2; exit 1 ;;
             esac
             grep -Fq "        '$command:" "$completion_dir/_conven"
-            grep -Fq "complete -c conven -f -n '__fish_use_subcommand' -a $command " "$completion_dir/conven.fish"
+            grep -Fq "complete -c conven -f -n '__conven_without_command' -a $command " "$completion_dir/conven.fish"
           done
           for command in discover list status logs start restart stop; do
             case " $bash_top " in
@@ -87,7 +99,7 @@ jobs:
               echo "retained zsh top-level completion: $command" >&2
               exit 1
             fi
-            if grep -Fq "complete -c conven -f -n '__fish_use_subcommand' -a $command " "$completion_dir/conven.fish"; then
+            if grep -Fq "complete -c conven -f -n '__conven_without_command' -a $command " "$completion_dir/conven.fish"; then
               echo "retained fish top-level completion: $command" >&2
               exit 1
             fi

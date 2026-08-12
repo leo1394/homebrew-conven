@@ -23,8 +23,13 @@ class Conven < Formula
 
   test do
     ENV["HOME"] = testpath.to_s
-    if build.head?
-      assert_equal "conven 0.2.8\n", shell_output("#{bin}/conven --version")
+    new_cli = build.head? || version >= "0.2.9"
+    if new_cli
+      expected_version = <<~EOS
+        conven version 0.2.9 (2026-08-12)
+        https://github.com/leo1394/homebrew-conven
+      EOS
+      assert_equal expected_version, shell_output("#{bin}/conven --version")
     else
       expected_version = "conven #{version}\n"
       actual_version = shell_output("#{bin}/conven --version")
@@ -68,6 +73,10 @@ class Conven < Formula
       assert_equal expected_manifest, import_backups.first.read
     end
 
+    if new_cli
+      system bin/"conven", "-C", workspace, "services", "--list"
+    end
+
     assert_path_exists bash_completion/"conven"
     assert_path_exists zsh_completion/"_conven"
     assert_path_exists fish_completion/"conven.fish"
@@ -86,6 +95,7 @@ class Conven < Formula
         top_level = completion[/compgen -W "([^"]+)"/, 1]
         refute_nil top_level
         candidates = top_level.split
+        assert_includes candidates, "-C" if new_cli
         top_level_commands.each do |command|
           assert_includes candidates, command
         end
@@ -100,11 +110,12 @@ class Conven < Formula
           refute_includes completion, "        '#{command}:"
         end
       when "fish"
+        fish_root_condition = new_cli ? "__conven_without_command" : "__fish_use_subcommand"
         top_level_commands.each do |command|
-          assert_includes completion, "complete -c conven -f -n '__fish_use_subcommand' -a #{command} "
+          assert_includes completion, "complete -c conven -f -n '#{fish_root_condition}' -a #{command} "
         end
         removed_top_level_commands.each do |command|
-          refute_includes completion, "complete -c conven -f -n '__fish_use_subcommand' -a #{command} "
+          refute_includes completion, "complete -c conven -f -n '#{fish_root_condition}' -a #{command} "
         end
       end
       service_actions.each do |action|
@@ -129,6 +140,7 @@ class Conven < Formula
         end
       end
       if shell == "fish"
+        assert_includes completion, "-s C" if new_cli
         assert_includes completion, "-l dev"
         assert_includes completion, "-l test"
         assert_includes completion, "-l tail"
@@ -137,6 +149,7 @@ class Conven < Formula
         refute_includes completion, "-l workspace"
         refute_includes completion, "-l config"
       else
+        assert_includes completion, "-C" if new_cli
         assert_includes completion, "--dev"
         assert_includes completion, "--test"
         assert_includes completion, "--tail"

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -23,6 +24,7 @@ type App struct {
 	Context      context.Context
 	Cwd          string
 	Version      string
+	VersionDate  string
 	PolicyEditor func(context.Context, string) error
 	StartReplacementConfirmer func(context.Context, []string) (bool, error)
 }
@@ -38,6 +40,8 @@ type commonFlags struct {
 
 type logDisplayMode int
 
+const projectHomepage = "https://github.com/leo1394/homebrew-conven"
+
 const (
 	logDisplaySnapshot logDisplayMode = iota
 	logDisplayPlain
@@ -46,6 +50,11 @@ const (
 
 func (app App) Run(arguments []string) int {
 	app = app.withDefaults()
+	var code int
+	app, arguments, code = app.consumeWorkingDirectories(arguments)
+	if code != 0 {
+		return code
+	}
 	if len(arguments) == 0 {
 		app.printUsage(app.Error)
 		return 2
@@ -57,7 +66,7 @@ func (app App) Run(arguments []string) int {
 	case "help":
 		return app.runHelp(arguments[1:])
 	case "-v", "--version", "version":
-		fmt.Fprintf(app.Output, "conven %s\n", app.Version)
+		app.printVersion()
 		return 0
 	case "init":
 		return app.runInit(arguments[1:])
@@ -79,6 +88,31 @@ func (app App) Run(arguments []string) int {
 	}
 }
 
+func (app App) consumeWorkingDirectories(arguments []string) (App, []string, int) {
+	for len(arguments) > 0 && arguments[0] == "-C" {
+		if len(arguments) < 2 {
+			style := terminal.New(app.Error)
+			fmt.Fprintln(app.Error, style.Failure("conven: option -C requires a path"))
+			return app, nil, 2
+		}
+		requested := arguments[1]
+		directory := requested
+		if !filepath.IsAbs(directory) && app.Cwd != "" {
+			directory = filepath.Join(app.Cwd, directory)
+		}
+		resolved, err := config.ResolveDirectory(directory)
+		if err != nil {
+			return app, nil, app.fail(fmt.Errorf("cannot change to directory %q: %w", requested, err))
+		}
+		app.Cwd, err = filepath.EvalSymlinks(resolved)
+		if err != nil {
+			return app, nil, app.fail(fmt.Errorf("cannot change to directory %q: resolve symbolic links: %w", requested, err))
+		}
+		arguments = arguments[2:]
+	}
+	return app, arguments, 0
+}
+
 func (app App) runHelp(arguments []string) int {
 	if len(arguments) == 0 {
 		app.printUsage(app.Output)
@@ -95,7 +129,7 @@ func (app App) runHelp(arguments []string) int {
 		app.printHelpUsage(app.Output)
 		return 0
 	case "version":
-		fmt.Fprint(app.Output, "usage:\n  conven version\n  conven --version\n")
+		fmt.Fprint(app.Output, "usage:\n  conven version\n  conven -v\n  conven --version\n")
 		return 0
 	case "init":
 		return app.runInit([]string{"--help"})
@@ -710,6 +744,9 @@ func (app App) withDefaults() App {
 	if app.Version == "" {
 		app.Version = "dev"
 	}
+	if app.VersionDate == "" {
+		app.VersionDate = "unknown"
+	}
 	if app.PolicyEditor == nil {
 		input := app.Input
 		output := app.Output
@@ -730,9 +767,12 @@ func (app App) withDefaults() App {
 
 func (app App) printUsage(output io.Writer) {
 	fmt.Fprint(output, `usage:
-  conven <command> [<args>]
-  conven help [<command>]
-  conven [--help | --version]
+  conven [-C <path>]... <command> [<args>]
+  conven [-C <path>]... help [<command>]
+  conven [-C <path>]... [-h | --help | -v | --version]
+
+Global option:
+   -C <path>  Run as if conven was started in <path> instead of the current working directory
 
 These are common Conven commands:
 
@@ -748,6 +788,10 @@ run and inspect local services
 
 Run 'conven help <command>' or 'conven <command> --help' for detailed help.
 `)
+}
+
+func (app App) printVersion() {
+	fmt.Fprintf(app.Output, "conven version %s (%s)\n%s\n", app.Version, app.VersionDate, projectHomepage)
 }
 
 func (app App) printHelpUsage(output io.Writer) {

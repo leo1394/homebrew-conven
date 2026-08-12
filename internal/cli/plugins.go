@@ -112,7 +112,7 @@ func (app App) printPluginsUsage(output io.Writer) {
   conven plugins --run NAME [plugin args...]
 
 --install copies exactly one Python file into ~/.conven/plugins. Relative source
-paths are resolved from the current working directory. If the name already
+paths are resolved from the effective working directory. If the name already
 exists, an interactive terminal asks whether to overwrite it; non-interactive
 installs fail without changing the existing plugin. --remove deletes exactly one
 installed plugin. Arguments after NAME are passed unchanged to the selected

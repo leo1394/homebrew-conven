@@ -1,12 +1,12 @@
-.TH CONVEN 1 "August 11, 2026" "Conven" "User Commands"
+.TH CONVEN 1 "August 12, 2026" "Conven" "User Commands"
 .SH NAME
 conven \- run a focused set of local microservices with remote dependencies
 .SH SYNOPSIS
 .nf
-\fBconven\fR \fIcommand\fR [\fIargs\fR]
-\fBconven help\fR [\fIcommand\fR]
-\fBconven\fR [\fB\-h\fR | \fB\-\-help\fR]
-\fBconven\fR [\fB\-v\fR | \fB\-\-version\fR]
+\fBconven\fR [\fB\-C\fR \fIpath\fR]... \fIcommand\fR [\fIargs\fR]
+\fBconven\fR [\fB\-C\fR \fIpath\fR]... \fBhelp\fR [\fIcommand\fR]
+\fBconven\fR [\fB\-C\fR \fIpath\fR]... [\fB\-h\fR | \fB\-\-help\fR]
+\fBconven\fR [\fB\-C\fR \fIpath\fR]... [\fB\-v\fR | \fB\-\-version\fR]
 .fi
 .SH DESCRIPTION
 .B conven
@@ -19,7 +19,7 @@ under
 .PP
 Conven discovers the nearest canonical
 .I .conven
-workspace from the current directory.
+workspace from the effective working directory.
 The workspace manifest declares services, environments, connections, runners,
 ports, dependencies, and policy-backed configuration adapters.
 .PP
@@ -28,10 +28,20 @@ prove that remote service registration is disabled or not applicable and that
 the service listener is restricted to a loopback address.
 Conven does not create a reverse route from the remote cluster to local
 services.
+.SH GLOBAL OPTIONS
+.TP
+.BI \-C " path"
+Run as if Conven was started in
+.I path
+instead of the current working directory.
+This option may be repeated. A relative path is resolved against the effective
+working directory established by any preceding
+.B \-C
+option.
 .SH COMMANDS
 .TP
 .B init
-Initialize the current workspace.
+Initialize a workspace in the effective working directory.
 Conven scans direct-child Git repositories for supported service layouts and
 creates
 .IR .conven/conven.yaml .
@@ -64,6 +74,7 @@ is required.
 Install, list, remove, or run Python plugins from
 .IR ~/.conven/plugins .
 Project-specific plugins are not implicitly bundled with Conven.
+Relative install paths are resolved from the effective working directory.
 Use
 .BR "\-\-install python-file" ,
 .BR \-\-list ,
@@ -72,7 +83,7 @@ or
 .BR "\-\-run name [plugin-args...]" .
 .TP
 .B services
-List, start, restart, stop, clean, and inspect services in the current
+List, start, restart, stop, clean, and inspect services in the effective
 workspace.
 See
 .B SERVICES ACTIONS
@@ -90,7 +101,15 @@ is equivalent to
 .BR "conven services \-\-help" .
 .TP
 .B version
-Print the Conven version.
+Print the Conven version, release date, and project homepage in this two-line
+format:
+.nf
+    conven version VERSION (YYYY-MM-DD)
+    https://github.com/leo1394/homebrew-conven
+.fi
+The
+.BR \-v " and " \-\-version
+forms are equivalent.
 .SH SERVICES ACTIONS
 The action flag must be the first argument after
 .BR "conven services" .
@@ -198,7 +217,7 @@ to request the Dashboard explicitly. If both mode options appear, the last one
 selects the effective mode.
 .TP
 .B "\-\-stop [\-\-force] (service...|\-\-all)"
-Stop selected services or the entire current workspace session.
+Stop selected services or the entire effective workspace session.
 Stopping all services releases the workspace connection lease but preserves
 .I runtime/current
 until the next fresh start.
@@ -421,7 +440,9 @@ Invalid syntax, unknown command, unknown action, or unsupported flag.
 .SH EXAMPLES
 .nf
 conven init
+conven \-C /path/of/workspace services \-\-start \-\-test service1 service2
 conven help services
+conven \-\-version
 conven policy \-\-edit
 conven doctor \-\-test \-\-namespace test
 conven services \-\-start \-\-dry\-run api service-a

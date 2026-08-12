@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.9 - 2026-08-12
+
+- Add the global `-C <path>` option before the command to run Conven as if it
+  started in another working directory; update the man page and Bash, Zsh, and
+  Fish completions for the new option.
+- Change `conven --version`, `conven -v`, and `conven version` to print the
+  version, release date, and canonical project URL as exact two-line output.
+
 ## 0.2.8 - 2026-08-12
 
 - Add Homebrew bottle CI for macOS and Linux through `brew test-bot` and
