@@ -78,6 +78,17 @@ standard macOS runner. Bottle publication uses GitHub Releases, not GHCR.
 design; only `tests.yml` produces artifacts consumable by `brew pr-pull`, and
 its push run performs syntax checks without publishing bottles.
 
+Do not merge or close the generated Bottle PR while `publish.sh` is running.
+The script publishes the artifacts first and Homebrew completes the Formula
+update. If the PR was merged after successful test-bot jobs but before
+publication, rerun the same command. Conven validates the merged PR base,
+head, merge commit, unchanged bootstrap Formula, and successful workflow before
+recovering the existing artifacts. Conflicting or partial release state is
+rejected rather than overwritten. Recovery accepts the standard two-parent
+GitHub merge commit; squash and rebase merges are rejected. A target/version
+release lock also prevents two local `publish.sh` processes from dispatching
+the same publication concurrently.
+
 ### One-time repository bootstrap
 
 Complete this section before the normal preflight when `origin` does not exist.

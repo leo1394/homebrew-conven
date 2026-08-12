@@ -62,6 +62,13 @@ rebuild 为 `0`，同时更新临时 block。该流程不会移动或重建源�
 打包。Formula PR 会有意同时运行二者；只有 `tests.yml` 生成可供 `brew pr-pull`
 使用的 artifact，它在 push 事件中只做语法检查，不发布 bottle。
 
+`publish.sh` 运行期间不要手动合并或关闭生成的 Bottle PR。脚本会先发布 artifacts，
+再由 Homebrew 完成 Formula 更新。如果 test-bot 已成功、但 PR 在发布前被合并，重新
+执行相同命令即可。Conven 会验证该 PR 的 base、head、merge commit、未被修改的
+bootstrap Formula 和成功 workflow，再复用现有 artifacts；遇到冲突或不完整 Release
+时会拒绝覆盖。恢复仅接受 GitHub 标准的双亲 merge commit，squash/rebase merge 会被
+拒绝。target/version 级发布锁也会阻止两个本地 `publish.sh` 进程并发派发同一次发布。
+
 ### 一次性仓库初始化
 
 如果还没有 `origin`，必须先完成本节，再执行通用预检。创建公开仓库并配置远端：

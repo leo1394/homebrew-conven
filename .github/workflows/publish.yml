@@ -10,9 +10,18 @@ on:
       head_sha:
         description: Expected pull request head commit SHA
         required: true
+      recovery_base_sha:
+        description: Merged pull request base SHA for interrupted publication recovery
+        required: false
+      recovery_merge_sha:
+        description: Merged pull request merge SHA for interrupted publication recovery
+        required: false
+      recovery_master_sha:
+        description: Expected master SHA for interrupted publication recovery
+        required: false
 
 concurrency:
-  group: "brew-pr-pull-${{ inputs.pull_request }}"
+  group: "brew-pr-pull-${{ github.repository }}"
   cancel-in-progress: false
 
 permissions: {}
@@ -42,15 +51,119 @@ jobs:
 
       - name: Pull bottles
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_GIT_COMMITTER_NAME: ${{ steps.git_setup.outputs.name }}
           HOMEBREW_GIT_COMMITTER_EMAIL: ${{ steps.git_setup.outputs.email }}
           HEAD_SHA: ${{ inputs.head_sha }}
           PULL_REQUEST: ${{ inputs.pull_request }}
+          RECOVERY_BASE_SHA: ${{ inputs.recovery_base_sha }}
+          RECOVERY_MERGE_SHA: ${{ inputs.recovery_merge_sha }}
+          RECOVERY_MASTER_SHA: ${{ inputs.recovery_master_sha }}
         run: |
+          if [[ -n "$RECOVERY_BASE_SHA" || -n "$RECOVERY_MERGE_SHA" || -n "$RECOVERY_MASTER_SHA" ]]; then
+            [[ "$RECOVERY_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$RECOVERY_MERGE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$RECOVERY_MASTER_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$GITHUB_SHA" == "$RECOVERY_MASTER_SHA" ]]
+            pull_request_state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST" \
+              --jq '[.state, .merged, .head.sha, .head.ref, .base.sha, .base.ref, .merge_commit_sha] | @tsv')
+            IFS=$'\t' read -r state merged head head_branch base base_branch merge <<< "$pull_request_state"
+            [[ "$state" == "closed" && "$merged" == "true" ]]
+            [[ "$head" == "$HEAD_SHA" ]]
+            [[ "$base" == "$RECOVERY_BASE_SHA" ]]
+            [[ "$base_branch" == "master" ]]
+            [[ "$merge" == "$RECOVERY_MERGE_SHA" ]]
+            tap_path=$(brew --repo "$GITHUB_REPOSITORY")
+            git -C "$tap_path" fetch --quiet origin master
+            [[ "$(git -C "$tap_path" symbolic-ref --short HEAD)" == "master" ]]
+            [[ "$(git -C "$tap_path" rev-parse HEAD)" == "$RECOVERY_MASTER_SHA" ]]
+            [[ "$(git -C "$tap_path" rev-parse origin/master)" == "$RECOVERY_MASTER_SHA" ]]
+            merge_parents=$(git -C "$tap_path" rev-list --parents -n 1 "$RECOVERY_MERGE_SHA")
+            [[ "$merge_parents" == "$RECOVERY_MERGE_SHA $RECOVERY_BASE_SHA $HEAD_SHA" ]]
+            git -C "$tap_path" merge-base --is-ancestor "$RECOVERY_MERGE_SHA" "$RECOVERY_MASTER_SHA"
+            [[ "$(git -C "$tap_path" rev-parse "$RECOVERY_MERGE_SHA^{tree}")" == \
+              "$(git -C "$tap_path" rev-parse "$HEAD_SHA^{tree}")" ]]
+            [[ "$(git -C "$tap_path" diff --name-only "$RECOVERY_BASE_SHA" "$HEAD_SHA")" == \
+              "Formula/conven.rb" ]]
+            [[ "$(git -C "$tap_path" diff --name-status "$RECOVERY_BASE_SHA" "$HEAD_SHA")" == \
+              $'M\tFormula/conven.rb' ]]
+            [[ "$(git -C "$tap_path" ls-tree "$HEAD_SHA" -- Formula/conven.rb | awk '{print $1 " " $2}')" == \
+              "100644 blob" ]]
+            [[ "$(git -C "$tap_path" rev-parse "$RECOVERY_MERGE_SHA:Formula/conven.rb")" == \
+              "$(git -C "$tap_path" rev-parse "$RECOVERY_MASTER_SHA:Formula/conven.rb")" ]]
+            bottle_count=$(git -C "$tap_path" show "$HEAD_SHA:Formula/conven.rb" | \
+              grep -Ec '^  bottle do[[:space:]]*$' || true)
+            bottle_sha_count=$(git -C "$tap_path" show "$HEAD_SHA:Formula/conven.rb" | awk '
+              /^  bottle do[[:space:]]*$/ { bottle = 1; next }
+              bottle && /^  end[[:space:]]*$/ { bottle = 0; next }
+              bottle && /^[[:space:]]+sha256[[:space:]]/ { count++ }
+              END { print count + 0 }
+            ')
+            [[ "$bottle_count" == "1" && "$bottle_sha_count" == "0" ]]
+            release_name=$(git -C "$tap_path" show "$HEAD_SHA:Formula/conven.rb" | \
+              sed -nE 's|^[[:space:]]+root_url ".*/releases/download/([^\"]+)"$|\1|p')
+            [[ "$release_name" =~ ^conven-[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            [[ "$head_branch" == "bottle/$release_name" ]]
+            git -C "$tap_path" show "$HEAD_SHA:Formula/conven.rb" | grep -Fqx \
+              "    root_url \"https://github.com/$GITHUB_REPOSITORY/releases/download/$release_name\""
+            release_error="$RUNNER_TEMP/conven-release-check.err"
+            if gh api --method GET "repos/$GITHUB_REPOSITORY/releases/tags/$release_name" \
+              --silent 2>"$release_error"; then
+              echo "release $release_name already exists; refusing recovery overwrite" >&2
+              exit 1
+            elif ! grep -Fq '(HTTP 404)' "$release_error"; then
+              cat "$release_error" >&2
+              exit 1
+            fi
+            test_runs=$(gh api --method GET --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/tests.yml/runs" -f per_page=100 \
+              --jq ".workflow_runs[] | select(.event == \"pull_request\" and .head_branch == \"$head_branch\" and .head_sha == \"$HEAD_SHA\") | [.created_at, .id, .status, (.conclusion // \"\")] | @tsv")
+            test_run=$(LC_ALL=C awk -F '\t' '
+              NF >= 3 && ($1 > latest || ($1 == latest && $2 + 0 > id + 0)) {
+                latest = $1
+                id = $2
+                status = $3
+                conclusion = $4
+              }
+              END { if (id != "") printf "%s\t%s\t%s\n", id, status, conclusion }
+            ' <<< "$test_runs")
+            IFS=$'\t' read -r test_run_id test_status test_conclusion <<< "$test_run"
+            [[ -n "$test_run_id" && "$test_status" == "completed" && "$test_conclusion" == "success" ]]
+            GITHUB_SHA="$RECOVERY_BASE_SHA" brew pr-pull --debug --keep-old --clean \
+              --no-cherry-pick --tap="$GITHUB_REPOSITORY" --head-sha="$HEAD_SHA" "$PULL_REQUEST"
+            exit 0
+          fi
           brew pr-pull --debug --keep-old --tap="$GITHUB_REPOSITORY" --head-sha="$HEAD_SHA" "$PULL_REQUEST"
 
+      - name: Push recovered bottle commit
+        if: ${{ inputs.recovery_base_sha != '' }}
+        env:
+          RECOVERY_MASTER_SHA: ${{ inputs.recovery_master_sha }}
+        run: |
+          tap_path=$(brew --repo "$GITHUB_REPOSITORY")
+          git -C "$tap_path" fetch --quiet origin master
+          [[ "$(git -C "$tap_path" symbolic-ref --short HEAD)" == "master" ]]
+          [[ "$(git -C "$tap_path" rev-parse origin/master)" == "$RECOVERY_MASTER_SHA" ]]
+          git -C "$tap_path" merge-base --is-ancestor "$RECOVERY_MASTER_SHA" HEAD
+          [[ "$(git -C "$tap_path" rev-list --count "$RECOVERY_MASTER_SHA..HEAD")" == "1" ]]
+          [[ "$(git -C "$tap_path" diff --name-only "$RECOVERY_MASTER_SHA" HEAD)" == \
+            "Formula/conven.rb" ]]
+          [[ "$(git -C "$tap_path" diff --name-status "$RECOVERY_MASTER_SHA" HEAD)" == \
+            $'M\tFormula/conven.rb' ]]
+          [[ "$(git -C "$tap_path" ls-tree HEAD -- Formula/conven.rb | awk '{print $1 " " $2}')" == \
+            "100644 blob" ]]
+          bottle_sha_count=$(git -C "$tap_path" show HEAD:Formula/conven.rb | awk '
+            /^  bottle do[[:space:]]*$/ { bottle = 1; next }
+            bottle && /^  end[[:space:]]*$/ { bottle = 0; next }
+            bottle && /^[[:space:]]+sha256[[:space:]]/ { count++ }
+            END { print count + 0 }
+          ')
+          [[ "$bottle_sha_count" -gt 0 ]]
+          git -C "$tap_path" push origin "HEAD:refs/heads/master"
+
       - name: Push commits
+        if: ${{ inputs.recovery_base_sha == '' && inputs.recovery_merge_sha == '' && inputs.recovery_master_sha == '' }}
         uses: Homebrew/actions/git-try-push@fd832223f9f99ebf0244dd20658680e5d4aca049 # 2026.08.03.2
         with:
           branch: master
