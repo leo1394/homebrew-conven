@@ -38,7 +38,7 @@ func TestStyleUsesANSIForTerminal(t *testing.T) {
 	if got := style.Failure("failed"); got != boldRed+"failed"+reset {
 		t.Fatalf("failure style = %q", got)
 	}
-	if got := style.Selection("selected", false); got != selectedGreenBackground+"selected"+reset {
+	if got := style.Selection("selected", false); got != boldGreen+"selected"+reset {
 		t.Fatalf("selected style = %q", got)
 	}
 	if got := style.Selection("active", true); got != selectedRedBackground+"active"+reset {

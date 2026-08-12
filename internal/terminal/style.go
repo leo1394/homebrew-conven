@@ -14,7 +14,6 @@ const (
 	boldYellow                  = "\x1b[1;33m"
 	boldRed                     = "\x1b[1;31m"
 	boldGreen                   = "\x1b[1;32m"
-	selectedGreenBackground     = "\x1b[30;42m"
 	selectedRedBackground       = "\x1b[1;37;41m"
 )
 
@@ -72,7 +71,7 @@ func (style Style) Selection(value string, active bool) string {
 	if active {
 		return style.wrap(selectedRedBackground, value)
 	}
-	return style.wrap(selectedGreenBackground, value)
+	return style.wrap(boldGreen, value)
 }
 
 func (style Style) Identifiers(values []string, separator string) string {

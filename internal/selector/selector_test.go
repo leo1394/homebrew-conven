@@ -143,7 +143,7 @@ func TestRenderPickerShowsCompactControlsAndSelectedCount(t *testing.T) {
 	}
 
 	for _, expected := range []string{
-		"> [x] user-svc",
+		"> [✔︎] user-svc",
 		"selected 1",
 		"[f|A] selection · [Enter] confirm · [q/Esc] cancel",
 	} {
@@ -155,6 +155,22 @@ func TestRenderPickerShowsCompactControlsAndSelectedCount(t *testing.T) {
 		if strings.Contains(output.String(), hidden) {
 			t.Fatalf("picker output %q still contains hidden help %q", output.String(), hidden)
 		}
+	}
+}
+
+func TestRenderPickerShowsSelectedServiceAfterCursorMoves(t *testing.T) {
+	state := newPickerState(testCandidates())
+	state.handle(key{kind: keyRune, rune: 'f'})
+	state.handle(key{kind: keyDown})
+	var output bytes.Buffer
+
+	if err := render(&output, state, 100, 24); err != nil {
+		t.Fatalf("render returned an error: %v", err)
+	}
+
+	want := "  [✔︎] user-svc  /workspace/user-svc · Go\r\n"
+	if !strings.Contains(output.String(), want) {
+		t.Fatalf("picker output %q does not contain %q", output.String(), want)
 	}
 }
 

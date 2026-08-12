@@ -24,17 +24,22 @@ class Conven < Formula
   test do
     ENV["HOME"] = testpath.to_s
     new_cli = build.head? || version >= "0.2.9"
-    if new_cli
+    if build.head?
       expected_version = <<~EOS
-        conven version 0.2.9 (2026-08-12)
+        conven version 0.2.10 (2026-08-12)
         https://github.com/leo1394/homebrew-conven
       EOS
-      assert_equal expected_version, shell_output("#{bin}/conven --version")
+      expected_version = Regexp.new("\\A#{Regexp.escape(expected_version)}\\z")
+    elsif new_cli
+      expected_version = Regexp.new(
+        "\\Aconven version #{Regexp.escape(version.to_s)} " \
+        "\\(\\d{4}-\\d{2}-\\d{2}\\)\\n" \
+        "https://github\\.com/leo1394/homebrew-conven\\n\\z",
+      )
     else
-      expected_version = "conven #{version}\n"
-      actual_version = shell_output("#{bin}/conven --version")
-      assert_equal expected_version, actual_version
+      expected_version = /\Aconven #{Regexp.escape(version.to_s)}\n\z/
     end
+    assert_match expected_version, shell_output("#{bin}/conven --version")
     assert_predicate bin/"conven", :executable?
     assert_path_exists man1/"conven.1" if build.head? || version >= "0.2.4"
 

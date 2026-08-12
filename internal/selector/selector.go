@@ -228,7 +228,7 @@ func renderPicker(out io.Writer, state *pickerState, width int, height int) erro
 		}
 		mark := " "
 		if state.selected[index] {
-			mark = "x"
+			mark = "✔︎"
 		}
 		metadata := candidateMetadata(candidate)
 		line := fmt.Sprintf("%s [%s] %s", cursor, mark, candidate.Name)

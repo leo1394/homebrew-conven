@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.10 - 2026-08-12
+
+- Refine Service Selector selection styling: selected services outside the
+  cursor now use bold green text without a background, the active selected row
+  keeps white text on a red background, and the selection marker changes from
+  `[x]` to `[✔︎]`.
+
 ## 0.2.9 - 2026-08-12
 
 - Add the global `-C <path>` option before the command to run Conven as if it
