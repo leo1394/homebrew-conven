@@ -597,14 +597,8 @@ func TestEnsureConnectionCancellationWinsOverConcurrentExit(t *testing.T) {
 	}
 }
 
-func TestEnsureConnectionTimeoutStopsOwnedProcessGroup(t *testing.T) {
+func TestFailConnectionAttemptStopsStartedOwnedProcessGroup(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	listener.Close()
 	directory := t.TempDir()
 	pidPath := filepath.Join(directory, "connection.pid")
 	logPath := filepath.Join(directory, "connection.log")
@@ -614,15 +608,29 @@ func TestEnsureConnectionTimeoutStopsOwnedProcessGroup(t *testing.T) {
 	}
 	t.Setenv("CONVEN_TEST_CONNECTION_PID", pidPath)
 	var output bytes.Buffer
-
-	process, err := EnsureConnection(context.Background(), ConnectionConfig{
-		Driver:     "ktctl",
-		Command:    ktctl,
-		Timeout:   750 * time.Millisecond,
-		Readiness: []ConnectionEndpoint{{Name: "closed-endpoint", Address: address}},
-	}, logPath, "test-workspace", &output)
-	if err == nil {
-		t.Fatal("unreachable connection unexpectedly became ready")
+	config := ConnectionConfig{Driver: "ktctl"}
+	argv := []string{ktctl}
+	process, _, err := startConnectionObserved(context.Background(), config.Driver, argv, argv, logPath, "test-connection", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(pidPath); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			_ = stopConnection(process, true)
+			t.Fatal("connection process did not record its pid")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	failure := errors.New("connection readiness timed out")
+	process, err = failConnectionAttempt(context.Background(), process, config, logPath, &output, failure, nil)
+	if !errors.Is(err, failure) {
+		t.Fatalf("connection failure = %v, want %v", err, failure)
 	}
 	if process != nil {
 		t.Fatalf("cleaned connection returned residual process: %#v", process)
@@ -638,13 +646,61 @@ func TestEnsureConnectionTimeoutStopsOwnedProcessGroup(t *testing.T) {
 	if ProcessGroupAlive(pid) {
 		t.Fatalf("connection process group %d is still active", pid)
 	}
-	for _, expected := range []string{"closed-endpoint", address, "ERR Exit: Post /api/v1/namespaces/default/pods: EOF"} {
+	for _, expected := range []string{"ERR Exit: Post /api/v1/namespaces/default/pods: EOF", logPath} {
 		if !strings.Contains(output.String(), expected) {
-			t.Fatalf("timeout diagnostics %q do not contain %q", output.String(), expected)
+			t.Fatalf("connection diagnostics %q do not contain %q", output.String(), expected)
 		}
 	}
-	if !strings.Contains(err.Error(), logPath) {
-		t.Fatalf("timeout error %q does not contain log path %q", err, logPath)
+	stateDirectory, err := connectionStateDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(stateDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".json" {
+			t.Fatalf("failed connection retained registry record %q", entry.Name())
+		}
+	}
+}
+
+func TestEnsureConnectionTimeoutReturnsNoResidualProcessOrRegistry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+	directory := t.TempDir()
+	logPath := filepath.Join(directory, "connection.log")
+	ktctl := filepath.Join(directory, "ktctl")
+	if err := os.WriteFile(ktctl, []byte("#!/bin/sh\ntrap '' INT TERM\nwhile :; do sleep 1; done\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+
+	process, err := EnsureConnection(context.Background(), ConnectionConfig{
+		Driver:     "command",
+		Command:    ktctl,
+		Timeout:   750 * time.Millisecond,
+		Readiness: []ConnectionEndpoint{{Name: "closed-endpoint", Address: address}},
+	}, logPath, "test-workspace", &output)
+	if err == nil {
+		t.Fatal("unreachable connection unexpectedly became ready")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("connection error = %v, want context deadline exceeded", err)
+	}
+	if process != nil {
+		t.Fatalf("cleaned connection returned residual process: %#v", process)
+	}
+	for _, expected := range []string{"closed-endpoint", address, logPath} {
+		if !strings.Contains(output.String(), expected) && !strings.Contains(err.Error(), expected) {
+			t.Fatalf("timeout output %q and error %q do not contain %q", output.String(), err, expected)
+		}
 	}
 	stateDirectory, err := connectionStateDirectory()
 	if err != nil {
