@@ -8,6 +8,9 @@ class Conven < Formula
 
   bottle do
     root_url "https://github.com/leo1394/homebrew-conven/releases/download/conven-0.2.8"
+    sha256 cellar: :any_skip_relocation, arm64_tahoe:   "09a89b83806b1f7625be5445834dbff5db71c68da8faa67d5aa8c9e1f33aecbf"
+    sha256 cellar: :any_skip_relocation, arm64_sequoia: "a0466df1d5c9677a5427e91c809277b858c8c537ff6dc007118be807082ee9e4"
+    sha256 cellar: :any,                 x86_64_linux:  "f646aa41e7871172fd083918eb8a4e47d784707dddaa24c8e80a023bfcd662e4"
   end
 
   depends_on "go" => :build
