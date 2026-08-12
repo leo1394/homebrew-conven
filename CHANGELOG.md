@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.2.8 - 2026-08-12
+
+- Service Selector 改用终端 alternate screen，确认或取消后不再把每次选择过程留在主屏
+  scrollback；已选服务使用绿色背景，当前光标指向的已选服务使用红色背景，选中数量
+  使用绿色高亮。操作提示精简为 `f`/`A`、Enter 和 `q`/Esc，原有方向键、`j`/`k`
+  与 `F` 快捷键继续可用；空选择提示使用红色高亮。
+- 二次确认改为明确的 `y`/`yes` 继续与 `n`/`no` 取消，大小写不敏感；无效输入会清空
+  后重新询问，初次询问后最多重试三次，超限后终止启动。Selector 中 `q`/Esc 的取消
+  行为保持不变。
+- ktctl 在 Kubernetes Pod CREATE 请求返回 EOF 且进程错误地以成功状态退出时继续
+  fail-closed：不自动重试、不保留连接租约，并明确提示远程 shadow pod 状态未知及需要
+  检查的 namespace，避免输出具有误导性的 `exit status 0`。
+
 ## 0.2.7 - 2026-08-11
 
 - 新增 `conven services --cleanup`：执行 `services --stop-all` 后清理当前 workspace 的

@@ -214,7 +214,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 				failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath)
 				return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 			}
-			failure := fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, exitErr, logPath)
+			failure := connectionExitFailure(config, logPath, exitErr)
 			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 		}
 		if !connectionProcessAlive(process.PID) {
@@ -223,7 +223,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 				failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath)
 				return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 			}
-			failure := fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, exitErr, logPath)
+			failure := connectionExitFailure(config, logPath, exitErr)
 			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 		}
 		var ready bool
@@ -256,7 +256,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 				failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath)
 				return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 			}
-			failure := fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, normalizeConnectionExit(exitErr), logPath)
+			failure := connectionExitFailure(config, logPath, exitErr)
 			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
 		case <-timer.C:
 		}
@@ -290,6 +290,44 @@ func normalizeConnectionExit(err error) error {
 		return errors.New("exit status 0")
 	}
 	return err
+}
+
+func connectionExitFailure(config ConnectionConfig, logPath string, exitErr error) error {
+	exitErr = normalizeConnectionExit(exitErr)
+	if config.Driver != "ktctl" {
+		return fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, exitErr, logPath)
+	}
+	reportedError, podCreateEOF := ktctlReportedExit(logPath)
+	if podCreateEOF {
+		namespace := "the active Kubernetes namespace"
+		if config.Namespace != "" {
+			namespace = fmt.Sprintf("Kubernetes namespace %q", config.Namespace)
+		}
+		return fmt.Errorf("%s connection exited before endpoints became reachable; ktctl reported a Kubernetes Pod CREATE EOF, so the remote shadow pod state is unknown and Conven did not retry automatically; inspect %s for ktctl shadow pods before retrying; log: %s", config.Driver, namespace, logPath)
+	}
+	if reportedError && exitErr.Error() == "exit status 0" {
+		return fmt.Errorf("%s connection exited before endpoints became reachable; ktctl reported an error despite returning success; log: %s", config.Driver, logPath)
+	}
+	return fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, exitErr, logPath)
+}
+
+func ktctlReportedExit(logPath string) (reportedError bool, podCreateEOF bool) {
+	lines, err := readLastLines(logPath, connectionDiagnosticLogLines)
+	if err != nil {
+		return false, false
+	}
+	for _, line := range lines {
+		line = strings.ToLower(sanitizeDashboardText(line))
+		if !strings.Contains(line, "err exit:") {
+			continue
+		}
+		reportedError = true
+		detail := strings.TrimSpace(line[strings.Index(line, "err exit:")+len("err exit:"):])
+		if strings.Contains(detail, "post ") && strings.Contains(detail, "/pods") && strings.HasSuffix(detail, "eof") {
+			podCreateEOF = true
+		}
+	}
+	return reportedError, podCreateEOF
 }
 
 func connectionProcessAlive(pid int) bool {

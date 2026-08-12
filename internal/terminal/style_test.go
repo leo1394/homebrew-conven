@@ -38,6 +38,12 @@ func TestStyleUsesANSIForTerminal(t *testing.T) {
 	if got := style.Failure("failed"); got != boldRed+"failed"+reset {
 		t.Fatalf("failure style = %q", got)
 	}
+	if got := style.Selection("selected", false); got != selectedGreenBackground+"selected"+reset {
+		t.Fatalf("selected style = %q", got)
+	}
+	if got := style.Selection("active", true); got != selectedRedBackground+"active"+reset {
+		t.Fatalf("active selected style = %q", got)
+	}
 	if got := style.Identifiers([]string{"api", "worker"}, ", "); got != boldCyan+"api"+reset+", "+boldCyan+"worker"+reset {
 		t.Fatalf("identifier list style = %q", got)
 	}
@@ -115,8 +121,10 @@ func TestStyleMethodsDoNotAlterPlainText(t *testing.T) {
 		style.Warning("warning"),
 		style.Failure("failed"),
 		style.Success("ready"),
+		style.Selection("selected", false),
+		style.Selection("active", true),
 	}
-	if got := strings.Join(values, "|"); got != "Workspace|==> Building|  - Environment: dev|api-service|warning|failed|ready" {
+	if got := strings.Join(values, "|"); got != "Workspace|==> Building|  - Environment: dev|api-service|warning|failed|ready|selected|active" {
 		t.Fatalf("plain styles = %q", got)
 	}
 }

@@ -361,6 +361,92 @@ func TestEnsureConnectionExitReportsStatusLogAndEndpoints(t *testing.T) {
 	}
 }
 
+func TestEnsureConnectionDoesNotRetryUnknownKtctlPodCreate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+	directory := t.TempDir()
+	logPath := filepath.Join(directory, "connection.log")
+	attemptsPath := filepath.Join(directory, "attempts")
+	pidPath := filepath.Join(directory, "pid")
+	ktctl := filepath.Join(directory, "ktctl")
+	script := `#!/bin/sh
+attempts=0
+if [ -f "$CONVEN_TEST_CONNECTION_ATTEMPTS" ]; then
+  attempts=$(cat "$CONVEN_TEST_CONNECTION_ATTEMPTS")
+fi
+attempts=$((attempts + 1))
+printf '%s\n' "$attempts" > "$CONVEN_TEST_CONNECTION_ATTEMPTS"
+printf '%s\n' "$$" > "$CONVEN_TEST_CONNECTION_PID"
+printf '\033[31mERR Exit: Post \"https://cluster.example/api/v1/namespaces/test/pods\": EOF\033[0m\n'
+sleep 0.5
+exit 0
+`
+	if err := os.WriteFile(ktctl, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CONVEN_TEST_CONNECTION_ATTEMPTS", attemptsPath)
+	t.Setenv("CONVEN_TEST_CONNECTION_PID", pidPath)
+	var output bytes.Buffer
+
+	process, err := EnsureConnection(context.Background(), ConnectionConfig{
+		Driver:     "ktctl",
+		Command:    ktctl,
+		Namespace:  "test",
+		Timeout:    3 * time.Second,
+		Readiness:  []ConnectionEndpoint{{Name: "cluster-api", Address: address}},
+	}, logPath, "pod-create-eof-workspace", &output)
+	if err == nil {
+		t.Fatal("uncertain Pod creation unexpectedly became ready")
+	}
+	if process != nil {
+		t.Fatalf("uncertain Pod creation returned residual process: %#v", process)
+	}
+	for _, expected := range []string{"Kubernetes Pod CREATE EOF", "remote shadow pod state is unknown", "did not retry automatically", "Kubernetes namespace \"test\"", logPath} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("connection error %q does not contain %q", err, expected)
+		}
+	}
+	if strings.Contains(err.Error(), "exit status 0") {
+		t.Fatalf("connection error reports misleading success status: %q", err)
+	}
+	attempts, err := os.ReadFile(attemptsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(attempts)) != "1" {
+		t.Fatalf("connection attempts = %q, want one fail-closed attempt", attempts)
+	}
+	pidData, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ProcessGroupAlive(pid) {
+		t.Fatalf("failed connection process group %d is still active", pid)
+	}
+	stateDirectory, err := connectionStateDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(stateDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".json" {
+			t.Fatalf("uncertain Pod creation retained registry record %q", entry.Name())
+		}
+	}
+}
+
 func TestEnsureConnectionReportsElevatedTargetExit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

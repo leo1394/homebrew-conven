@@ -725,9 +725,10 @@ Confirm the following behavior:
   scrollable visual rows without losing the original searchable logical line.
 - `services --status` reports saved PID/PGID data, and normal
   `services --stop` validates process identity.
-- The picker toggles with `f`, an empty selection remains in the picker, only
-  `y` or `yes` confirms startup, and non-TTY use without explicit services
-  fails safely.
+- The picker toggles the current service with `f` and all services with `A`;
+  an empty selection remains in the picker. Confirmation accepts `y`/`yes` to
+  continue and `n`/`no` to cancel, and retries invalid input at most three
+  times. Non-TTY use without explicit services fails safely.
 - A cyclic service fixture starts by dependency component and performs health
   checks only after all processes in that component have started.
 - Dry-run does not create sessions, start processes, or open connections.

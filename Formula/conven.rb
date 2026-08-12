@@ -17,7 +17,7 @@ class Conven < Formula
   test do
     ENV["HOME"] = testpath.to_s
     if build.head?
-      assert_equal "conven 0.2.7\n", shell_output("#{bin}/conven --version")
+      assert_equal "conven 0.2.8\n", shell_output("#{bin}/conven --version")
     else
       expected_version = "conven #{version}\n"
       actual_version = shell_output("#{bin}/conven --version")

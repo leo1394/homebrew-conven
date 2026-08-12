@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -19,6 +20,14 @@ var (
 	ErrNoCandidates = errors.New("selector: no service candidates")
 	ErrNotTerminal   = errors.New("selector: input is not a terminal")
 )
+
+const (
+	selectorEnterScreen    = "\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H"
+	selectorLeaveScreen    = "\x1b[0m\x1b[?1049l\x1b[?25h"
+	confirmationRetryLimit = 3
+)
+
+var errConfirmationRetriesExceeded = errors.New("confirmation failed after 3 invalid retries")
 
 func Select(ctx context.Context, in *os.File, out io.Writer, candidates []Candidate) (names []string, confirmed bool, err error) {
 	if ctx == nil {
@@ -49,15 +58,26 @@ func Select(ctx context.Context, in *os.File, out io.Writer, candidates []Candid
 	}
 	defer func() {
 		restoreErr := term.Restore(fd, previousState)
-		if err == nil && restoreErr != nil {
+		if restoreErr != nil {
 			names = nil
 			confirmed = false
-			err = fmt.Errorf("selector: restore terminal: %w", restoreErr)
+			err = errors.Join(err, fmt.Errorf("selector: restore terminal: %w", restoreErr))
 		}
 	}()
+	screenActive := false
 	defer func() {
-		_, _ = io.WriteString(out, "\r\n")
+		if screenActive {
+			if _, leaveErr := io.WriteString(out, selectorLeaveScreen); leaveErr != nil {
+				names = nil
+				confirmed = false
+				err = errors.Join(err, fmt.Errorf("selector: leave alternate screen: %w", leaveErr))
+			}
+		}
 	}()
+	screenActive = true
+	if _, err := io.WriteString(out, selectorEnterScreen); err != nil {
+		return nil, false, fmt.Errorf("selector: enter alternate screen: %w", err)
+	}
 
 	state := newPickerState(candidates)
 	reader := bufio.NewReader(in)
@@ -74,10 +94,69 @@ func Select(ctx context.Context, in *os.File, out io.Writer, candidates []Candid
 		state.handle(input)
 
 		switch state.mode {
+		case modeConfirming:
+			if _, err := io.WriteString(out, selectorLeaveScreen); err != nil {
+				return nil, false, fmt.Errorf("selector: leave alternate screen: %w", err)
+			}
+			screenActive = false
+			return confirmSelection(ctx, reader, fd, out, state)
+		case modeCancelled:
+			return nil, false, nil
+		}
+	}
+}
+
+func confirmSelection(ctx context.Context, reader *bufio.Reader, fd int, out io.Writer, state *pickerState) (names []string, confirmed bool, err error) {
+	defer func() {
+		if _, newlineErr := io.WriteString(out, "\r\n"); newlineErr != nil {
+			names = nil
+			confirmed = false
+			err = errors.Join(err, fmt.Errorf("selector: finish confirmation: %w", newlineErr))
+		}
+	}()
+	if err := renderConfirmation(out, state); err != nil {
+		return nil, false, err
+	}
+	style := terminal.New(out)
+	invalidRetries := 0
+	for {
+		input, err := readKeyContext(ctx, reader, fd)
+		if err != nil {
+			return nil, false, fmt.Errorf("selector: read confirmation: %w", err)
+		}
+		confirmationLength := len(state.confirmation)
+		state.handle(input)
+		switch input.kind {
+		case keyBackspace:
+			if len(state.confirmation) < confirmationLength {
+				if _, err := io.WriteString(out, "\b \b"); err != nil {
+					return nil, false, fmt.Errorf("selector: echo confirmation: %w", err)
+				}
+			}
+		case keyRune:
+			if len(state.confirmation) > confirmationLength {
+				if _, err := fmt.Fprintf(out, "%c", input.rune); err != nil {
+					return nil, false, fmt.Errorf("selector: echo confirmation: %w", err)
+				}
+			}
+		}
+		switch state.mode {
 		case modeConfirmed:
 			return state.selectedNames(), true, nil
 		case modeCancelled:
 			return nil, false, nil
+		}
+		if input.kind == keyEnter {
+			if invalidRetries >= confirmationRetryLimit {
+				return nil, false, errConfirmationRetriesExceeded
+			}
+			invalidRetries++
+			if _, err := fmt.Fprintf(out, "\r\n%s\r\n", style.Failure("Please enter y/yes or n/no.")); err != nil {
+				return nil, false, fmt.Errorf("selector: render confirmation retry: %w", err)
+			}
+			if err := renderConfirmationPrompt(out); err != nil {
+				return nil, false, err
+			}
 		}
 	}
 }
@@ -117,6 +196,7 @@ func render(out io.Writer, state *pickerState, width int, height int) error {
 }
 
 func renderPicker(out io.Writer, state *pickerState, width int, height int) error {
+	style := terminal.New(out)
 	if _, err := io.WriteString(out, "Select local services\r\n\r\n"); err != nil {
 		return fmt.Errorf("selector: render: %w", err)
 	}
@@ -155,19 +235,24 @@ func renderPicker(out io.Writer, state *pickerState, width int, height int) erro
 		if metadata != "" {
 			line += "  " + metadata
 		}
-		if _, err := fmt.Fprintf(out, "%s\r\n", clip(line, width)); err != nil {
+		line = clip(line, width)
+		if state.selected[index] {
+			line = style.Selection(line, index == state.cursor)
+		}
+		if _, err := fmt.Fprintf(out, "%s\r\n", line); err != nil {
 			return fmt.Errorf("selector: render: %w", err)
 		}
 	}
 
-	if _, err := fmt.Fprintf(out, "\r\nShowing %d-%d of %d · selected %d\r\n", start+1, end, len(state.candidates), state.selectedCount()); err != nil {
+	selectedCount := style.Success(fmt.Sprintf("%d", state.selectedCount()))
+	if _, err := fmt.Fprintf(out, "\r\nShowing %d-%d of %d · selected %s\r\n", start+1, end, len(state.candidates), selectedCount); err != nil {
 		return fmt.Errorf("selector: render: %w", err)
 	}
-	if _, err := io.WriteString(out, "j/k or arrows move · f toggle · F toggle+next · a all/none · Enter confirm · q/Esc cancel\r\n"); err != nil {
+	if _, err := io.WriteString(out, "[f|A] selection · [Enter] confirm · [q/Esc] cancel\r\n"); err != nil {
 		return fmt.Errorf("selector: render: %w", err)
 	}
 	if state.notice != "" {
-		if _, err := fmt.Fprintf(out, "%s\r\n", state.notice); err != nil {
+		if _, err := fmt.Fprintf(out, "%s\r\n", style.Failure(state.notice)); err != nil {
 			return fmt.Errorf("selector: render: %w", err)
 		}
 	}
@@ -178,7 +263,11 @@ func renderConfirmation(out io.Writer, state *pickerState) error {
 	if _, err := fmt.Fprintf(out, "Convening local services: %s\r\n\r\n", strings.Join(state.selectedNames(), ", ")); err != nil {
 		return fmt.Errorf("selector: render confirmation: %w", err)
 	}
-	if _, err := fmt.Fprintf(out, "Confirm? Type y or yes, then press Enter: %s", string(state.confirmation)); err != nil {
+	return renderConfirmationPrompt(out)
+}
+
+func renderConfirmationPrompt(out io.Writer) error {
+	if _, err := io.WriteString(out, "Confirm? [y/yes] continue · [n/no] cancel: "); err != nil {
 		return fmt.Errorf("selector: render confirmation: %w", err)
 	}
 	return nil

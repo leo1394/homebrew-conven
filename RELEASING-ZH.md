@@ -638,8 +638,9 @@ TTY 中默认打开 Dashboard。同时向 logs 或 restart 传入两个模式参
   打开 Dashboard，显式指定 `--tail` 会选择 Plain；非 TTY 缺省模式在执行完成后返回。
   Dashboard 中的长日志会折成可滚动的视觉行，同时保留原始可搜索的逻辑行。
 - `services --status` 显示保存的 PID/PGID，普通 `services --stop` 会校验进程身份。
-- PathPicker 使用 `f` 切换；空选择仍停留在选择页；仅 `y` 或 `yes` 确认启动；
-  非 TTY 且未显式给出服务时安全失败。
+- PathPicker 使用 `f` 切换当前服务，使用 `A` 全选或清空；空选择仍停留在选择页。
+  二次确认接受 `y`/`yes` 继续、`n`/`no` 取消，无效输入最多重新询问三次；非 TTY
+  且未显式给出服务时安全失败。
 - 循环依赖 fixture 按依赖分量启动，并在同一分量全部进程启动后执行健康检查。
 - dry-run 不创建 session、不启动进程，也不建立连接。
 - 在通用 fixture 中，把 `runner.workdir` 设为服务源码目录，并把支持模板的

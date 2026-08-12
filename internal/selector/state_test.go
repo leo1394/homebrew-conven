@@ -32,6 +32,27 @@ func TestUpperFTogglesAndMovesDown(t *testing.T) {
 	}
 }
 
+func TestHiddenMovementKeysRemainAvailable(t *testing.T) {
+	state := newPickerState(testCandidates())
+
+	state.handle(key{kind: keyRune, rune: 'j'})
+	if state.cursor != 1 {
+		t.Fatalf("j should move down, got cursor %d", state.cursor)
+	}
+	state.handle(key{kind: keyRune, rune: 'k'})
+	if state.cursor != 0 {
+		t.Fatalf("k should move up, got cursor %d", state.cursor)
+	}
+	state.handle(key{kind: keyDown})
+	if state.cursor != 1 {
+		t.Fatalf("down arrow should move down, got cursor %d", state.cursor)
+	}
+	state.handle(key{kind: keyUp})
+	if state.cursor != 0 {
+		t.Fatalf("up arrow should move up, got cursor %d", state.cursor)
+	}
+}
+
 func TestEnterCannotConfirmEmptySelection(t *testing.T) {
 	state := newPickerState(testCandidates())
 
@@ -71,8 +92,8 @@ func TestConfirmationAcceptsOnlyYOrYes(t *testing.T) {
 	}
 }
 
-func TestConfirmationRejectsOtherAnswers(t *testing.T) {
-	tests := []string{"", "n", "yeah", "yeſ"}
+func TestConfirmationAcceptsNOrNoAsCancellation(t *testing.T) {
+	tests := []string{"n", "no", "N", "NO", "No"}
 
 	for _, answer := range tests {
 		t.Run(answer, func(t *testing.T) {
@@ -89,17 +110,41 @@ func TestConfirmationRejectsOtherAnswers(t *testing.T) {
 	}
 }
 
+func TestInvalidConfirmationAnswerClearsInputAndRetries(t *testing.T) {
+	for _, answer := range []string{"", "q", "yeah", "yeſ"} {
+		t.Run(answer, func(t *testing.T) {
+			state := selectedPickerState()
+			for _, value := range answer {
+				state.handle(key{kind: keyRune, rune: value})
+			}
+			state.handle(key{kind: keyEnter})
+
+			if state.mode != modeConfirming {
+				t.Fatalf("invalid answer %q should remain in confirmation, got mode %d", answer, state.mode)
+			}
+			if len(state.confirmation) != 0 {
+				t.Fatalf("invalid answer %q was not cleared: %q", answer, state.confirmation)
+			}
+		})
+	}
+}
+
 func TestToggleAllSelectsThenClears(t *testing.T) {
 	state := newPickerState(testCandidates())
 
 	state.handle(key{kind: keyRune, rune: 'a'})
-	if state.selectedCount() != len(state.candidates) {
-		t.Fatalf("a should select all candidates, got %d", state.selectedCount())
+	if state.selectedCount() != 0 {
+		t.Fatalf("lowercase a should not change the selection, got %d", state.selectedCount())
 	}
 
-	state.handle(key{kind: keyRune, rune: 'a'})
+	state.handle(key{kind: keyRune, rune: 'A'})
+	if state.selectedCount() != len(state.candidates) {
+		t.Fatalf("A should select all candidates, got %d", state.selectedCount())
+	}
+
+	state.handle(key{kind: keyRune, rune: 'A'})
 	if state.selectedCount() != 0 {
-		t.Fatalf("second a should clear all candidates, got %d", state.selectedCount())
+		t.Fatalf("second A should clear all candidates, got %d", state.selectedCount())
 	}
 }
 

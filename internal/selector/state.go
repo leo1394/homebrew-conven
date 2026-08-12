@@ -87,7 +87,7 @@ func (s *pickerState) handlePickerRune(value rune) {
 	case 'F':
 		s.toggleCurrent()
 		s.move(1)
-	case 'a':
+	case 'A':
 		s.toggleAll()
 	case 'q':
 		s.mode = modeCancelled
@@ -108,12 +108,12 @@ func (s *pickerState) handleConfirmation(input key) {
 			s.mode = modeConfirmed
 			return
 		}
-		s.mode = modeCancelled
-	case keyRune:
-		if input.rune == 'q' {
+		if asciiEqualFold(answer, "n") || asciiEqualFold(answer, "no") {
 			s.mode = modeCancelled
 			return
 		}
+		s.confirmation = nil
+	case keyRune:
 		if input.rune >= ' ' && input.rune != 0x7f {
 			s.confirmation = append(s.confirmation, input.rune)
 		}
