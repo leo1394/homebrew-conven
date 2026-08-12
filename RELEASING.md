@@ -67,10 +67,11 @@ Formula but never stages, commits, or pushes it.
 
 The repository Actions configuration must allow `GITHUB_TOKEN` to write
 contents and pull requests, and any `master` ruleset must allow the publish
-workflow to push the generated Formula/bottle commit. The `brew test-bot` workflow runs on
-`macos-15` (Apple Silicon), `macos-15-intel`, `macos-26` (Apple Silicon), and
-`ubuntu-latest` (x86_64 Linux). Bottle publication uses GitHub Releases, not
-GHCR.
+workflow to push the generated Formula/bottle commit. The `brew test-bot`
+workflow runs on `macos-15` and `macos-26` (Apple Silicon), plus
+`ubuntu-latest` (x86_64 Linux). Intel macOS currently falls back to a source
+build because Homebrew's Go build dependency has no Intel bottle for the
+standard macOS runner. Bottle publication uses GitHub Releases, not GHCR.
 
 `ci.yml` remains the fast Go and stable/HEAD regression workflow.
 `tests.yml` is the Homebrew packaging workflow. Both run on a Formula PR by
