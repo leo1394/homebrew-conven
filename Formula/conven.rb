@@ -6,6 +6,10 @@ class Conven < Formula
   license "MIT"
   head "https://github.com/leo1394/homebrew-conven.git", branch: "master"
 
+  bottle do
+    root_url "https://github.com/leo1394/homebrew-conven/releases/download/conven-0.2.8"
+  end
+
   depends_on "go" => :build
 
   def install
