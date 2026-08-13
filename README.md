@@ -136,18 +136,31 @@ conven services --start --dev --dry-run user-svc order-svc
 conven services --start --dev user-svc order-svc
 ```
 
-`init` conservatively scans immediate child Git repositories. It can recognize
-supported Go main-module layouts and record proven paths, runners, service
-kinds, and binding candidates. It does **not** guess ports, the complete
-business dependency graph, company policy, Apollo credentials, or cluster
-connection details. Review the candidate once before starting services.
+`init` performs the initial registry scan, conservatively identifying Git
+repositories that are immediate children of the workspace. It also creates the
+following workspace guidance files when they do not already exist:
+`services.properties`,
+`disabled-services.properties`, `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md`,
+and `README.md`. For supported Go main-module layouts, it records only verified
+paths, runners, service kinds, and binding candidates. It does **not** infer
+ports, a complete business dependency graph, organization-specific policy,
+Apollo credentials, or cluster connection details. Review the generated
+workspace manifest before starting services.
 
-If the project maintains a policy generator, install and run it explicitly:
+Later `services --registry` runs update only `.conven/conven.yaml`; they never
+guess ports or edit the two generator property files. Keep
+`services.properties` as a user- or AI-reviewed superset when repositories are
+added, removed, or temporarily absent from the workspace.
+
+If the project maintains a policy generator, install it and run the sole
+workspace plugin or name it explicitly. Complete the workspace-specific
+`conven-generator.json` required by the generated AI specification before the
+first run; `init` does not guess environments or connection policy:
 
 ```bash
-conven plugins --install ./generate-project-policy.py
-conven plugins --run generate-project-policy --output conven-candidate.yaml
-conven policy --import ./conven-candidate.yaml --edit
+conven plugins --install ./generate-workspace-policy.py
+conven plugins --run --output
+conven policy --import --edit
 ```
 
 Conven currently bundles no project-specific plugins. `policy --import`
@@ -312,12 +325,27 @@ Manage local Python plugins with:
 ```bash
 conven plugins --install ./plugin.py
 conven plugins --list
-conven plugins --run plugin --output candidate.yaml
+conven plugins --run --output
+conven policy --import
 conven plugins --remove plugin
+
+# Use the user-global plugin scope explicitly.
+conven plugins --install --global ./plugin.py
+conven plugins --list --global
+conven plugins --run --global plugin --output
+conven plugins --remove --global plugin
 ```
 
-Plugins run with the canonical workspace as their working directory. Treat them
-as trusted local code and review generated policy candidates before import.
+Workspace plugins live in `.conven/plugins`; global plugins live in
+`~/.conven/plugins`. The two scopes may contain the same name. An explicit run
+name prefers the workspace copy and warns before falling back to global. When
+the workspace has exactly one plugin, the name may be omitted. `--output`
+without a filename is passed to the plugin, whose generator convention writes
+`application.yaml`; `policy --import` without a filename imports that workspace
+file. Plugins run with the canonical workspace as their working directory.
+Treat them as trusted local code and review generated policy candidates before
+import. The grouped default list requires a workspace; outside one, use
+`conven plugins --list --global`.
 
 ## Runtime layout
 

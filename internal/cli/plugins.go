@@ -30,72 +30,99 @@ func (app App) runPlugins(arguments []string) int {
 		app.printPluginsUsage(app.Output)
 		return 0
 	case "--install":
+		global, remaining := consumePluginGlobal(remaining)
 		if len(remaining) != 1 {
 			return app.fail(fmt.Errorf("plugins --install requires exactly one Python file"))
+		}
+		store, workspace, err := app.pluginStore(global)
+		if err != nil {
+			return app.fail(err)
 		}
 		source, err := pluginSourcePath(app.Cwd, remaining[0])
 		if err != nil {
 			return app.fail(err)
 		}
-		destination, err := plugins.Install(source)
+		destination, err := store.Install(source)
 		if errors.Is(err, plugins.ErrAlreadyInstalled) {
 			name := strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
-			overwrite, promptErr := confirmPluginOverwrite(app.Context, app.Input, app.Error, name)
+			fmt.Fprintf(app.Error, "%s plugin already exists: %s\n", pluginScopeTitle(store.Scope()), filepath.Join(store.Directory(), name+".py"))
+			overwrite, promptErr := confirmPluginOverwrite(app.Context, app.Input, app.Error, store.Scope(), name)
 			if promptErr != nil {
-				return app.fail(promptErr)
+				return app.fail(fmt.Errorf("%s plugin %q: %w", store.Scope(), name, promptErr))
 			}
 			if !overwrite {
 				style := terminal.New(app.Error)
 				fmt.Fprintln(app.Error, style.Warning("Cancelled; plugin "+name+" was not overwritten."))
 				return 0
 			}
-			destination, err = plugins.Replace(source)
+			destination, err = store.Replace(source)
 		}
 		if err != nil {
 			return app.fail(fmt.Errorf("install plugin: %w", err))
 		}
 		name := strings.TrimSuffix(filepath.Base(destination), filepath.Ext(destination))
 		style := terminal.New(app.Output)
-		fmt.Fprintf(app.Output, "%s %s\n", style.Stage("Installed plugin"), style.Identifier(name))
+		fmt.Fprintf(app.Output, "%s %s\n", style.Stage("Installed "+string(store.Scope())+" plugin"), style.Identifier(name))
 		fmt.Fprintln(app.Output, style.Detail("Path: "+destination))
+		if workspace != "" {
+			fmt.Fprintln(app.Output, style.Detail("Workspace: "+workspace))
+		}
 		return 0
 	case "--list":
+		global, remaining := consumePluginGlobal(remaining)
 		if len(remaining) != 0 {
 			return app.fail(fmt.Errorf("plugins --list does not accept arguments or another action"))
 		}
-		names, err := plugins.List()
+		globalStore, err := plugins.GlobalStore()
 		if err != nil {
 			return app.fail(err)
 		}
-		for _, name := range names {
-			fmt.Fprintln(app.Output, name)
+		if global {
+			if err := printPluginGroup(app.Output, globalStore); err != nil {
+				return app.fail(err)
+			}
+			return 0
+		}
+		workspace, err := config.FindWorkspace(app.Cwd)
+		if err != nil {
+			return app.fail(fmt.Errorf("list workspace plugins: %w; use conven plugins --list --global to list only global plugins", err))
+		}
+		workspaceStore, err := plugins.WorkspaceStore(workspace)
+		if err != nil {
+			return app.fail(err)
+		}
+		if err := printPluginGroups(app.Output, workspaceStore, globalStore); err != nil {
+			return app.fail(err)
 		}
 		return 0
 	case "--remove":
+		global, remaining := consumePluginGlobal(remaining)
 		if len(remaining) != 1 {
 			return app.fail(fmt.Errorf("plugins --remove requires exactly one plugin name"))
 		}
-		path, err := plugins.Remove(remaining[0])
+		store, workspace, err := app.pluginStore(global)
+		if err != nil {
+			return app.fail(err)
+		}
+		path, err := store.Remove(remaining[0])
 		if err != nil {
 			return app.fail(fmt.Errorf("remove plugin: %w", err))
 		}
 		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		style := terminal.New(app.Output)
-		fmt.Fprintf(app.Output, "%s %s\n", style.Stage("Removed plugin"), style.Identifier(name))
+		fmt.Fprintf(app.Output, "%s %s\n", style.Stage("Removed "+string(store.Scope())+" plugin"), style.Identifier(name))
 		fmt.Fprintln(app.Output, style.Detail("Path: "+path))
+		if workspace != "" {
+			fmt.Fprintln(app.Output, style.Detail("Workspace: "+workspace))
+		}
 		return 0
 	case "--run":
-		if len(remaining) == 0 {
-			return app.fail(fmt.Errorf("plugins --run requires a plugin name"))
-		}
+		global, remaining := consumePluginGlobal(remaining)
 		workspace, err := config.FindWorkspace(app.Cwd)
 		if err != nil {
 			return app.fail(err)
 		}
-		if err := plugins.Run(app.Context, remaining[0], workspace, remaining[1:], app.Input, app.Output, app.Error); err != nil {
-			return app.fail(err)
-		}
-		return 0
+		return app.runPlugin(workspace, global, remaining)
 	default:
 		style := terminal.New(app.Error)
 		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: unknown plugins action %q", action)))
@@ -106,27 +133,200 @@ func (app App) runPlugins(arguments []string) int {
 
 func (app App) printPluginsUsage(output io.Writer) {
 	fmt.Fprint(output, `usage:
-  conven plugins --install PYTHON_FILE
-  conven plugins --list
-  conven plugins --remove NAME
-  conven plugins --run NAME [plugin args...]
+  conven plugins --install [--global] PYTHON_FILE
+  conven plugins --list [--global]
+  conven plugins --remove [--global] NAME
+  conven plugins --run [--global] [NAME] [plugin args...]
 
---install copies exactly one Python file into ~/.conven/plugins. Relative source
-paths are resolved from the effective working directory. If the name already
-exists, an interactive terminal asks whether to overwrite it; non-interactive
-installs fail without changing the existing plugin. --remove deletes exactly one
-installed plugin. Arguments after NAME are passed unchanged to the selected
-plugin; --workspace is reserved by Conven.
+Without --global, install and remove use <workspace>/.conven/plugins. --list
+shows workspace and global plugins in separate groups; --list --global shows
+only ~/.conven/plugins. Workspace and global plugins may have the same name.
+
+An omitted run NAME executes the sole workspace plugin with a warning. Zero or
+multiple workspace plugins stop with a grouped candidate list. An explicit NAME
+prefers the workspace plugin and falls back to a global plugin with a warning.
+Place --global immediately after the action to force the global scope. Relative
+install paths use the effective working directory. Arguments after NAME, or all
+arguments beginning with an option when NAME is omitted, pass unchanged to the
+plugin; --workspace is reserved by Conven. Compatible policy generators accept
+--output [FILE] (no FILE means <workspace>/application.yaml) and
+--disable-bindings BINDING...; the plugin owns output overwrite confirmation.
 `)
 }
 
-func confirmPluginOverwrite(ctx context.Context, input *os.File, output io.Writer, name string) (bool, error) {
+func consumePluginGlobal(arguments []string) (bool, []string) {
+	if len(arguments) > 0 && arguments[0] == "--global" {
+		return true, arguments[1:]
+	}
+	return false, arguments
+}
+
+func (app App) pluginStore(global bool) (plugins.Store, string, error) {
+	if global {
+		store, err := plugins.GlobalStore()
+		return store, "", err
+	}
+	workspace, err := config.FindWorkspace(app.Cwd)
+	if err != nil {
+		return plugins.Store{}, "", err
+	}
+	store, err := plugins.WorkspaceStore(workspace)
+	if err != nil {
+		return plugins.Store{}, "", err
+	}
+	workspace = filepath.Dir(filepath.Dir(store.Directory()))
+	return store, workspace, nil
+}
+
+func (app App) runPlugin(workspace string, globalOnly bool, arguments []string) int {
+	workspaceStore, err := plugins.WorkspaceStore(workspace)
+	if err != nil {
+		return app.fail(err)
+	}
+	globalStore, err := plugins.GlobalStore()
+	if err != nil {
+		return app.fail(err)
+	}
+	name, pluginArguments := pluginRunArguments(arguments)
+	if globalOnly {
+		return app.runGlobalPlugin(workspace, globalStore, name, pluginArguments)
+	}
+	if name == "" {
+		names, err := workspaceStore.List()
+		if err != nil {
+			return app.fail(err)
+		}
+		if len(names) != 1 {
+			if err := printPluginGroups(app.Error, workspaceStore, globalStore); err != nil {
+				return app.fail(err)
+			}
+			if len(names) == 0 {
+				return app.fail(errors.New("no workspace plugin is installed; install one in this workspace or specify --global NAME"))
+			}
+			return app.fail(errors.New("plugin name is required because this workspace has multiple plugins"))
+		}
+		name = names[0]
+		style := terminal.New(app.Error)
+		fmt.Fprintln(app.Error, style.Warning("No plugin name specified; running workspace plugin "+name+"."))
+		if err := workspaceStore.Run(app.Context, name, workspace, pluginArguments, app.Input, app.Output, app.Error); err != nil {
+			return app.fail(err)
+		}
+		return 0
+	}
+	if err := workspaceStore.Run(app.Context, name, workspace, pluginArguments, app.Input, app.Output, app.Error); err == nil {
+		return 0
+	} else if !errors.Is(err, plugins.ErrNotInstalled) {
+		return app.fail(err)
+	}
+	globalNames, err := globalStore.List()
+	if err != nil {
+		return app.fail(err)
+	}
+	if pluginNameListed(globalNames, name) {
+		style := terminal.New(app.Error)
+		fmt.Fprintln(app.Error, style.Warning("Workspace plugin "+name+" is not installed; running global plugin "+name+"."))
+	}
+	if err := globalStore.Run(app.Context, name, workspace, pluginArguments, app.Input, app.Output, app.Error); err != nil {
+		if errors.Is(err, plugins.ErrNotInstalled) {
+			if listErr := printPluginGroups(app.Error, workspaceStore, globalStore); listErr != nil {
+				return app.fail(listErr)
+			}
+		}
+		return app.fail(err)
+	}
+	return 0
+}
+
+func (app App) runGlobalPlugin(workspace string, store plugins.Store, name string, arguments []string) int {
+	names, err := store.List()
+	if err != nil {
+		return app.fail(err)
+	}
+	if name == "" {
+		if len(names) != 1 {
+			if err := printPluginGroup(app.Error, store); err != nil {
+				return app.fail(err)
+			}
+			return app.fail(errors.New("global plugin name is required unless exactly one global plugin is installed"))
+		}
+		name = names[0]
+	}
+	if pluginNameListed(names, name) {
+		style := terminal.New(app.Error)
+		fmt.Fprintln(app.Error, style.Warning("Running global plugin "+name+"."))
+	}
+	if err := store.Run(app.Context, name, workspace, arguments, app.Input, app.Output, app.Error); err != nil {
+		return app.fail(err)
+	}
+	return 0
+}
+
+func pluginRunArguments(arguments []string) (string, []string) {
+	if len(arguments) == 0 {
+		return "", nil
+	}
+	if arguments[0] == "--" {
+		return "", arguments[1:]
+	}
+	if strings.HasPrefix(arguments[0], "-") {
+		return "", arguments
+	}
+	return arguments[0], arguments[1:]
+}
+
+func pluginNameListed(names []string, target string) bool {
+	if strings.Count(target, ".py") == 1 && strings.HasSuffix(target, ".py") {
+		target = strings.TrimSuffix(target, ".py")
+	}
+	for _, name := range names {
+		if name == target {
+			return true
+		}
+	}
+	return false
+}
+
+func printPluginGroups(output io.Writer, workspace plugins.Store, global plugins.Store) error {
+	if err := printPluginGroup(output, workspace); err != nil {
+		return err
+	}
+	return printPluginGroup(output, global)
+}
+
+func printPluginGroup(output io.Writer, store plugins.Store) error {
+	names, err := store.List()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(output, "%s plugins (%s):\n", pluginScopeTitle(store.Scope()), store.Directory())
+	if len(names) == 0 {
+		fmt.Fprintln(output, "  (none)")
+		return nil
+	}
+	for _, name := range names {
+		fmt.Fprintln(output, "  "+name)
+	}
+	return nil
+}
+
+func pluginScopeTitle(scope plugins.Scope) string {
+	if scope == plugins.WorkspaceScope {
+		return "Workspace"
+	}
+	return "Global"
+}
+
+func confirmPluginOverwrite(ctx context.Context, input *os.File, output io.Writer, scope plugins.Scope, name string) (bool, error) {
+	removeCommand := "conven plugins --remove " + name
+	if scope == plugins.GlobalScope {
+		removeCommand = "conven plugins --remove --global " + name
+	}
 	if input == nil || !term.IsTerminal(int(input.Fd())) {
-		return false, fmt.Errorf("plugin %q is already installed; overwrite confirmation requires an interactive terminal; existing plugin unchanged; use conven plugins --remove %s first", name, name)
+		return false, fmt.Errorf("plugin %q is already installed; overwrite confirmation requires an interactive terminal; existing plugin unchanged; use %s first", name, removeCommand)
 	}
 	outputFile, ok := output.(*os.File)
 	if !ok || !term.IsTerminal(int(outputFile.Fd())) {
-		return false, fmt.Errorf("plugin %q is already installed; overwrite confirmation requires an interactive terminal; existing plugin unchanged; use conven plugins --remove %s first", name, name)
+		return false, fmt.Errorf("plugin %q is already installed; overwrite confirmation requires an interactive terminal; existing plugin unchanged; use %s first", name, removeCommand)
 	}
 	return askPluginOverwriteContext(ctx, input, output, name)
 }

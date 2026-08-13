@@ -111,15 +111,30 @@ func Completion(shell string) (string, error) {
         action="${COMP_WORDS[action_index]}"
         if [ "$COMP_CWORD" -eq "$action_index" ]; then
             options="--install --list --remove --run --help"
-        elif [ "$action" = "--install" ] && [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
+        elif [ "$action" = "--install" ] && { [ "$COMP_CWORD" -eq $((action_index + 1)) ] || { [ "${COMP_WORDS[action_index + 1]}" = "--global" ] && [ "$COMP_CWORD" -eq $((action_index + 2)) ]; }; }; then
             compopt -o filenames 2>/dev/null
             COMPREPLY=()
+            if [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
+                COMPREPLY+=( $(compgen -W "--global" -- "$cur") )
+            fi
             while IFS= read -r candidate; do
                 if [ -d "$candidate" ] || [[ "$candidate" = *.py ]]; then
                     COMPREPLY+=("$candidate")
                 fi
             done < <(compgen -f -- "$cur")
             return
+        elif [ "$action" = "--run" ]; then
+            if [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
+                options="--global --output --disable-bindings"
+            else
+                options="--output --disable-bindings"
+            fi
+        elif [ "$action" = "--list" ] || [ "$action" = "--remove" ]; then
+            if [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
+                options="--global"
+            else
+                options=""
+            fi
         else
             options=""
         fi
@@ -151,7 +166,7 @@ complete -F _conven conven
 		return `#compdef conven
 
 _conven() {
-    local -a commands root_candidates
+    local -a commands root_candidates plugin_scope
     local action scan
     commands=(
         'init:initialize a Conven workspace'
@@ -305,7 +320,7 @@ _conven() {
                     _arguments \
                         '--edit[edit the private import draft before publication]' \
                         '--help[show command help]' \
-                        '1:yaml file:_files'
+                        '1::yaml file:_files'
                     ;;
                 *)
                     if (( CURRENT == 3 )); then
@@ -327,22 +342,40 @@ _conven() {
                 words=($words[1] $words[4,-1])
                 (( CURRENT -= 2 ))
             fi
+            plugin_scope=()
+            if (( CURRENT == 2 )) || [[ $words[2] == --global ]]; then
+                plugin_scope=('--global[use the user-global plugin scope]')
+            fi
             case $action in
                 --install)
                     _arguments \
+                        $plugin_scope \
                         '1:Python plugin file:_files -g "*.py"'
                     ;;
                 --list)
-                    _message 'this plugin action does not accept arguments'
+                    _arguments \
+                        $plugin_scope
                     ;;
                 --remove)
                     _arguments \
+                        $plugin_scope \
                         '1:plugin:'
                     ;;
                 --run)
-                    _arguments \
-                        '1:plugin:' \
-                        '*:plugin argument:'
+                    if [[ $words[2] == --* && $words[2] != --global ]] ||
+                       [[ $words[2] == --global && $words[3] == --* ]]; then
+                        _arguments \
+                            '--output[generator output path; omit the value for application.yaml]::output file:_files' \
+                            '--disable-bindings[replace disabled RPC bindings for this generator run]:binding:' \
+                            '*:plugin argument:'
+                    else
+                        _arguments \
+                            $plugin_scope \
+                            '--output[generator output path; omit the value for application.yaml]::output file:_files' \
+                            '--disable-bindings[replace disabled RPC bindings for this generator run]:binding:' \
+                            '1::plugin:' \
+                            '*:plugin argument:'
+                    fi
                     ;;
                 *)
                     if (( CURRENT == 3 )); then
@@ -350,7 +383,7 @@ _conven() {
                             '--install[install a Python plugin]:Python plugin file:_files -g "*.py"' \
                             '--list[list installed plugins]' \
                             '--remove[remove an installed plugin]:plugin:' \
-                            '--run[run an installed plugin]:plugin:' \
+                            '--run[run an installed plugin]' \
                             '--help[show command help]'
                     else
                         _message 'unknown conven plugins action'
@@ -450,6 +483,19 @@ function __conven_plugins_without_action
     test "$tokens[2]" = plugins; or return 1
 end
 
+function __conven_plugins_action
+    set -l tokens (__conven_command_tokens)
+    test (count $tokens) -ge 3; or return 1
+    test "$tokens[2]" = plugins; or return 1
+    test "$tokens[3]" = "$argv[1]"
+end
+
+function __conven_plugins_scope_position
+    set -l tokens (__conven_command_tokens)
+    __conven_plugins_action "$argv[1]"; or return 1
+    test (count $tokens) -eq 3
+end
+
 function __conven_policy_action
     set -l tokens (__conven_command_tokens)
     test (count $tokens) -ge 3; or return 1
@@ -494,7 +540,13 @@ complete -c conven -n '__conven_policy_import_without_source' -F
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l install -r -a '(__fish_complete_suffix .py)' -d 'Install a Python plugin'
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l list -d 'List installed plugins'
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l remove -r -d 'Remove an installed plugin'
-complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l run -r -d 'Run an installed plugin'
+complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l run -d 'Run an installed plugin'
+complete -c conven -n '__conven_plugins_scope_position --install' -l global -d 'Install in the user-global plugin directory'
+complete -c conven -n '__conven_plugins_scope_position --list' -l global -d 'List only user-global plugins'
+complete -c conven -n '__conven_plugins_scope_position --remove' -l global -d 'Remove from the user-global plugin directory'
+complete -c conven -n '__conven_plugins_scope_position --run' -l global -d 'Force the user-global plugin scope'
+complete -c conven -n '__conven_plugins_action --run' -l output -d 'Generator output path; omit its value for application.yaml'
+complete -c conven -n '__conven_plugins_action --run' -l disable-bindings -r -d 'Replace disabled RPC bindings for this generator run'
 complete -c conven -n '__conven_using_subcommand doctor' -l env -r -d 'Environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l dev -d 'Use the dev environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l test -d 'Use the test environment profile'

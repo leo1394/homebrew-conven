@@ -9,8 +9,8 @@ import (
 	"github.com/leo1394/homebrew-conven/internal/cli"
 )
 
-var version = "0.2.10"
-var versionDate = "2026-08-12"
+var version = "0.2.11"
+var versionDate = "2026-08-13"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

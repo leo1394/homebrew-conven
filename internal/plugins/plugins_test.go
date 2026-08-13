@@ -72,6 +72,234 @@ func TestInstallAcceptsDirectPython3Shebang(t *testing.T) {
 	}
 }
 
+func TestGlobalAndWorkspaceStoresUseSeparateDirectories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	global, err := GlobalStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := WorkspaceStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if global.Scope() != GlobalScope {
+		t.Fatalf("global scope = %q, want %q", global.Scope(), GlobalScope)
+	}
+	if local.Scope() != WorkspaceScope {
+		t.Fatalf("workspace scope = %q, want %q", local.Scope(), WorkspaceScope)
+	}
+	if got, want := global.Directory(), filepath.Join(home, ".conven", "plugins"); got != want {
+		t.Fatalf("global directory = %q, want %q", got, want)
+	}
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := local.Directory(), filepath.Join(canonicalWorkspace, ".conven", "plugins"); got != want {
+		t.Fatalf("workspace directory = %q, want %q", got, want)
+	}
+}
+
+func TestScopedStoresKeepSameNamedPluginsIndependent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	global, err := GlobalStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := WorkspaceStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	globalSource := filepath.Join(t.TempDir(), "inspect.py")
+	localSource := filepath.Join(t.TempDir(), "inspect.py")
+	replacementSource := filepath.Join(t.TempDir(), "inspect.py")
+	const globalContent = "#!/usr/bin/env python3\nprint('global')\n"
+	const localContent = "#!/usr/bin/env python3\nprint('local')\n"
+	const replacementContent = "#!/usr/bin/env python3\nprint('replacement')\n"
+	writeTestPlugin(t, globalSource, globalContent, 0600)
+	writeTestPlugin(t, localSource, localContent, 0600)
+	writeTestPlugin(t, replacementSource, replacementContent, 0600)
+
+	globalPath, err := global.Install(globalSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPath, err := local.Install(localSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if globalPath == localPath {
+		t.Fatalf("global and workspace installs share path %q", globalPath)
+	}
+	for label, store := range map[string]Store{"global": global, "workspace": local} {
+		names, err := store.List()
+		if err != nil {
+			t.Fatalf("list %s plugins: %v", label, err)
+		}
+		if !reflect.DeepEqual(names, []string{"inspect"}) {
+			t.Fatalf("%s plugins = %#v, want inspect", label, names)
+		}
+	}
+
+	if _, err := local.Replace(replacementSource); err != nil {
+		t.Fatal(err)
+	}
+	globalData, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(globalData) != globalContent {
+		t.Fatalf("workspace replacement changed global plugin: %q", globalData)
+	}
+	localData, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(localData) != replacementContent {
+		t.Fatalf("workspace replacement = %q, want %q", localData, replacementContent)
+	}
+	removed, err := local.Remove("inspect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != localPath {
+		t.Fatalf("removed path = %q, want %q", removed, localPath)
+	}
+	if _, err := os.Stat(globalPath); err != nil {
+		t.Fatalf("workspace removal changed global plugin: %v", err)
+	}
+}
+
+func TestScopedRunUsesOnlySelectedStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	global, err := GlobalStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := WorkspaceStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	globalSource := filepath.Join(t.TempDir(), "inspect.py")
+	localSource := filepath.Join(t.TempDir(), "inspect.py")
+	writeTestPlugin(t, globalSource, "#!/usr/bin/env python3\nprint('global')\n", 0600)
+	writeTestPlugin(t, localSource, "#!/usr/bin/env python3\nprint('workspace')\n", 0600)
+	if _, err := global.Install(globalSource); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Install(localSource); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name  string
+		store Store
+		want  string
+	}{
+		{name: "global", store: global, want: "global\n"},
+		{name: "workspace", store: local, want: "workspace\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := test.store.Run(context.Background(), "inspect", workspace, nil, nil, &output, nil); err != nil {
+				t.Fatal(err)
+			}
+			if output.String() != test.want {
+				t.Fatalf("output = %q, want %q", output.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceRunDoesNotFallBackToSameNamedGlobalPlugin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	global, err := GlobalStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := WorkspaceStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	globalSource := filepath.Join(t.TempDir(), "inspect.py")
+	localSource := filepath.Join(t.TempDir(), "inspect.py")
+	writeTestPlugin(t, globalSource, "#!/usr/bin/env python3\nprint('global')\n", 0600)
+	writeTestPlugin(t, localSource, "#!/usr/bin/env python3\nprint('workspace')\n", 0600)
+	if _, err := global.Install(globalSource); err != nil {
+		t.Fatal(err)
+	}
+	localPath, err := local.Install(localSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(localPath, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err = local.Run(context.Background(), "inspect", workspace, nil, nil, &output, nil)
+	if err == nil || !strings.Contains(err.Error(), "not executable") {
+		t.Fatalf("workspace run error = %v, want local executable error", err)
+	}
+	if errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("invalid workspace plugin was reported as absent: %v", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("workspace run unexpectedly used global plugin: %q", output.String())
+	}
+}
+
+func TestScopedRunReportsMissingPluginWithSentinel(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	local, err := WorkspaceStore(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = local.Run(context.Background(), "inspect", workspace, nil, nil, nil, nil)
+	if !errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("missing plugin error = %v, want ErrNotInstalled", err)
+	}
+}
+
+func TestWorkspaceStoreRequiresRealWorkspaceBoundary(t *testing.T) {
+	workspace := t.TempDir()
+	if _, err := WorkspaceStore(workspace); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("missing boundary error = %v", err)
+	}
+	target := filepath.Join(t.TempDir(), "boundary")
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(workspace, ".conven")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WorkspaceStore(workspace); err == nil || !strings.Contains(err.Error(), "symbolic links are not allowed") {
+		t.Fatalf("symlink boundary error = %v", err)
+	}
+}
+
 func TestInstallBuiltinsWithNoPythonFilesCreatesProtectedEmptyDirectory(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -272,7 +500,7 @@ func TestRemoveDeletesOnlySafeNamedRegularPlugin(t *testing.T) {
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
 		t.Fatalf("removed plugin still exists: %v", err)
 	}
-	if _, err := Remove("inspect.py"); err == nil || !strings.Contains(err.Error(), "not installed") {
+	if _, err := Remove("inspect.py"); err == nil || !errors.Is(err, ErrNotInstalled) || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("missing plugin removal error = %v", err)
 	}
 }

@@ -205,6 +205,11 @@ go build -o /tmp/conven-release ./cmd/conven
 test -f examples/application.yaml
 test ! -e examples/loom.yaml
 test ! -e examples/conven.yaml
+test -f examples/workspace/services.properties
+test -f examples/workspace/disabled-services.properties
+test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
+test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
+test -f examples/workspace/README.md
 test -f internal/plugins/builtin/README.md
 test ! -e internal/plugins/builtin/generate-apollo-consul.py
 
@@ -223,6 +228,100 @@ the same exact two-line output, for example:
 ```text
 conven version X.Y.Z (YYYY-MM-DD)
 https://github.com/leo1394/homebrew-conven
+```
+
+### Workspace onboarding and plugin acceptance
+
+For a release that changes workspace onboarding or plugins, smoke-test the
+built binary in an isolated workspace. The first `init` must create all four
+workspace assets, and a repeated `init` must preserve every existing byte.
+`services --registry` may update `.conven/conven.yaml`, but must not modify the
+properties catalogs. Omitting the source from `policy --import` must select the
+workspace-root `application.yaml`:
+
+```bash
+CONVEN_SMOKE_ROOT="$(mktemp -d /tmp/conven-release-smoke.XXXXXX)"
+CONVEN_SMOKE_WORKSPACE="$CONVEN_SMOKE_ROOT/workspace"
+CONVEN_SMOKE_CHINESE_WORKSPACE="$CONVEN_SMOKE_ROOT/workspace-zh"
+CONVEN_SMOKE_HOME="$CONVEN_SMOKE_ROOT/home"
+mkdir "$CONVEN_SMOKE_WORKSPACE" "$CONVEN_SMOKE_CHINESE_WORKSPACE" \
+  "$CONVEN_SMOKE_HOME"
+
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init
+for CONVEN_SMOKE_ASSET in \
+  services.properties \
+  disabled-services.properties \
+  CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
+  README.md
+do
+  test -f "$CONVEN_SMOKE_WORKSPACE/$CONVEN_SMOKE_ASSET"
+  printf '\n# release-preserve-check\n' >> "$CONVEN_SMOKE_WORKSPACE/$CONVEN_SMOKE_ASSET"
+done
+grep -Fq 'language: en' \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
+grep -Fq 'https://github.com/leo1394/homebrew-conven' \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
+test ! -e \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md"
+
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_CHINESE_WORKSPACE" init
+grep -Fq 'language: zh-CN' \
+  "$CONVEN_SMOKE_CHINESE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
+CONVEN_ASSET_SHA_BEFORE="$(shasum \
+  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
+  "$CONVEN_SMOKE_WORKSPACE/README.md")"
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init
+CONVEN_ASSET_SHA_AFTER="$(shasum \
+  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
+  "$CONVEN_SMOKE_WORKSPACE/README.md")"
+test "$CONVEN_ASSET_SHA_BEFORE" = "$CONVEN_ASSET_SHA_AFTER"
+
+CONVEN_CATALOG_SHA_BEFORE="$(shasum \
+  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties")"
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" services --registry
+CONVEN_CATALOG_SHA_AFTER="$(shasum \
+  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties")"
+test "$CONVEN_CATALOG_SHA_BEFORE" = "$CONVEN_CATALOG_SHA_AFTER"
+
+cp "$CONVEN_SMOKE_WORKSPACE/.conven/conven.yaml" \
+  "$CONVEN_SMOKE_WORKSPACE/application.yaml"
+CONVEN_IMPORT_OUTPUT="$(env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
+  /tmp/conven-release \
+  -C "$CONVEN_SMOKE_WORKSPACE" policy --import)"
+printf '%s\n' "$CONVEN_IMPORT_OUTPUT" | \
+  grep -F "using workspace default: $CONVEN_SMOKE_WORKSPACE/application.yaml"
+```
+
+The plugin regression gate must additionally prove all of these contracts:
+
+- install and remove use `<workspace>/.conven/plugins` by default and
+  `~/.conven/plugins` only with `--global`; the two scopes may contain the same
+  name;
+- default listing shows workspace and global groups, while `--list --global`
+  shows only the global group;
+- an explicit name prefers the workspace plugin and falls back to a global
+  plugin with a warning;
+- an omitted name runs the sole workspace plugin with a warning; zero or
+  multiple workspace plugins fail and show the workspace/global candidates;
+  global plugins are never selected implicitly merely because the workspace
+  has none.
+
+These behaviors are covered by the focused CLI and plugin tests as well as the
+full suite. Keep the focused command available when diagnosing a release:
+
+```bash
+go test -count=1 ./internal/cli ./internal/plugins \
+  -run 'Test(GlobalAndWorkspaceStores|ScopedStores|PluginsInstallAndList|PluginsGlobal|PluginsRunWithoutName|PluginsExplicitName)'
 ```
 
 Review the diff rather than relying only on automated checks. In particular,

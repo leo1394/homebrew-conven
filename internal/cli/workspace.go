@@ -22,13 +22,14 @@ func (app App) runInit(arguments []string) int {
 	if len(flags.Args()) != 0 {
 		return app.fail(errors.New("init does not accept arguments"))
 	}
-	result, err := config.InitWorkspaceDetails(app.Cwd, examples.ApplicationYAML)
+	result, err := config.InitWorkspaceDetailsWithPolicySpecification(app.Cwd, examples.ApplicationYAML, workspacePolicySpecification())
 	if err != nil {
 		return app.fail(err)
 	}
 	style := terminal.New(app.Output)
 	if result.Created {
 		fmt.Fprintf(app.Output, "%s %s\n", style.Label("Initialized Conven workspace in"), style.Identifier(result.Path))
+		fmt.Fprintln(app.Output, style.Label("Completed initial service registry scan of direct-child repositories."))
 		if len(result.Discovered) > 0 {
 			fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Discovered supported services"), style.Identifiers(result.Discovered, ", "))
 		} else if result.UsedExample {

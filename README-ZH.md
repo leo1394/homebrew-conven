@@ -124,17 +124,25 @@ conven services --start --dev --dry-run user-svc order-svc
 conven services --start --dev user-svc order-svc
 ```
 
-`init` 会保守地扫描当前目录下一级的 Git 仓库。它可以识别支持的 Go main module
-布局，并记录可以证明的路径、runner、服务类型和绑定候选。它**不会**猜测端口、
+`init` 会完成首次一级子仓库 registry 扫描，并以 no-clobber 方式创建
+`services.properties`、`disabled-services.properties`、
+`CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` 和 `README.md` 工作区说明文件。
+它可以识别支持的 Go main module布局，并记录可以证明的路径、runner、服务类型和绑定候选。它**不会**猜测端口、
 完整业务依赖图、公司 Policy、Apollo 凭据或集群连接信息。启动前需要人工确认
 一次候选配置。
 
-如果项目维护了 Policy 生成器，请显式安装并运行：
+后续执行 `services --registry` 只更新 `.conven/conven.yaml`，不会猜测端口，也不会
+改写两个生成器 properties 文件。仓库新增、删除或暂时未检出时，应由用户或 AI
+复核并维护 `services.properties`，将它作为完整服务目录的超集。
+
+如果项目维护了 Policy 生成器，请安装后运行唯一的 workspace 插件，或显式指定名称。
+首次运行前还需按生成的 AI 规范补全 workspace 专用的 `conven-generator.json`；`init`
+不会猜测环境或连接策略：
 
 ```bash
-conven plugins --install ./generate-project-policy.py
-conven plugins --run generate-project-policy --output conven-candidate.yaml
-conven policy --import ./conven-candidate.yaml --edit
+conven plugins --install ./generate-workspace-policy.py
+conven plugins --run --output
+conven policy --import --edit
 ```
 
 Conven 当前不内置任何项目专用插件。`policy --import` 会验证并替换完整 manifest，
@@ -288,12 +296,24 @@ workspace 配置位于 `.conven/config`，全局配置位于 `~/.conven/config`�
 ```bash
 conven plugins --install ./plugin.py
 conven plugins --list
-conven plugins --run plugin --output candidate.yaml
+conven plugins --run --output
+conven policy --import
 conven plugins --remove plugin
+
+# 显式使用用户全局插件范围。
+conven plugins --install --global ./plugin.py
+conven plugins --list --global
+conven plugins --run --global plugin --output
+conven plugins --remove --global plugin
 ```
 
-插件以规范 workspace 作为工作目录运行。请将插件视为可信本地代码，并在导入前
-检查它生成的 Policy 候选配置。
+workspace 插件位于 `.conven/plugins`，全局插件位于 `~/.conven/plugins`，两层允许
+同名。显式名称优先执行 workspace 插件，回退到全局插件前会 warning；workspace
+只有一个插件时可以省略名称。`--output` 不带文件名时会原样传给插件，生成器约定写入
+`application.yaml`；`policy --import` 不带文件名时导入 workspace 根目录的该文件。
+插件以规范 workspace 作为工作目录运行。请将插件视为可信本地代码，并在导入前检查
+它生成的 Policy 候选配置。默认分组列表需要处于 workspace 中；在 workspace 外请使用
+`conven plugins --list --global`。
 
 ## 运行目录
 

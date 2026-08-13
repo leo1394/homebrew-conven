@@ -45,6 +45,13 @@ Initialize a workspace in the effective working directory.
 Conven scans direct-child Git repositories for supported service layouts and
 creates
 .IR .conven/conven.yaml .
+This scan is the initial registry pass. Initialization also creates missing
+.IR services.properties ,
+.IR disabled-services.properties ,
+.IR CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md ,
+and
+.IR README.md
+without overwriting existing files.
 An existing manifest is not overwritten.
 .TP
 .BR config " [" \-\-global "] [" \-\-list | \-\-unset "] [" key "] [" value "]"
@@ -71,16 +78,32 @@ or
 is required.
 .TP
 .B plugins
-Install, list, remove, or run Python plugins from
+Install, list, remove, or run Python plugins. The default workspace scope is
+.IR <workspace>/.conven/plugins ;
+.B --global
+selects
 .IR ~/.conven/plugins .
 Project-specific plugins are not implicitly bundled with Conven.
 Relative install paths are resolved from the effective working directory.
 Use
-.BR "\-\-install python-file" ,
-.BR \-\-list ,
-.BR "\-\-remove name" ,
+.BR "\-\-install [\-\-global] python-file" ,
+.BR "\-\-list [\-\-global]" ,
+.BR "\-\-remove [\-\-global] name" ,
 or
-.BR "\-\-run name [plugin-args...]" .
+.BR "\-\-run [\-\-global] [name] [plugin-args...]" .
+The unqualified list is grouped by workspace and global scope. An explicit
+name prefers workspace and warns before global fallback. An omitted name runs
+only when exactly one workspace plugin is installed.
+The grouped list requires a workspace; outside one, use
+.BR "plugins \-\-list \-\-global" .
+Generator options are passed through unchanged. Compatible policy generators
+accept
+.BR "\-\-output [file]"
+(with no file, use
+.IR <workspace>/application.yaml )
+and
+.BR "\-\-disable-bindings binding..." ;
+the plugin, not Conven, owns overwrite confirmation.
 .TP
 .B services
 List, start, restart, stop, clean, and inspect services in the effective
@@ -309,7 +332,9 @@ service discovery, materialization, routing, and local-isolation rules.
 publishes a temporary edited copy only after strict validation.
 .B conven policy \-\-import
 installs an entire local YAML file, backs up the previous manifest, and does not
-merge it with repository scan results.
+merge it with repository scan results. If the filename is omitted, Conven uses
+.IR <workspace>/application.yaml
+and reports that default before importing.
 .B conven policy \-\-reset
 destructively rebuilds the whole manifest from facts that built-in analyzers can
 prove; manual rules must be restored from the backup or declared again.
@@ -324,6 +349,28 @@ Canonical workspace manifest.
 .TP
 .I <workspace>/.conven/config
 Workspace-local settings.
+.TP
+.I <workspace>/.conven/plugins
+Workspace-local Python plugins; this scope takes precedence over global plugins.
+.TP
+.I <workspace>/services.properties
+User- or AI-reviewed service, binding, kind, and local-port catalog for policy
+generators.
+.TP
+.I <workspace>/disabled-services.properties
+RPC bindings disabled by compatible policy generators.
+.TP
+.I <workspace>/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
+AI-readable policy-generator implementation and validation contract created
+during initialization.
+.TP
+.I <workspace>/conven-generator.json
+Workspace-specific generator profile, environment, and connection input.
+Conven does not generate this file because those policy values cannot be
+inferred safely.
+.TP
+.I <workspace>/README.md
+No-clobber workspace quick start created by initialization when absent.
 .TP
 .I <workspace>/.conven/.gitignore
 Workspace-local ignore rules; initialization non-destructively adds the runtime
@@ -344,7 +391,7 @@ removes only the artifacts and service logs after the session has stopped.
 User-global settings.
 .TP
 .I ~/.conven/plugins
-Installed user plugins.
+Installed user-global plugins.
 .TP
 .I ~/.conven/state/connections
 Cross-workspace shared connection lease metadata.

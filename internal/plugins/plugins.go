@@ -24,13 +24,67 @@ import (
 var builtinFiles embed.FS
 
 var ErrAlreadyInstalled = errors.New("Conven plugin is already installed")
+var ErrNotInstalled = errors.New("Conven plugin is not installed")
+
+type Scope string
+
+const (
+	GlobalScope    Scope = "global"
+	WorkspaceScope Scope = "workspace"
+)
+
+type Store struct {
+	scope     Scope
+	directory string
+}
+
+func GlobalStore() (Store, error) {
+	root, err := convenhome.Root("")
+	if err != nil {
+		return Store{}, err
+	}
+	return Store{
+		scope:     GlobalScope,
+		directory: filepath.Join(root, "plugins"),
+	}, nil
+}
+
+func WorkspaceStore(workspace string) (Store, error) {
+	workspace, err := canonicalWorkspace(workspace)
+	if err != nil {
+		return Store{}, err
+	}
+	boundary := filepath.Join(workspace, ".conven")
+	info, err := os.Lstat(boundary)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Store{}, fmt.Errorf("Conven workspace boundary %q does not exist", boundary)
+		}
+		return Store{}, fmt.Errorf("inspect Conven workspace boundary %q: %w", boundary, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return Store{}, fmt.Errorf("Conven workspace boundary %q must be a directory; symbolic links are not allowed", boundary)
+	}
+	return Store{
+		scope:     WorkspaceScope,
+		directory: filepath.Join(boundary, "plugins"),
+	}, nil
+}
+
+func (store Store) Scope() Scope {
+	return store.scope
+}
+
+func (store Store) Directory() string {
+	return store.directory
+}
 
 func Directory() (string, error) {
-	root, err := convenhome.Root("")
+	store, err := GlobalStore()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "plugins"), nil
+	return store.Directory(), nil
 }
 
 func InstallBuiltins() error {
@@ -66,14 +120,30 @@ func InstallBuiltins() error {
 }
 
 func Install(source string) (string, error) {
-	return installSource(source, false)
+	store, err := GlobalStore()
+	if err != nil {
+		return "", err
+	}
+	return store.Install(source)
 }
 
 func Replace(source string) (string, error) {
-	return installSource(source, true)
+	store, err := GlobalStore()
+	if err != nil {
+		return "", err
+	}
+	return store.Replace(source)
 }
 
-func installSource(source string, replaceExisting bool) (string, error) {
+func (store Store) Install(source string) (string, error) {
+	return store.installSource(source, false)
+}
+
+func (store Store) Replace(source string) (string, error) {
+	return store.installSource(source, true)
+}
+
+func (store Store) installSource(source string, replaceExisting bool) (string, error) {
 	if source == "" {
 		return "", errors.New("install Conven plugin: source path is empty")
 	}
@@ -120,7 +190,7 @@ func installSource(source string, replaceExisting bool) (string, error) {
 	if _, err := input.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("rewind Conven plugin source %q: %w", sourcePath, err)
 	}
-	directory, err := preparePluginDirectory()
+	directory, err := store.preparePluginDirectory()
 	if err != nil {
 		return "", err
 	}
@@ -265,7 +335,15 @@ func alreadyInstalledError(destination string) error {
 }
 
 func List() ([]string, error) {
-	directory, exists, err := inspectPluginDirectory()
+	store, err := GlobalStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.List()
+}
+
+func (store Store) List() ([]string, error) {
+	directory, exists, err := store.inspectPluginDirectory()
 	if err != nil {
 		return nil, err
 	}
@@ -299,16 +377,24 @@ func List() ([]string, error) {
 }
 
 func Remove(name string) (string, error) {
+	store, err := GlobalStore()
+	if err != nil {
+		return "", err
+	}
+	return store.Remove(name)
+}
+
+func (store Store) Remove(name string) (string, error) {
 	name, filename, err := normalizeName(name)
 	if err != nil {
 		return "", err
 	}
-	directory, exists, err := inspectPluginDirectory()
+	directory, exists, err := store.inspectPluginDirectory()
 	if err != nil {
 		return "", err
 	}
 	if !exists {
-		return "", fmt.Errorf("Conven plugin %q is not installed", name)
+		return "", fmt.Errorf("%w: %q", ErrNotInstalled, name)
 	}
 	path := filepath.Join(directory, filename)
 	directoryHandle, err := openPluginDirectory(directory)
@@ -322,7 +408,7 @@ func Remove(name string) (string, error) {
 	info := unix.Stat_t{}
 	if err := unix.Fstatat(int(directoryHandle.Fd()), filename, &info, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		if errors.Is(err, unix.ENOENT) {
-			return "", fmt.Errorf("Conven plugin %q is not installed", name)
+			return "", fmt.Errorf("%w: %q", ErrNotInstalled, name)
 		}
 		return "", fmt.Errorf("inspect Conven plugin %q: %w", path, err)
 	}
@@ -339,6 +425,14 @@ func Remove(name string) (string, error) {
 }
 
 func Run(ctx context.Context, name string, workspace string, args []string, input io.Reader, output io.Writer, errorOutput io.Writer) error {
+	store, err := GlobalStore()
+	if err != nil {
+		return err
+	}
+	return store.Run(ctx, name, workspace, args, input, output, errorOutput)
+}
+
+func (store Store) Run(ctx context.Context, name string, workspace string, args []string, input io.Reader, output io.Writer, errorOutput io.Writer) error {
 	if ctx == nil {
 		return errors.New("plugin context is nil")
 	}
@@ -353,18 +447,18 @@ func Run(ctx context.Context, name string, workspace string, args []string, inpu
 	if err != nil {
 		return err
 	}
-	directory, exists, err := inspectPluginDirectory()
+	directory, exists, err := store.inspectPluginDirectory()
 	if err != nil {
 		return err
 	}
 	if !exists {
-		return fmt.Errorf("Conven plugin directory %q does not exist", directory)
+		return fmt.Errorf("%w: %q (plugin directory %q does not exist)", ErrNotInstalled, name, directory)
 	}
 	path := filepath.Join(directory, filename)
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("Conven plugin %q is not installed", name)
+			return fmt.Errorf("%w: %q", ErrNotInstalled, name)
 		}
 		return fmt.Errorf("inspect Conven plugin %q: %w", path, err)
 	}
@@ -393,7 +487,15 @@ func Run(ctx context.Context, name string, workspace string, args []string, inpu
 }
 
 func preparePluginDirectory() (string, error) {
-	directory, err := Directory()
+	store, err := GlobalStore()
+	if err != nil {
+		return "", err
+	}
+	return store.preparePluginDirectory()
+}
+
+func (store Store) preparePluginDirectory() (string, error) {
+	directory, err := store.pluginDirectory()
 	if err != nil {
 		return "", err
 	}
@@ -414,7 +516,15 @@ func preparePluginDirectory() (string, error) {
 }
 
 func inspectPluginDirectory() (string, bool, error) {
-	directory, err := Directory()
+	store, err := GlobalStore()
+	if err != nil {
+		return "", false, err
+	}
+	return store.inspectPluginDirectory()
+}
+
+func (store Store) inspectPluginDirectory() (string, bool, error) {
+	directory, err := store.pluginDirectory()
 	if err != nil {
 		return "", false, err
 	}
@@ -440,6 +550,16 @@ func inspectPluginDirectory() (string, bool, error) {
 		return "", false, fmt.Errorf("Conven plugin directory %q must be a directory; symbolic links are not allowed", directory)
 	}
 	return directory, true, nil
+}
+
+func (store Store) pluginDirectory() (string, error) {
+	if store.scope != GlobalScope && store.scope != WorkspaceScope {
+		return "", fmt.Errorf("invalid Conven plugin scope %q", store.scope)
+	}
+	if store.directory == "" {
+		return "", fmt.Errorf("Conven %s plugin directory is empty", store.scope)
+	}
+	return store.directory, nil
 }
 
 func protectDirectory(path string, label string) error {

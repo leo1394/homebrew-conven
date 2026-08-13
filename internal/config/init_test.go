@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/leo1394/homebrew-conven/examples"
 )
 
 func TestInitWorkspaceCreatesManifestAndDoesNotOverwrite(t *testing.T) {
@@ -72,6 +74,229 @@ func TestInitWorkspaceCreatesManifestAndDoesNotOverwrite(t *testing.T) {
 	}
 	if string(ignored) != "custom-rule\n/runtime/\n" || strings.Count(string(ignored), "/runtime/\n") != 1 {
 		t.Fatalf("repeated initialization changed gitignore: %q", ignored)
+	}
+}
+
+func TestInitWorkspaceCreatesAndPreservesWorkspaceFiles(t *testing.T) {
+	workspace := t.TempDir()
+	if _, _, err := InitWorkspace(workspace, []byte("version: 1\n")); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range examples.WorkspaceFiles() {
+		path := filepath.Join(workspace, file.Name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read initialized workspace file %q: %v", file.Name, err)
+		}
+		if string(data) != string(file.Data) {
+			t.Fatalf("initialized workspace file %q does not match its embedded template", file.Name)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0644 {
+			t.Fatalf("initialized workspace file %q mode = %04o, want 0644", file.Name, info.Mode().Perm())
+		}
+	}
+
+	preserved := make(map[string]string)
+	for _, file := range examples.WorkspaceFiles() {
+		value := "custom " + file.Name + "\n"
+		preserved[file.Name] = value
+		if err := os.WriteFile(filepath.Join(workspace, file.Name), []byte(value), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	missing := "disabled-services.properties"
+	if err := os.Remove(filepath.Join(workspace, missing)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := InitWorkspace(workspace, []byte("replacement\n")); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range examples.WorkspaceFiles() {
+		data, err := os.ReadFile(filepath.Join(workspace, file.Name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := preserved[file.Name]
+		if file.Name == missing {
+			want = string(file.Data)
+		}
+		if string(data) != want {
+			t.Fatalf("reinitialized workspace file %q = %q, want %q", file.Name, data, want)
+		}
+	}
+}
+
+func TestInitWorkspaceFilesContainDocumentedCatalogHeaders(t *testing.T) {
+	servicesHeader := `# Conven Apollo/Consul policy generator service catalog.
+#
+# Blank lines and full-line comments beginning with # are ignored.
+# The generator requires at least one valid record and does not provide a
+# built-in service catalog. If this file has no records, generation stops and
+# reports the repositories discovered in the workspace.
+#
+# Supported records:
+#   repository,kind,port
+#   binding:<rpc-binding>,rpc,port
+#   repository,<rpc-binding>,rpc,port
+#
+# kind must be http or rpc. Ports must be unique integers from 1 to 65535.
+# A repository entry is used only when that repository exists in the workspace.
+# A binding-only entry is resolved from consumer Consul keys to one local RPC
+# provider repository; unresolved entries are ignored.
+`
+	disabledHeader := `# RPC bindings disabled by the Conven Apollo/Consul policy generator.
+#
+# Put one RPC binding on each line. Blank lines and full-line comments
+# beginning with # are ignored. A binding absent from the generated services is
+# ignored with a warning.
+#
+# Passing --disable-bindings replaces this file for that invocation.
+# Disabled bindings also take precedence over inferred local dependencies.
+
+`
+	if string(examples.ServicesProperties) != servicesHeader {
+		t.Fatalf("embedded services.properties = %q", examples.ServicesProperties)
+	}
+	if string(examples.DisabledServicesProperties) != disabledHeader {
+		t.Fatalf("embedded disabled-services.properties = %q", examples.DisabledServicesProperties)
+	}
+	for _, expected := range []string{
+		"spec: conven-workspace-policy-generator",
+		"pluginInvocation: \"conven plugins --run [NAME] [plugin-args...]\"",
+		"repository: \"https://github.com/leo1394/homebrew-conven\"",
+		"# Conven 工作区 Policy 生成器：AI 实现规范",
+		"go-zero-apollo-consul-v1",
+		"conven plugins --run [NAME]",
+		"--output [FILE]",
+		"--disable-bindings",
+	} {
+		if !strings.Contains(string(examples.WorkspacePolicyGeneratorAISpec), expected) {
+			t.Fatalf("embedded AI specification is missing %q", expected)
+		}
+	}
+	for _, expected := range []string{
+		"language: en",
+		"pluginInvocation: \"conven plugins --run [NAME] [plugin-args...]\"",
+		"repository: \"https://github.com/leo1394/homebrew-conven\"",
+		"# Conven Workspace Policy Generator: AI Implementation Specification",
+		"go-zero-apollo-consul-v1",
+		"conven plugins --run [NAME]",
+		"--output [FILE]",
+		"--disable-bindings",
+	} {
+		if !strings.Contains(string(examples.WorkspacePolicyGeneratorAISpecEnglish), expected) {
+			t.Fatalf("embedded English AI specification is missing %q", expected)
+		}
+	}
+	for _, expected := range []string{
+		"# Conven Workspace Quick Start",
+		"conven-generator.json",
+		"conven plugins --run --output",
+		"conven policy --import --edit",
+	} {
+		if !strings.Contains(string(examples.WorkspaceREADME), expected) {
+			t.Fatalf("embedded workspace README is missing %q", expected)
+		}
+	}
+}
+
+func TestWorkspacePolicySpecificationsHaveNoReferenceImplementationTraces(t *testing.T) {
+	for _, forbidden := range []string{
+		"generate-apollo-consul.py",
+		"referenceImplementation:",
+		"currentInvocation:",
+		"SERVICE_PRESETS",
+	} {
+		if strings.Contains(string(examples.WorkspacePolicyGeneratorAISpec), forbidden) {
+			t.Fatalf("embedded Chinese AI specification contains reference implementation trace %q", forbidden)
+		}
+		if strings.Contains(string(examples.WorkspacePolicyGeneratorAISpecEnglish), forbidden) {
+			t.Fatalf("embedded English AI specification contains reference implementation trace %q", forbidden)
+		}
+	}
+	for _, forbidden := range []string{
+		"下一版",
+		"参考实现",
+		"相较参考实现",
+		"参考算法",
+		"参考实现的已知偏差",
+		"旧版 Conven",
+	} {
+		if strings.Contains(string(examples.WorkspacePolicyGeneratorAISpec), forbidden) {
+			t.Fatalf("embedded Chinese AI specification contains reference implementation trace %q", forbidden)
+		}
+	}
+	for _, forbidden := range []string{
+		"next-generation",
+		"reference implementation",
+		"Compared with the reference implementation",
+		"reference algorithm",
+		"Recommended compatible invocations",
+		"Known Deviations of the Reference Implementation",
+		"Required by older Conven",
+	} {
+		if strings.Contains(string(examples.WorkspacePolicyGeneratorAISpecEnglish), forbidden) {
+			t.Fatalf("embedded English AI specification contains reference implementation trace %q", forbidden)
+		}
+	}
+}
+
+func TestInitWorkspaceRejectsUnsafeWorkspaceFiles(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(t *testing.T, path string) string
+		want    string
+	}{
+		{
+			name: "symbolic link",
+			prepare: func(t *testing.T, path string) string {
+				target := filepath.Join(t.TempDir(), "target")
+				if err := os.WriteFile(target, []byte("keep\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+				return target
+			},
+			want: "symbolic links are not allowed",
+		},
+		{
+			name: "directory",
+			prepare: func(t *testing.T, path string) string {
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+				return ""
+			},
+			want: "must be a regular file",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			unsafePath := filepath.Join(workspace, "services.properties")
+			target := test.prepare(t, unsafePath)
+			_, _, err := InitWorkspace(workspace, []byte("version: 1\n"))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+			if _, statErr := os.Stat(filepath.Join(workspace, ".conven")); !os.IsNotExist(statErr) {
+				t.Fatalf("unsafe workspace file validation created .conven: %v", statErr)
+			}
+			if target != "" {
+				data, readErr := os.ReadFile(target)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if string(data) != "keep\n" {
+					t.Fatalf("workspace symlink target changed: %q", data)
+				}
+			}
+		})
 	}
 }
 

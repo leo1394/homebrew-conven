@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/leo1394/homebrew-conven/examples"
 )
 
 const runtimeIgnoreRule = "/runtime/"
@@ -24,13 +26,21 @@ func InitWorkspace(cwd string, application []byte) (string, bool, error) {
 }
 
 func InitWorkspaceDetails(cwd string, application []byte) (InitResult, error) {
+	return InitWorkspaceDetailsWithPolicySpecification(cwd, application, examples.WorkspacePolicyGeneratorAISpec)
+}
+
+func InitWorkspaceDetailsWithPolicySpecification(cwd string, application []byte, specification []byte) (InitResult, error) {
 	result := InitResult{}
+	workspaceFiles := examples.WorkspaceFilesForPolicySpecification(specification)
 	workspace, err := ResolveDirectory(cwd)
 	if err != nil {
 		return result, err
 	}
 	if sameDirectory(workspace, resolvedUserHome()) {
 		return result, fmt.Errorf("cannot initialize a Conven workspace in the user home directory %q: ~/.conven is reserved for global configuration", workspace)
+	}
+	if err := validateWorkspaceFiles(workspace, workspaceFiles); err != nil {
+		return result, err
 	}
 	boundary := filepath.Join(workspace, ".conven")
 	info, err := os.Lstat(boundary)
@@ -48,6 +58,9 @@ func InitWorkspaceDetails(cwd string, application []byte) (InitResult, error) {
 			return result, fmt.Errorf("Conven manifest %q must be a regular file, not a symbolic link", manifest)
 		}
 		if err := ensureRuntimeIgnored(boundary); err != nil {
+			return result, err
+		}
+		if err := ensureWorkspaceFiles(workspace, workspaceFiles); err != nil {
 			return result, err
 		}
 		return result, nil
@@ -82,7 +95,71 @@ func InitWorkspaceDetails(cwd string, application []byte) (InitResult, error) {
 		return result, err
 	}
 	result.Created = created
+	if err := ensureWorkspaceFiles(workspace, workspaceFiles); err != nil {
+		return result, err
+	}
 	return result, nil
+}
+
+func validateWorkspaceFiles(workspace string, workspaceFiles []examples.WorkspaceFile) error {
+	for _, file := range workspaceFiles {
+		if file.Name == "" || filepath.Base(file.Name) != file.Name || file.Name == "." {
+			return fmt.Errorf("invalid Conven workspace file name %q", file.Name)
+		}
+		path := filepath.Join(workspace, file.Name)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect Conven workspace file %q: %w", path, err)
+		}
+		if err := validateWorkspaceFile(path, info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureWorkspaceFiles(workspace string, workspaceFiles []examples.WorkspaceFile) error {
+	for _, file := range workspaceFiles {
+		path := filepath.Join(workspace, file.Name)
+		info, err := os.Lstat(path)
+		if err == nil {
+			if err := validateWorkspaceFile(path, info); err != nil {
+				return err
+			}
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect Conven workspace file %q: %w", path, err)
+		}
+		created, err := publishNewFile(path, file.Data, 0644, "Conven workspace file")
+		if err != nil {
+			return err
+		}
+		if created {
+			continue
+		}
+		info, err = os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("inspect concurrently created Conven workspace file %q: %w", path, err)
+		}
+		if err := validateWorkspaceFile(path, info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateWorkspaceFile(path string, info os.FileInfo) error {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("Conven workspace file %q must be a regular file; symbolic links are not allowed", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("Conven workspace file %q must be a regular file", path)
+	}
+	return nil
 }
 
 func ensureRuntimeIgnored(boundary string) error {
@@ -134,32 +211,36 @@ func ensureConvenPathIgnored(boundary string, rule string) error {
 }
 
 func publishNewManifest(path string, data []byte) (bool, error) {
+	return publishNewFile(path, data, 0600, "Conven manifest")
+}
+
+func publishNewFile(path string, data []byte, mode os.FileMode, label string) (bool, error) {
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".conven-init-*")
 	if err != nil {
-		return false, fmt.Errorf("create temporary Conven manifest: %w", err)
+		return false, fmt.Errorf("create temporary %s: %w", label, err)
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := temporary.Chmod(0600); err != nil {
+	if err := temporary.Chmod(mode); err != nil {
 		temporary.Close()
-		return false, fmt.Errorf("protect temporary Conven manifest: %w", err)
+		return false, fmt.Errorf("protect temporary %s: %w", label, err)
 	}
 	if _, err := temporary.Write(data); err != nil {
 		temporary.Close()
-		return false, fmt.Errorf("write temporary Conven manifest: %w", err)
+		return false, fmt.Errorf("write temporary %s: %w", label, err)
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()
-		return false, fmt.Errorf("sync temporary Conven manifest: %w", err)
+		return false, fmt.Errorf("sync temporary %s: %w", label, err)
 	}
 	if err := temporary.Close(); err != nil {
-		return false, fmt.Errorf("close temporary Conven manifest: %w", err)
+		return false, fmt.Errorf("close temporary %s: %w", label, err)
 	}
 	if err := os.Link(temporaryName, path); err != nil {
 		if os.IsExist(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("publish Conven manifest %q: %w", path, err)
+		return false, fmt.Errorf("publish %s %q: %w", label, path, err)
 	}
 	_ = syncDirectory(filepath.Dir(path))
 	return true, nil

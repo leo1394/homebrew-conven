@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/leo1394/homebrew-conven/internal/config"
@@ -44,17 +45,35 @@ func (app App) runPolicyImport(arguments []string) int {
 	flags.SetOutput(app.Error)
 	edit := flags.Bool("edit", false, "edit a private import draft before validation and publication")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --import <yaml-file> [--edit]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --import [yaml-file] [--edit]")
 		flags.PrintDefaults()
 		fmt.Fprintln(flags.Output(), "\nImports the YAML file as the entire .conven/conven.yaml for the workspace resolved from cwd.")
+		fmt.Fprintln(flags.Output(), "When yaml-file is omitted, imports <workspace>/application.yaml and reports the selected default.")
 		fmt.Fprintln(flags.Output(), "This is a whole-file replacement, not a merge with repository scan results.")
 		fmt.Fprintln(flags.Output(), "An existing manifest is backed up before replacement; --edit opens a private import-seeded draft before publication.")
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
 	}
-	if len(flags.Args()) != 1 {
-		return app.fail(errors.New("policy --import requires exactly one YAML file"))
+	if len(flags.Args()) > 1 {
+		return app.fail(errors.New("policy --import accepts at most one YAML file"))
+	}
+	importPath := ""
+	if len(flags.Args()) == 1 {
+		importPath = flags.Args()[0]
+	} else {
+		workspace, err := config.FindWorkspace(app.Cwd)
+		if err != nil {
+			return app.fail(err)
+		}
+		importPath = filepath.Join(workspace, "application.yaml")
+		fmt.Fprintf(app.Output, "No import file specified; using workspace default: %s\n", importPath)
+		if _, err := os.Lstat(importPath); err != nil {
+			if os.IsNotExist(err) {
+				return app.fail(fmt.Errorf("default policy import file %q does not exist; specify a YAML filename or generate application.yaml first", importPath))
+			}
+			return app.fail(fmt.Errorf("inspect default policy import file %q: %w", importPath, err))
+		}
 	}
 	var editImport func(string) error
 	if *edit {
@@ -62,7 +81,7 @@ func (app App) runPolicyImport(arguments []string) int {
 			return app.PolicyEditor(app.Context, path)
 		}
 	}
-	result, err := config.ImportWorkspacePolicy(app.Cwd, flags.Args()[0], editImport)
+	result, err := config.ImportWorkspacePolicy(app.Cwd, importPath, editImport)
 	if err != nil {
 		return app.fail(err)
 	}
@@ -152,12 +171,13 @@ func (app App) runPolicyReset(arguments []string) int {
 func (app App) printPolicyUsage(output io.Writer) {
 	fmt.Fprint(output, `usage:
   conven policy --edit
-  conven policy --import <yaml-file> [--edit]
+  conven policy --import [yaml-file] [--edit]
   conven policy --reset
 
 --edit opens a temporary copy of the workspace's sole .conven/conven.yaml and
-publishes it only after strict validation. --import installs an arbitrary local
-YAML file as that entire manifest without merging repository scan results;
+publishes it only after strict validation. --import installs a local YAML file,
+or <workspace>/application.yaml when omitted, as that entire manifest without
+merging repository scan results;
 schema validation does not prove that its service paths or infrastructure work.
 --reset destructively rebuilds the manifest from repository facts that analyzers
 can prove.

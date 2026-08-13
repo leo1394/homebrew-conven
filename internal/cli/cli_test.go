@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -521,7 +522,7 @@ func TestPluginsHelpUsesStdout(t *testing.T) {
 		if code := app.Run(arguments); code != 0 {
 			t.Fatalf("%v exit code = %d", arguments, code)
 		}
-		for _, action := range []string{"--install PYTHON_FILE", "--list", "--remove NAME", "--run NAME"} {
+		for _, action := range []string{"--install [--global] PYTHON_FILE", "--list [--global]", "--remove [--global] NAME", "--run [--global] [NAME]", "--output [FILE]", "--disable-bindings BINDING"} {
 			if !strings.Contains(output.String(), action) {
 				t.Fatalf("%v help is missing %s: %q", arguments, action, output.String())
 			}
@@ -564,7 +565,6 @@ func TestPluginsRequireKnownExclusiveAction(t *testing.T) {
 		{name: "list with second action", arguments: []string{"plugins", "--list", "--install"}, code: 1, want: "does not accept arguments or another action"},
 		{name: "remove without name", arguments: []string{"plugins", "--remove"}, code: 1, want: "requires exactly one plugin name"},
 		{name: "remove with extra argument", arguments: []string{"plugins", "--remove", "inspect", "--list"}, code: 1, want: "requires exactly one plugin name"},
-		{name: "run without name", arguments: []string{"plugins", "--run"}, code: 1, want: "requires a plugin name"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -579,7 +579,7 @@ func TestPluginsRequireKnownExclusiveAction(t *testing.T) {
 			if !strings.Contains(errorOutput.String(), test.want) {
 				t.Fatalf("stderr = %q, want %q", errorOutput.String(), test.want)
 			}
-			if test.code == 2 && !strings.Contains(errorOutput.String(), "conven plugins --run NAME") {
+			if test.code == 2 && !strings.Contains(errorOutput.String(), "conven plugins --run [--global] [NAME]") {
 				t.Fatalf("stderr is missing plugin usage: %q", errorOutput.String())
 			}
 		})
@@ -590,6 +590,9 @@ func TestPluginsInstallAndListUseTemporaryHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	workingDirectory := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workingDirectory, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	source := filepath.Join(workingDirectory, "inspect.py")
 	if err := os.WriteFile(source, []byte("#!/usr/bin/env python3\nprint('installed')\n"), 0700); err != nil {
 		t.Fatal(err)
@@ -600,9 +603,13 @@ func TestPluginsInstallAndListUseTemporaryHome(t *testing.T) {
 	if code := app.Run([]string{"plugins", "--install", "./inspect.py"}); code != 0 {
 		t.Fatalf("install exit code = %d: %s", code, errorOutput.String())
 	}
-	directory := filepath.Join(home, ".conven", "plugins")
+	canonicalWorkspace, err := filepath.EvalSymlinks(workingDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(canonicalWorkspace, ".conven", "plugins")
 	destination := filepath.Join(directory, "inspect.py")
-	wantOutput := "==> Installed plugin inspect\n  - Path: " + destination + "\n"
+	wantOutput := "==> Installed workspace plugin inspect\n  - Path: " + destination + "\n  - Workspace: " + canonicalWorkspace + "\n"
 	if output.String() != wantOutput {
 		t.Fatalf("install output = %q, want %q", output.String(), wantOutput)
 	}
@@ -621,14 +628,16 @@ func TestPluginsInstallAndListUseTemporaryHome(t *testing.T) {
 	if code := app.Run([]string{"plugins", "--list"}); code != 0 {
 		t.Fatalf("list exit code = %d: %s", code, errorOutput.String())
 	}
-	if output.String() != "inspect\n" {
+	wantList := "Workspace plugins (" + directory + "):\n  inspect\n" +
+		"Global plugins (" + filepath.Join(home, ".conven", "plugins") + "):\n  (none)\n"
+	if output.String() != wantList {
 		t.Fatalf("list output = %q", output.String())
 	}
 	output.Reset()
 	if code := app.Run([]string{"plugins", "--remove", "inspect"}); code != 0 {
 		t.Fatalf("remove exit code = %d: %s", code, errorOutput.String())
 	}
-	wantOutput = "==> Removed plugin inspect\n  - Path: " + destination + "\n"
+	wantOutput = "==> Removed workspace plugin inspect\n  - Path: " + destination + "\n  - Workspace: " + canonicalWorkspace + "\n"
 	if output.String() != wantOutput {
 		t.Fatalf("remove output = %q, want %q", output.String(), wantOutput)
 	}
@@ -720,6 +729,10 @@ func TestPluginsDuplicateInstallRequiresTerminalAndPreservesExistingPlugin(t *te
 	t.Setenv("HOME", home)
 	firstDirectory := t.TempDir()
 	secondDirectory := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	firstSource := filepath.Join(firstDirectory, "inspect.py")
 	secondSource := filepath.Join(secondDirectory, "inspect.py")
 	const original = "#!/usr/bin/env python3\nprint('original')\n"
@@ -740,7 +753,7 @@ func TestPluginsDuplicateInstallRequiresTerminalAndPreservesExistingPlugin(t *te
 	defer input.Close()
 	var output bytes.Buffer
 	var errorOutput bytes.Buffer
-	app := App{Input: input, Output: &output, Error: &errorOutput, Version: "test-version"}
+	app := App{Input: input, Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test-version"}
 	if code := app.Run([]string{"plugins", "--install", firstSource}); code != 0 {
 		t.Fatalf("first install exit code = %d: %s", code, errorOutput.String())
 	}
@@ -758,7 +771,7 @@ func TestPluginsDuplicateInstallRequiresTerminalAndPreservesExistingPlugin(t *te
 	if position != 0 {
 		t.Fatalf("non-terminal confirmation input was consumed: offset=%d", position)
 	}
-	destination := filepath.Join(home, ".conven", "plugins", "inspect.py")
+	destination := filepath.Join(workspace, ".conven", "plugins", "inspect.py")
 	data, err := os.ReadFile(destination)
 	if err != nil {
 		t.Fatal(err)
@@ -768,13 +781,38 @@ func TestPluginsDuplicateInstallRequiresTerminalAndPreservesExistingPlugin(t *te
 	}
 }
 
+func TestPluginsDuplicateGlobalInstallSuggestsGlobalRemoval(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	firstDirectory := t.TempDir()
+	secondDirectory := t.TempDir()
+	firstSource := filepath.Join(firstDirectory, "inspect.py")
+	secondSource := filepath.Join(secondDirectory, "inspect.py")
+	if err := os.WriteFile(firstSource, []byte("#!/usr/bin/env python3\nprint('original')\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondSource, []byte("#!/usr/bin/env python3\nprint('replacement')\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: t.TempDir(), Version: "test-version"}
+	if code := app.Run([]string{"plugins", "--install", "--global", firstSource}); code != 0 {
+		t.Fatalf("first install exit code = %d: %s", code, errorOutput.String())
+	}
+	output.Reset()
+	errorOutput.Reset()
+	if code := app.Run([]string{"plugins", "--install", "--global", secondSource}); code != 1 {
+		t.Fatalf("duplicate install exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errorOutput.String(), "use conven plugins --remove --global inspect first") {
+		t.Fatalf("duplicate global install stderr = %q", errorOutput.String())
+	}
+}
+
 func TestPluginsRunForwardsWorkspaceArgumentsAndIO(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	pluginDirectory := filepath.Join(home, ".conven", "plugins")
-	if err := os.MkdirAll(pluginDirectory, 0700); err != nil {
-		t.Fatal(err)
-	}
 	plugin := `#!/bin/sh
 printf 'cwd=%s\n' "$PWD"
 printf 'workspace=%s\n' "$CONVEN_WORKSPACE"
@@ -785,12 +823,13 @@ IFS= read -r input
 printf 'input=%s\n' "$input"
 printf 'plugin stderr\n' >&2
 `
-	if err := os.WriteFile(filepath.Join(pluginDirectory, "inspect.py"), []byte(plugin), 0700); err != nil {
-		t.Fatal(err)
-	}
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	workingDirectory := filepath.Join(workspace, "service", "nested")
-	if err := os.MkdirAll(filepath.Join(workspace, ".conven"), 0700); err != nil {
+	pluginDirectory := filepath.Join(workspace, ".conven", "plugins")
+	if err := os.MkdirAll(pluginDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDirectory, "inspect.py"), []byte(plugin), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(workingDirectory, 0700); err != nil {
@@ -812,7 +851,7 @@ printf 'plugin stderr\n' >&2
 	var output bytes.Buffer
 	var errorOutput bytes.Buffer
 	app := App{Input: input, Output: &output, Error: &errorOutput, Context: context.Background(), Cwd: workingDirectory, Version: "test-version"}
-	if code := app.Run([]string{"plugins", "--run", "inspect", "--check", "--output", "candidate.yaml", "--list"}); code != 0 {
+	if code := app.Run([]string{"plugins", "--run", "inspect", "--check", "--output", "candidate.yaml", "--global", "--list"}); code != 0 {
 		t.Fatalf("run exit code = %d: %s", code, errorOutput.String())
 	}
 	want := strings.Join([]string{
@@ -823,6 +862,7 @@ printf 'plugin stderr\n' >&2
 		"arg=--check",
 		"arg=--output",
 		"arg=candidate.yaml",
+		"arg=--global",
 		"arg=--list",
 		"input=payload",
 		"",
@@ -832,6 +872,184 @@ printf 'plugin stderr\n' >&2
 	}
 	if errorOutput.String() != "plugin stderr\n" {
 		t.Fatalf("stderr = %q", errorOutput.String())
+	}
+}
+
+func TestPluginsGlobalInstallAndListWorkOutsideWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workingDirectory := t.TempDir()
+	source := filepath.Join(workingDirectory, "inspect.py")
+	if err := os.WriteFile(source, []byte("#!/usr/bin/env python3\nprint('global')\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: workingDirectory, Version: "test-version"}
+	if code := app.Run([]string{"plugins", "--install", "--global", "./inspect.py"}); code != 0 {
+		t.Fatalf("install exit code = %d: %s", code, errorOutput.String())
+	}
+	directory := filepath.Join(home, ".conven", "plugins")
+	destination := filepath.Join(directory, "inspect.py")
+	wantInstall := "==> Installed global plugin inspect\n  - Path: " + destination + "\n"
+	if output.String() != wantInstall {
+		t.Fatalf("install output = %q, want %q", output.String(), wantInstall)
+	}
+	output.Reset()
+	if code := app.Run([]string{"plugins", "--list", "--global"}); code != 0 {
+		t.Fatalf("list exit code = %d: %s", code, errorOutput.String())
+	}
+	if output.String() != "Global plugins ("+directory+"):\n  inspect\n" {
+		t.Fatalf("global list output = %q", output.String())
+	}
+	output.Reset()
+	if code := app.Run([]string{"plugins", "--remove", "--global", "inspect"}); code != 0 {
+		t.Fatalf("global remove exit code = %d: %s", code, errorOutput.String())
+	}
+	if output.String() != "==> Removed global plugin inspect\n  - Path: "+destination+"\n" {
+		t.Fatalf("global remove output = %q", output.String())
+	}
+	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+		t.Fatalf("removed global plugin still exists: %v", err)
+	}
+}
+
+func TestPluginsRunWithoutNameUsesOnlyWorkspaceUniquePlugin(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	pluginDirectory := filepath.Join(workspace, ".conven", "plugins")
+	if err := os.MkdirAll(pluginDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plugin := `#!/bin/sh
+for argument in "$@"; do
+  printf 'arg=%s\n' "$argument"
+done
+`
+	if err := os.WriteFile(filepath.Join(pluginDirectory, "generator.py"), []byte(plugin), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Context: context.Background(), Cwd: workspace, Version: "test-version"}
+	if code := app.Run([]string{"plugins", "--run", "--output", "--disable-bindings", "alphaRpc", "betaRpc"}); code != 0 {
+		t.Fatalf("run exit code = %d: %s", code, errorOutput.String())
+	}
+	canonical, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		"arg=--workspace",
+		"arg=" + canonical,
+		"arg=--output",
+		"arg=--disable-bindings",
+		"arg=alphaRpc",
+		"arg=betaRpc",
+		"",
+	}, "\n")
+	if output.String() != want {
+		t.Fatalf("stdout = %q, want %q", output.String(), want)
+	}
+	if !strings.Contains(errorOutput.String(), "running workspace plugin generator") {
+		t.Fatalf("stderr = %q", errorOutput.String())
+	}
+}
+
+func TestPluginsRunWithoutNameRejectsZeroOrMultipleWorkspacePlugins(t *testing.T) {
+	for _, count := range []int{0, 2} {
+		t.Run(fmt.Sprintf("workspace-%d", count), func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			workspace := t.TempDir()
+			workspacePlugins := filepath.Join(workspace, ".conven", "plugins")
+			if err := os.MkdirAll(workspacePlugins, 0700); err != nil {
+				t.Fatal(err)
+			}
+			for index := 0; index < count; index++ {
+				name := fmt.Sprintf("workspace-%d.py", index)
+				if err := os.WriteFile(filepath.Join(workspacePlugins, name), []byte("#!/bin/sh\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			globalPlugins := filepath.Join(home, ".conven", "plugins")
+			if err := os.MkdirAll(globalPlugins, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(globalPlugins, "global.py"), []byte("#!/bin/sh\necho should-not-run\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Context: context.Background(), Cwd: workspace, Version: "test-version"}
+			if code := app.Run([]string{"plugins", "--run", "--output"}); code != 1 {
+				t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+			}
+			if output.Len() != 0 {
+				t.Fatalf("global plugin unexpectedly ran: %q", output.String())
+			}
+			for _, expected := range []string{"Workspace plugins", "Global plugins", "global"} {
+				if !strings.Contains(errorOutput.String(), expected) {
+					t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
+				}
+			}
+		})
+	}
+}
+
+func TestPluginsExplicitNamePrefersWorkspaceAndWarnsOnGlobalFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	workspacePlugins := filepath.Join(workspace, ".conven", "plugins")
+	globalPlugins := filepath.Join(home, ".conven", "plugins")
+	if err := os.MkdirAll(workspacePlugins, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(globalPlugins, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePlugins, "shared.py"), []byte("#!/bin/sh\necho workspace\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalPlugins, "shared.py"), []byte("#!/bin/sh\necho global-shared\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalPlugins, "global-only.py"), []byte("#!/bin/sh\necho global-only\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Context: context.Background(), Cwd: workspace, Version: "test-version"}
+	if code := app.Run([]string{"plugins", "--run", "shared"}); code != 0 {
+		t.Fatalf("workspace run exit code = %d: %s", code, errorOutput.String())
+	}
+	if output.String() != "workspace\n" || errorOutput.Len() != 0 {
+		t.Fatalf("workspace precedence stdout=%q stderr=%q", output.String(), errorOutput.String())
+	}
+	output.Reset()
+	if code := app.Run([]string{"plugins", "--run", "global-only"}); code != 0 {
+		t.Fatalf("global fallback exit code = %d: %s", code, errorOutput.String())
+	}
+	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "running global plugin global-only") {
+		t.Fatalf("global fallback stdout=%q stderr=%q", output.String(), errorOutput.String())
+	}
+	output.Reset()
+	errorOutput.Reset()
+	if code := app.Run([]string{"plugins", "--run", "global-only.py"}); code != 0 {
+		t.Fatalf("global .py fallback exit code = %d: %s", code, errorOutput.String())
+	}
+	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "running global plugin global-only") {
+		t.Fatalf("global .py fallback stdout=%q stderr=%q", output.String(), errorOutput.String())
+	}
+	output.Reset()
+	errorOutput.Reset()
+	if code := app.Run([]string{"plugins", "--run", "--global", "global-only.py"}); code != 0 {
+		t.Fatalf("forced global .py run exit code = %d: %s", code, errorOutput.String())
+	}
+	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "Running global plugin global-only.py") {
+		t.Fatalf("forced global .py stdout=%q stderr=%q", output.String(), errorOutput.String())
 	}
 }
 
@@ -1996,6 +2214,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--import)`,
 		`options="--edit --help"`,
 		`if [ "$subcommand" = "plugins" ]`,
+		`[ "${COMP_WORDS[action_index + 1]}" = "--global" ]`,
+		`options="--global --output --disable-bindings"`,
 		`options="--install --list --remove --run --help"`,
 		`compopt -o filenames 2>/dev/null`,
 	} {
@@ -2041,9 +2261,14 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--prune[remove missing direct-child repository services]`,
 		`--reset[destructively reset the manifest to scanned facts]`,
 		`--import[import a local YAML file as the entire manifest]`,
+		`'1::yaml file:_files'`,
 		`--install[install a Python plugin]`,
 		`--remove[remove an installed plugin]`,
 		`--run[run an installed plugin]`,
+		`--global[use the user-global plugin scope]`,
+		`--output[generator output path; omit the value for application.yaml]`,
+		`--disable-bindings[replace disabled RPC bindings for this generator run]`,
+		`'1::plugin:'`,
 	} {
 		if !strings.Contains(zsh, expected) {
 			t.Fatalf("zsh completion is missing %q", expected)
@@ -2073,6 +2298,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`function __conven_policy_action_without_edit`,
 		`function __conven_policy_import_without_source`,
 		`function __conven_plugins_without_action`,
+		`function __conven_plugins_action`,
+		`function __conven_plugins_scope_position`,
 		`__conven_without_command' -a services`,
 		`__conven_without_command' -a policy`,
 		`__conven_without_command' -a plugins`,
@@ -2103,6 +2330,11 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l list`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l remove`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l run`,
+		`__conven_plugins_scope_position --install' -l global`,
+		`__conven_plugins_scope_position --list' -l global`,
+		`__conven_plugins_scope_position --run' -l global`,
+		`__conven_plugins_action --run' -l output`,
+		`__conven_plugins_action --run' -l disable-bindings`,
 	} {
 		if !strings.Contains(fish, expected) {
 			t.Fatalf("fish completion is missing %q", expected)
@@ -2132,7 +2364,7 @@ func TestBashCompletionSupportsWorkingDirectoryOption(t *testing.T) {
 		{name: "help topic", words: "conven -C /tmp help ser", want: "services\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			script := completion + "\nCOMP_WORDS=(" + test.words + ")\nCOMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_conven\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
+			script := completion + "\nCOMP_WORDS=(" + test.words + ")\nCOMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_conven\nfor candidate in \"${COMPREPLY[@]}\"; do printf '%s\\n' \"$candidate\"; done\n"
 			output, err := exec.Command("bash", "-c", script).CombinedOutput()
 			if err != nil {
 				t.Fatalf("bash completion failed: %v: %s", err, output)
@@ -2209,6 +2441,34 @@ func TestBashPluginInstallCompletesOnlyPythonFilesAndDirectories(t *testing.T) {
 	}
 	if strings.Contains(string(output), "notes.txt") {
 		t.Fatalf("completion includes a non-Python file: %q", output)
+	}
+}
+
+func TestBashPluginGlobalCompletionOnlyImmediatelyAfterAction(t *testing.T) {
+	completion, err := Completion("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		words string
+		want  string
+	}{
+		{name: "run scope", words: "conven plugins --run --g", want: "--global\n"},
+		{name: "run after name", words: "conven plugins --run generator --g", want: ""},
+		{name: "list scope", words: "conven plugins --list --g", want: "--global\n"},
+		{name: "list after scope", words: "conven plugins --list --global --g", want: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := completion + "\nCOMP_WORDS=(" + test.words + ")\nCOMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_conven\nfor candidate in \"${COMPREPLY[@]}\"; do printf '%s\\n' \"$candidate\"; done\n"
+			output, err := exec.Command("bash", "-c", script).CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash completion failed: %v: %s", err, output)
+			}
+			if string(output) != test.want {
+				t.Fatalf("completion = %q, want %q", output, test.want)
+			}
+		})
 	}
 }
 
@@ -2403,6 +2663,14 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 	if !strings.Contains(output.String(), "Discovered supported services: alpha-service") {
 		t.Fatalf("init output = %q", output.String())
 	}
+	servicesPath := filepath.Join(workspace, "services.properties")
+	disabledPath := filepath.Join(workspace, "disabled-services.properties")
+	if err := os.WriteFile(servicesPath, []byte("catalog stays unchanged\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(disabledPath, []byte("binding stays unchanged\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	writeCLIServiceRepository(t, workspace, "beta-service")
 	output.Reset()
@@ -2426,6 +2694,8 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 	if !strings.Contains(string(data), "alpha-service:") || !strings.Contains(string(data), "beta-service:") {
 		t.Fatalf("manifest = %s", data)
 	}
+	assertFileContents(t, servicesPath, "catalog stays unchanged\n")
+	assertFileContents(t, disabledPath, "binding stays unchanged\n")
 }
 
 func TestPolicyEditUsesInjectedEditorAndPublishesValidatedManifest(t *testing.T) {
@@ -2607,6 +2877,106 @@ services:
 	}
 }
 
+func TestPolicyImportUsesWorkspaceApplicationYAMLByDefault(t *testing.T) {
+	workspace := t.TempDir()
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := `version: 1
+workspace:
+  name: before-import
+services:
+  old-api:
+    path: old-api
+    runner:
+      run: [old-api]
+`
+	if err := os.WriteFile(manifestPath, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	imported := `version: 1
+workspace:
+  name: default-import
+services:
+  generated-api:
+    path: generated-api
+    runner:
+      run: [generated-api]
+`
+	defaultPath := filepath.Join(workspace, "application.yaml")
+	if err := os.WriteFile(defaultPath, []byte(imported), 0644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(workspace, "nested")
+	if err := os.Mkdir(nested, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: nested, Version: "test"}
+	if code := app.Run([]string{"policy", "--import"}); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, []byte(imported)) {
+		t.Fatalf("manifest = %s", data)
+	}
+	if !strings.Contains(output.String(), "using workspace default: "+defaultPath) {
+		t.Fatalf("stdout = %q", output.String())
+	}
+	if errorOutput.Len() != 0 {
+		t.Fatalf("stderr = %q", errorOutput.String())
+	}
+}
+
+func TestPolicyImportDefaultRequiresWorkspaceApplicationYAML(t *testing.T) {
+	workspace := t.TempDir()
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := `version: 1
+workspace:
+  name: unchanged
+services:
+  api:
+    path: api
+    runner:
+      run: [api]
+`
+	if err := os.WriteFile(manifestPath, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test"}
+	if code := app.Run([]string{"policy", "--import"}); code != 1 {
+		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+	}
+	defaultPath := filepath.Join(workspace, "application.yaml")
+	if !strings.Contains(output.String(), "using workspace default: "+defaultPath) {
+		t.Fatalf("stdout = %q", output.String())
+	}
+	for _, expected := range []string{"does not exist", "specify a YAML filename", "generate application.yaml first"} {
+		if !strings.Contains(errorOutput.String(), expected) {
+			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
+		}
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, []byte(original)) {
+		t.Fatalf("missing default import changed manifest: %s", data)
+	}
+}
+
 func TestPolicyImportEditAcceptsFlagBeforeOrAfterSource(t *testing.T) {
 	for _, editFirst := range []bool{false, true} {
 		name := "edit-after-source"
@@ -2686,8 +3056,7 @@ func TestPolicyActionsRejectArgumentsAndUnknownFlags(t *testing.T) {
 		{[]string{"policy", "--edit", "extra"}, 1, "does not accept arguments"},
 		{[]string{"policy", "--reset", "extra"}, 1, "does not accept arguments"},
 		{[]string{"policy", "--edit", "--unknown"}, 2, "flag provided but not defined"},
-		{[]string{"policy", "--import"}, 1, "requires exactly one YAML file"},
-		{[]string{"policy", "--import", "one.yaml", "two.yaml"}, 1, "requires exactly one YAML file"},
+		{[]string{"policy", "--import", "one.yaml", "two.yaml"}, 1, "accepts at most one YAML file"},
 		{[]string{"policy", "--import", "--unknown", "one.yaml"}, 2, "flag provided but not defined"},
 		{[]string{"policy", "--import", "--reset", "one.yaml"}, 2, "flag provided but not defined"},
 	} {
@@ -2742,6 +3111,14 @@ func TestRegistryPruneRemovesMissingDirectChildService(t *testing.T) {
 	if code := app.Run([]string{"init"}); code != 0 {
 		t.Fatalf("init exit code = %d: %s", code, output.String())
 	}
+	servicesPath := filepath.Join(workspace, "services.properties")
+	disabledPath := filepath.Join(workspace, "disabled-services.properties")
+	if err := os.WriteFile(servicesPath, []byte("catalog survives prune\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(disabledPath, []byte("binding survives prune\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.RemoveAll(filepath.Join(workspace, "alpha-service")); err != nil {
 		t.Fatal(err)
 	}
@@ -2759,6 +3136,8 @@ func TestRegistryPruneRemovesMissingDirectChildService(t *testing.T) {
 	if strings.Contains(string(data), "alpha-service:") || !strings.Contains(string(data), "beta-service:") {
 		t.Fatalf("manifest after registry --prune = %s", data)
 	}
+	assertFileContents(t, servicesPath, "catalog survives prune\n")
+	assertFileContents(t, disabledPath, "binding survives prune\n")
 }
 
 func TestRegistryRejectsArgumentsAndUnknownFlags(t *testing.T) {
@@ -3009,5 +3388,16 @@ func writeCLIServiceRepository(t *testing.T, workspace string, name string) {
 	}
 	if err := os.WriteFile(filepath.Join(repository, "go", "main.go"), []byte("package main\n"), 0600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertFileContents(t *testing.T, path string, want string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != want {
+		t.Fatalf("%s = %q, want %q", path, data, want)
 	}
 }

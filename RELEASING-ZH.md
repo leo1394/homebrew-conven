@@ -174,6 +174,11 @@ go build -o /tmp/conven-release ./cmd/conven
 test -f examples/application.yaml
 test ! -e examples/loom.yaml
 test ! -e examples/conven.yaml
+test -f examples/workspace/services.properties
+test -f examples/workspace/disabled-services.properties
+test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
+test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
+test -f examples/workspace/README.md
 test -f internal/plugins/builtin/README.md
 test ! -e internal/plugins/builtin/generate-apollo-consul.py
 
@@ -191,6 +196,94 @@ git status --short
 ```text
 conven version X.Y.Z (YYYY-MM-DD)
 https://github.com/leo1394/homebrew-conven
+```
+
+### Workspace 接入与插件验收
+
+如果本次发布修改了 workspace 接入或插件行为，必须使用构建出的二进制在隔离
+workspace 中执行 smoke test。首次 `init` 必须生成四个 workspace 资产；再次执行
+`init` 必须逐字节保留全部已有文件。`services --registry` 可以更新
+`.conven/conven.yaml`，但不得修改 properties catalog。`policy --import` 省略来源文件
+时必须选择 workspace 根目录的 `application.yaml`：
+
+```bash
+CONVEN_SMOKE_ROOT="$(mktemp -d /tmp/conven-release-smoke.XXXXXX)"
+CONVEN_SMOKE_WORKSPACE="$CONVEN_SMOKE_ROOT/workspace"
+CONVEN_SMOKE_CHINESE_WORKSPACE="$CONVEN_SMOKE_ROOT/workspace-zh"
+CONVEN_SMOKE_HOME="$CONVEN_SMOKE_ROOT/home"
+mkdir "$CONVEN_SMOKE_WORKSPACE" "$CONVEN_SMOKE_CHINESE_WORKSPACE" \
+  "$CONVEN_SMOKE_HOME"
+
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init
+for CONVEN_SMOKE_ASSET in \
+  services.properties \
+  disabled-services.properties \
+  CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
+  README.md
+do
+  test -f "$CONVEN_SMOKE_WORKSPACE/$CONVEN_SMOKE_ASSET"
+  printf '\n# release-preserve-check\n' >> "$CONVEN_SMOKE_WORKSPACE/$CONVEN_SMOKE_ASSET"
+done
+grep -Fq 'language: en' \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
+grep -Fq 'https://github.com/leo1394/homebrew-conven' \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
+test ! -e \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md"
+
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_CHINESE_WORKSPACE" init
+grep -Fq 'language: zh-CN' \
+  "$CONVEN_SMOKE_CHINESE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
+CONVEN_ASSET_SHA_BEFORE="$(shasum \
+  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
+  "$CONVEN_SMOKE_WORKSPACE/README.md")"
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init
+CONVEN_ASSET_SHA_AFTER="$(shasum \
+  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
+  "$CONVEN_SMOKE_WORKSPACE/README.md")"
+test "$CONVEN_ASSET_SHA_BEFORE" = "$CONVEN_ASSET_SHA_AFTER"
+
+CONVEN_CATALOG_SHA_BEFORE="$(shasum \
+  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties")"
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" services --registry
+CONVEN_CATALOG_SHA_AFTER="$(shasum \
+  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties")"
+test "$CONVEN_CATALOG_SHA_BEFORE" = "$CONVEN_CATALOG_SHA_AFTER"
+
+cp "$CONVEN_SMOKE_WORKSPACE/.conven/conven.yaml" \
+  "$CONVEN_SMOKE_WORKSPACE/application.yaml"
+CONVEN_IMPORT_OUTPUT="$(env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
+  /tmp/conven-release \
+  -C "$CONVEN_SMOKE_WORKSPACE" policy --import)"
+printf '%s\n' "$CONVEN_IMPORT_OUTPUT" | \
+  grep -F "using workspace default: $CONVEN_SMOKE_WORKSPACE/application.yaml"
+```
+
+插件回归门禁还必须证明以下全部契约：
+
+- install 和 remove 默认使用 `<workspace>/.conven/plugins`，只有指定 `--global` 才
+  使用 `~/.conven/plugins`；两个作用域允许存在同名插件；
+- 默认 list 分组显示 workspace 和 global 插件，`--list --global` 只显示 global 分组；
+- 显式 NAME 优先执行 workspace 插件；workspace 中不存在时回退 global，并输出 warning；
+- 缺省 NAME 时，仅当 workspace 恰好有一个插件才执行，并输出 warning；workspace
+  插件为零个或多个时必须失败并列出 workspace/global 候选；不能仅因为 workspace
+  没有插件就隐式选择 global 插件。
+
+完整测试和下列聚焦测试都会覆盖这些行为。发布诊断时保留下列命令：
+
+```bash
+go test -count=1 ./internal/cli ./internal/plugins \
+  -run 'Test(GlobalAndWorkspaceStores|ScopedStores|PluginsInstallAndList|PluginsGlobal|PluginsRunWithoutName|PluginsExplicitName)'
 ```
 
 不能只依赖自动检查，还要人工审阅 diff，确认其中没有凭据、运行状态、日志或无关文件。

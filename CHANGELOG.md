@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.11 - 2026-08-13
+
+- Initialize missing workspace generator guidance files without overwriting
+  existing project files, and describe the initial direct-child repository scan
+  as the first registry pass.
+- Add workspace-local and user-global plugin scopes, grouped listing,
+  workspace-first name resolution, and safe omitted-name execution for a sole
+  workspace plugin.
+- Allow `conven policy --import` without a filename, defaulting to the
+  workspace-root `application.yaml` with an explicit diagnostic.
+
 ## 0.2.10 - 2026-08-12
 
 - Refine Service Selector selection styling: selected services outside the
