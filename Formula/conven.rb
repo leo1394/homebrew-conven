@@ -14,6 +14,7 @@ class Conven < Formula
   end
 
   depends_on "go" => :build
+  depends_on "python" => :test
 
   def install
     system "go", "build", *std_go_args(ldflags: "-s -w"), "./cmd/conven"
