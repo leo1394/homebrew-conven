@@ -87,9 +87,10 @@ conven plugins --run [plugin-args...]
 插件默认安装到 `<workspace>/.conven/plugins`；`plugins --install --global` 安装到
 `~/.conven/plugins`。两层允许同名。显式 `NAME` 优先使用 workspace plugin，本地
 不存在时才回退到 global plugin 并 warning；本地同名入口存在但损坏时必须失败，不能
-静默回退。`NAME` 缺省时，只有 workspace 恰好存在一个有效 plugin 才执行并 warning；
-workspace 为零个或多个 plugin 时列出 workspace/global 分组并失败，不能自动选择
-global plugin。插件自身不得读取或依赖安装名称。
+静默回退。`NAME` 缺省时，workspace 恰好存在一个有效 plugin 会直接执行并 warning；
+存在多个时打开单选器；workspace 没有 plugin 时从 global 候选中打开单选器，即使只有
+一个 global 候选也必须选择并确认。显式 global run 使用
+`conven plugins --global --run NAME`，且必须提供 `NAME`。插件自身不得读取或依赖安装名称。
 
 调用示例：
 

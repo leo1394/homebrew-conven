@@ -27,19 +27,41 @@ func (app App) runInit(arguments []string) int {
 		return app.fail(err)
 	}
 	style := terminal.New(app.Output)
-	if result.Created {
-		fmt.Fprintf(app.Output, "%s %s\n", style.Label("Initialized Conven workspace in"), style.Identifier(result.Path))
-		fmt.Fprintln(app.Output, style.Label("Completed initial service registry scan of direct-child repositories."))
-		if len(result.Discovered) > 0 {
-			fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Discovered supported services"), style.Identifiers(result.Discovered, ", "))
-		} else if result.UsedExample {
-			fmt.Fprintln(app.Output, style.Warning("No supported child repositories were detected; wrote the embedded example manifest."))
+	printWorkspaceFiles := func() {
+		for _, file := range result.Files {
+			if file.Created {
+				fmt.Fprintln(app.Output, style.Detail(style.Success(file.Name)))
+				continue
+			}
+			fmt.Fprintln(app.Output, style.Detail(file.Name+" "+style.Failure("Skipped")))
 		}
-		if len(result.Skipped) > 0 {
-			fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Skipped by the built-in repository analyzers"), style.Identifiers(result.Skipped, ", "))
+	}
+	if result.Created {
+		fmt.Fprintln(app.Output, style.Stage("Initialized Conven workspace"))
+		fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(result.Path)))
+		printWorkspaceFiles()
+		fmt.Fprintln(app.Output, style.Stage("Initial service registry scan complete"))
+		if len(result.Discovered) > 0 {
+			fmt.Fprintln(app.Output, style.Detail("Discovered services: "+style.Identifiers(result.Discovered, ", ")))
+		} else {
+			fmt.Fprintln(app.Output, style.Detail("Discovered services: none"))
+		}
+		if result.UsedExample {
+			details := []string{"Manifest source: embedded example"}
+			if len(result.Skipped) > 0 {
+				details = append(details, "Skipped repositories: "+strings.Join(result.Skipped, ", "))
+			}
+			printWarningBlock(app.Error, "No supported child repositories were detected.", details, nil)
+		} else if len(result.Skipped) > 0 {
+			printWarningBlock(app.Error, "Some direct-child repositories were skipped.", []string{
+				"Repositories: " + strings.Join(result.Skipped, ", "),
+			}, nil)
 		}
 	} else {
-		fmt.Fprintf(app.Output, "%s %s; manifest was not overwritten.\n", style.Label("Reinitialized existing Conven workspace in"), style.Identifier(result.Path))
+		fmt.Fprintln(app.Output, style.Stage("Reused Conven workspace"))
+		fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(result.Path)))
+		printWorkspaceFiles()
+		fmt.Fprintln(app.Output, style.Detail("Existing manifest was not overwritten."))
 	}
 	if err := plugins.InstallBuiltins(); err != nil {
 		return app.fail(fmt.Errorf("install built-in plugins: %w", err))
@@ -71,34 +93,41 @@ func (app App) runDiscover(arguments []string) int {
 		return app.fail(err)
 	}
 	style := terminal.New(app.Output)
+	fmt.Fprintln(app.Output, style.Stage("Service registry scan complete"))
 	if len(result.Discovered) == 0 {
-		fmt.Fprintf(app.Output, "%s: none\n", style.Label("Discovered supported services"))
+		fmt.Fprintln(app.Output, style.Detail("Discovered services: none"))
 	} else {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Discovered supported services"), style.Identifiers(result.Discovered, ", "))
+		fmt.Fprintln(app.Output, style.Detail("Discovered services: "+style.Identifiers(result.Discovered, ", ")))
 	}
 	if len(result.Added) > 0 {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Added services"), style.Identifiers(result.Added, ", "))
+		fmt.Fprintln(app.Output, style.Detail("Added services: "+style.Identifiers(result.Added, ", ")))
 	}
 	if len(result.Updated) > 0 {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Backfilled discovered facts"), style.Identifiers(result.Updated, ", "))
-	}
-	if len(result.Missing) > 0 {
-		fmt.Fprintf(app.Output, "%s: %s (use conven services --registry --prune to remove)\n", style.Warning("Missing repositories kept in manifest"), style.Identifiers(result.Missing, ", "))
+		fmt.Fprintln(app.Output, style.Detail("Backfilled services: "+style.Identifiers(result.Updated, ", ")))
 	}
 	if len(result.Pruned) > 0 {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Pruned services"), style.Identifiers(result.Pruned, ", "))
-	}
-	if len(result.Skipped) > 0 {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Skipped by the built-in repository analyzers"), style.Identifiers(result.Skipped, ", "))
+		fmt.Fprintln(app.Output, style.Detail("Pruned services: "+style.Identifiers(result.Pruned, ", ")))
 	}
 	if len(result.Added) == 0 && len(result.Updated) == 0 && len(result.Pruned) == 0 {
 		if len(result.Missing) > 0 {
-			fmt.Fprintln(app.Output, "Manifest unchanged; missing repositories were kept.")
+			fmt.Fprintln(app.Output, style.Detail("Manifest: unchanged; missing repositories kept"))
 		} else {
-			fmt.Fprintln(app.Output, "Manifest already matches discovered repositories.")
+			fmt.Fprintln(app.Output, style.Detail("Manifest: unchanged"))
 		}
 	} else {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Updated Conven manifest"), style.Identifier(manifestPath))
+		fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(manifestPath)))
+	}
+	if len(result.Missing) > 0 || len(result.Skipped) > 0 {
+		details := make([]string, 0, 2)
+		actions := make([]string, 0, 1)
+		if len(result.Missing) > 0 {
+			details = append(details, "Missing repositories kept: "+strings.Join(result.Missing, ", "))
+			actions = append(actions, "conven services --registry --prune")
+		}
+		if len(result.Skipped) > 0 {
+			details = append(details, "Skipped repositories: "+strings.Join(result.Skipped, ", "))
+		}
+		printWarningBlock(app.Error, "Service registry scan requires review.", details, actions)
 	}
 	return 0
 }
@@ -195,16 +224,16 @@ func (app App) runConfig(arguments []string) int {
 	return 0
 }
 
-func restartEnvironmentFlagHint(err error) string {
+func restartEnvironmentFlagHint(err error) (string, string) {
 	switch err.Error() {
 	case "flag provided but not defined: -test":
-		return "Hint: --restart reuses the current session environment; switch with conven services --start --test."
+		return "--restart reuses the current session environment;", "switch with conven services --start --test."
 	case "flag provided but not defined: -dev":
-		return "Hint: --restart reuses the current session environment; switch with conven services --start --dev."
+		return "--restart reuses the current session environment;", "switch with conven services --start --dev."
 	case "flag provided but not defined: -env":
-		return "Hint: --restart reuses the current session environment; switch with conven services --start --env NAME."
+		return "--restart reuses the current session environment;", "switch with conven services --start --env NAME."
 	default:
-		return ""
+		return "", ""
 	}
 }
 

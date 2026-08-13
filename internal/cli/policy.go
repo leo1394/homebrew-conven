@@ -9,9 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/leo1394/homebrew-conven/internal/config"
+	"github.com/leo1394/homebrew-conven/internal/selector"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
@@ -48,7 +50,7 @@ func (app App) runPolicyImport(arguments []string) int {
 		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --import [yaml-file] [--edit]")
 		flags.PrintDefaults()
 		fmt.Fprintln(flags.Output(), "\nImports the YAML file as the entire .conven/conven.yaml for the workspace resolved from cwd.")
-		fmt.Fprintln(flags.Output(), "When yaml-file is omitted, imports <workspace>/application.yaml and reports the selected default.")
+		fmt.Fprintln(flags.Output(), "When yaml-file is omitted, selects a YAML file from the workspace root interactively.")
 		fmt.Fprintln(flags.Output(), "This is a whole-file replacement, not a merge with repository scan results.")
 		fmt.Fprintln(flags.Output(), "An existing manifest is backed up before replacement; --edit opens a private import-seeded draft before publication.")
 	}
@@ -66,14 +68,31 @@ func (app App) runPolicyImport(arguments []string) int {
 		if err != nil {
 			return app.fail(err)
 		}
-		importPath = filepath.Join(workspace, "application.yaml")
-		fmt.Fprintf(app.Output, "No import file specified; using workspace default: %s\n", importPath)
-		if _, err := os.Lstat(importPath); err != nil {
-			if os.IsNotExist(err) {
-				return app.fail(fmt.Errorf("default policy import file %q does not exist; specify a YAML filename or generate application.yaml first", importPath))
-			}
-			return app.fail(fmt.Errorf("inspect default policy import file %q: %w", importPath, err))
+		candidates, err := workspaceYAMLCandidates(workspace)
+		if err != nil {
+			return app.fail(err)
 		}
+		if len(candidates) == 0 {
+			return app.fail(errors.New("no YAML policy files were found in the workspace root; specify a YAML filename"))
+		}
+		selected, confirmed, err := app.SingleSelector(app.Context, app.Input, app.Output, selector.Prompt{
+			Title:                "Select a policy file",
+			ConfirmationLabel:    "Importing policy file",
+			EmptySelectionNotice: "Select one policy file before confirming.",
+		}, candidates)
+		if err != nil {
+			if errors.Is(err, selector.ErrNotTerminal) {
+				return app.fail(errors.New("policy import selection requires an interactive terminal; specify a YAML filename explicitly"))
+			}
+			return app.fail(err)
+		}
+		if !confirmed {
+			style := terminal.New(app.Output)
+			fmt.Fprintln(app.Output, style.Stage("Policy import cancelled"))
+			fmt.Fprintln(app.Output, style.Detail("Conven policy manifest was not changed."))
+			return 0
+		}
+		importPath = filepath.Join(workspace, selected.Name)
 	}
 	var editImport func(string) error
 	if *edit {
@@ -85,18 +104,57 @@ func (app App) runPolicyImport(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
+	style := terminal.New(app.Output)
+	stage := "Replaced Conven policy manifest"
 	if !result.Changed {
-		fmt.Fprintf(app.Output, "Conven policy manifest already matches imported file %s: %s\n", result.SourcePath, result.Path)
+		stage = "Conven policy manifest already matches import"
 	} else if result.Created {
-		fmt.Fprintf(app.Output, "Imported Conven policy manifest from %s: %s\n", result.SourcePath, result.Path)
-	} else {
-		fmt.Fprintf(app.Output, "Replaced Conven policy manifest from imported file %s: %s\n", result.SourcePath, result.Path)
+		stage = "Imported Conven policy manifest"
 	}
+	fmt.Fprintln(app.Output, style.Stage(stage))
+	fmt.Fprintln(app.Output, style.Detail("Source: "+style.Identifier(result.SourcePath)))
+	fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(result.Path)))
 	if result.BackupPath != "" {
-		fmt.Fprintf(app.Output, "Pre-import manifest backup: %s\n", result.BackupPath)
+		fmt.Fprintln(app.Output, style.Detail("Backup: "+style.Identifier(result.BackupPath)))
 	}
-	fmt.Fprintln(app.Output, "Imported the entire manifest without merging repository scan results. Review it, then run conven doctor and conven services --start --dry-run before starting services.")
+	printWarningBlock(app.Error, "Policy import treats the source as the complete workspace manifest.", []string{
+		"Repository scan results were not merged.",
+	}, []string{
+		"conven doctor",
+		"conven services --start --dry-run",
+	})
 	return 0
+}
+
+func workspaceYAMLCandidates(workspace string) ([]selector.Candidate, error) {
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("read workspace root %q for policy import: %w", workspace, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		extension := filepath.Ext(entry.Name())
+		if !strings.EqualFold(extension, ".yaml") && !strings.EqualFold(extension, ".yml") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("inspect policy import candidate %q: %w", filepath.Join(workspace, entry.Name()), err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+	candidates := make([]selector.Candidate, 0, len(names))
+	for _, name := range names {
+		candidates = append(candidates, selector.Candidate{Name: name})
+	}
+	return candidates, nil
 }
 
 func (app App) runPolicyEdit(arguments []string) int {
@@ -118,11 +176,13 @@ func (app App) runPolicyEdit(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
+	style := terminal.New(app.Output)
 	if result.Changed {
-		fmt.Fprintf(app.Output, "Updated Conven policy manifest: %s\n", result.Path)
+		fmt.Fprintln(app.Output, style.Stage("Updated Conven policy manifest"))
 	} else {
-		fmt.Fprintf(app.Output, "Conven policy manifest unchanged: %s\n", result.Path)
+		fmt.Fprintln(app.Output, style.Stage("Conven policy manifest unchanged"))
 	}
+	fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(result.Path)))
 	return 0
 }
 
@@ -146,25 +206,32 @@ func (app App) runPolicyReset(arguments []string) int {
 		return app.fail(err)
 	}
 	style := terminal.New(app.Output)
-	if len(result.Discovered) > 0 {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Discovered supported services"), style.Identifiers(result.Discovered, ", "))
-	}
-	if len(result.Skipped) > 0 {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Warning("Skipped by the built-in repository analyzers"), style.Identifiers(result.Skipped, ", "))
-	}
 	if !result.Changed {
-		fmt.Fprintf(app.Output, "Conven policy manifest already matches the scan baseline: %s\n", result.Path)
-		return 0
-	}
-	if result.Created {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Created Conven policy manifest from scan baseline"), style.Identifier(result.Path))
+		fmt.Fprintln(app.Output, style.Stage("Conven policy manifest already matches scan baseline"))
+	} else if result.Created {
+		fmt.Fprintln(app.Output, style.Stage("Created Conven policy manifest from scan baseline"))
 	} else {
-		fmt.Fprintf(app.Output, "%s: %s\n", style.Label("Reset Conven policy manifest to scan baseline"), style.Identifier(result.Path))
+		fmt.Fprintln(app.Output, style.Stage("Reset Conven policy manifest to scan baseline"))
 	}
+	if len(result.Discovered) == 0 {
+		fmt.Fprintln(app.Output, style.Detail("Discovered services: none"))
+	} else {
+		fmt.Fprintln(app.Output, style.Detail("Discovered services: "+style.Identifiers(result.Discovered, ", ")))
+	}
+	fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(result.Path)))
 	if result.BackupPath != "" {
-		fmt.Fprintf(app.Output, "Pre-reset manifest backup: %s\n", result.BackupPath)
+		fmt.Fprintln(app.Output, style.Detail("Backup: "+style.Identifier(result.BackupPath)))
 	}
-	fmt.Fprintln(app.Output, "Review and re-declare policies, environments, ports, dependencies, health checks, patches, and manual runner changes before starting services.")
+	if result.Changed {
+		warningDetails := []string{"Review and restore manually declared policies, environments, ports, dependencies, health checks, patches, and runner changes."}
+		if len(result.Skipped) > 0 {
+			warningDetails = append(warningDetails, "Skipped repositories: "+strings.Join(result.Skipped, ", "))
+		}
+		printWarningBlock(app.Error, "Policy reset rebuilds the complete workspace manifest.", warningDetails, []string{
+			"conven doctor",
+			"conven services --start --dry-run",
+		})
+	}
 	return 0
 }
 
@@ -176,9 +243,10 @@ func (app App) printPolicyUsage(output io.Writer) {
 
 --edit opens a temporary copy of the workspace's sole .conven/conven.yaml and
 publishes it only after strict validation. --import installs a local YAML file,
-or <workspace>/application.yaml when omitted, as that entire manifest without
-merging repository scan results;
-schema validation does not prove that its service paths or infrastructure work.
+or interactively selects a .yaml/.yml file from the workspace root when omitted,
+as that entire manifest without merging repository scan results. Non-interactive
+use must specify the YAML filename. Schema validation does not prove that its
+service paths or infrastructure work.
 --reset destructively rebuilds the manifest from repository facts that analyzers
 can prove.
 `)

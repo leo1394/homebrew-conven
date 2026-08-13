@@ -148,6 +148,74 @@ func TestToggleAllSelectsThenClears(t *testing.T) {
 	}
 }
 
+func TestSingleSelectionReplacesThePreviousCandidate(t *testing.T) {
+	state := newSinglePickerState(testCandidates(), Prompt{EmptySelectionNotice: "Select one."})
+
+	state.handle(key{kind: keyRune, rune: 'f'})
+	state.handle(key{kind: keyDown})
+	state.handle(key{kind: keyRune, rune: 'f'})
+
+	if state.selected[0] {
+		t.Fatal("selecting the second candidate should clear the first candidate")
+	}
+	if !state.selected[1] {
+		t.Fatal("the second candidate was not selected")
+	}
+	if state.selectedCount() != 1 {
+		t.Fatalf("single picker selected count = %d, want 1", state.selectedCount())
+	}
+}
+
+func TestSingleSelectionCanClearTheCurrentCandidate(t *testing.T) {
+	state := newSinglePickerState(testCandidates(), Prompt{EmptySelectionNotice: "Select one."})
+
+	state.handle(key{kind: keyRune, rune: 'f'})
+	state.handle(key{kind: keyRune, rune: 'f'})
+
+	if state.selectedCount() != 0 {
+		t.Fatalf("second f should clear the current single selection, got %d", state.selectedCount())
+	}
+	state.handle(key{kind: keyEnter})
+	if state.mode != modePicking || state.notice != "Select one." {
+		t.Fatalf("empty single selection mode=%d notice=%q", state.mode, state.notice)
+	}
+}
+
+func TestSingleSelectionIgnoresToggleAll(t *testing.T) {
+	state := newSinglePickerState(testCandidates(), Prompt{EmptySelectionNotice: "Select one."})
+
+	state.handle(key{kind: keyRune, rune: 'A'})
+
+	if state.selectedCount() != 0 {
+		t.Fatalf("single picker A selected %d candidates", state.selectedCount())
+	}
+}
+
+func TestSingleSelectionUpperFReplacesAndMoves(t *testing.T) {
+	state := newSinglePickerState(testCandidates(), Prompt{EmptySelectionNotice: "Select one."})
+	state.handle(key{kind: keyRune, rune: 'f'})
+	state.handle(key{kind: keyRune, rune: 'F'})
+
+	if state.selectedCount() != 0 || state.cursor != 1 {
+		t.Fatalf("F on selected candidate should clear it and move: selected=%d cursor=%d", state.selectedCount(), state.cursor)
+	}
+	state.handle(key{kind: keyRune, rune: 'F'})
+	if state.selectedCount() != 1 || !state.selected[1] {
+		t.Fatalf("F should select the next candidate without exceeding one selection: selected=%v", state.selected)
+	}
+}
+
+func TestSelectedCandidatesReturnCompleteCandidate(t *testing.T) {
+	candidates := []Candidate{{Name: "generate-policy", Path: "/plugins/generate-policy.py", Detail: "Python", Tag: "global"}}
+	state := newSinglePickerState(candidates, Prompt{EmptySelectionNotice: "Select one."})
+	state.handle(key{kind: keyRune, rune: 'f'})
+
+	selected := state.selectedCandidates()
+	if len(selected) != 1 || selected[0] != candidates[0] {
+		t.Fatalf("selected candidates = %#v, want %#v", selected, candidates)
+	}
+}
+
 func TestQAndEscapeCancelPicker(t *testing.T) {
 	tests := []struct {
 		name  string

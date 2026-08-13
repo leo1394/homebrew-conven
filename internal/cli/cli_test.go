@@ -16,6 +16,7 @@ import (
 	"time"
 
 	convenruntime "github.com/leo1394/homebrew-conven/internal/runtime"
+	"github.com/leo1394/homebrew-conven/internal/selector"
 )
 
 func TestVersion(t *testing.T) {
@@ -522,7 +523,7 @@ func TestPluginsHelpUsesStdout(t *testing.T) {
 		if code := app.Run(arguments); code != 0 {
 			t.Fatalf("%v exit code = %d", arguments, code)
 		}
-		for _, action := range []string{"--install [--global] PYTHON_FILE", "--list [--global]", "--remove [--global] NAME", "--run [--global] [NAME]", "--output [FILE]", "--disable-bindings BINDING"} {
+		for _, action := range []string{"--install [--global] PYTHON_FILE", "--list [--global]", "--remove [--global] NAME", "--run [NAME]", "--global --run NAME", "--output [FILE]", "--disable-bindings BINDING"} {
 			if !strings.Contains(output.String(), action) {
 				t.Fatalf("%v help is missing %s: %q", arguments, action, output.String())
 			}
@@ -565,6 +566,8 @@ func TestPluginsRequireKnownExclusiveAction(t *testing.T) {
 		{name: "list with second action", arguments: []string{"plugins", "--list", "--install"}, code: 1, want: "does not accept arguments or another action"},
 		{name: "remove without name", arguments: []string{"plugins", "--remove"}, code: 1, want: "requires exactly one plugin name"},
 		{name: "remove with extra argument", arguments: []string{"plugins", "--remove", "inspect", "--list"}, code: 1, want: "requires exactly one plugin name"},
+		{name: "prefix global without run", arguments: []string{"plugins", "--global"}, code: 2, want: "--global must be followed by --run NAME"},
+		{name: "prefix global wrong action", arguments: []string{"plugins", "--global", "--list"}, code: 2, want: "--global must be followed by --run NAME"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -579,7 +582,7 @@ func TestPluginsRequireKnownExclusiveAction(t *testing.T) {
 			if !strings.Contains(errorOutput.String(), test.want) {
 				t.Fatalf("stderr = %q, want %q", errorOutput.String(), test.want)
 			}
-			if test.code == 2 && !strings.Contains(errorOutput.String(), "conven plugins --run [--global] [NAME]") {
+			if test.code == 2 && !strings.Contains(errorOutput.String(), "conven plugins --run [NAME]") {
 				t.Fatalf("stderr is missing plugin usage: %q", errorOutput.String())
 			}
 		})
@@ -609,7 +612,7 @@ func TestPluginsInstallAndListUseTemporaryHome(t *testing.T) {
 	}
 	directory := filepath.Join(canonicalWorkspace, ".conven", "plugins")
 	destination := filepath.Join(directory, "inspect.py")
-	wantOutput := "==> Installed workspace plugin inspect\n  - Path: " + destination + "\n  - Workspace: " + canonicalWorkspace + "\n"
+	wantOutput := "==> Installed workspace plugin inspect\n  - Path: plugins/inspect.py\n  - Workspace: " + canonicalWorkspace + "\n"
 	if output.String() != wantOutput {
 		t.Fatalf("install output = %q, want %q", output.String(), wantOutput)
 	}
@@ -628,8 +631,8 @@ func TestPluginsInstallAndListUseTemporaryHome(t *testing.T) {
 	if code := app.Run([]string{"plugins", "--list"}); code != 0 {
 		t.Fatalf("list exit code = %d: %s", code, errorOutput.String())
 	}
-	wantList := "Workspace plugins (" + directory + "):\n  inspect\n" +
-		"Global plugins (" + filepath.Join(home, ".conven", "plugins") + "):\n  (none)\n"
+	wantList := "==> Workspace plugins\n  - inspect\n" +
+		"==> Global plugins\n  - (none)\n"
 	if output.String() != wantList {
 		t.Fatalf("list output = %q", output.String())
 	}
@@ -637,7 +640,7 @@ func TestPluginsInstallAndListUseTemporaryHome(t *testing.T) {
 	if code := app.Run([]string{"plugins", "--remove", "inspect"}); code != 0 {
 		t.Fatalf("remove exit code = %d: %s", code, errorOutput.String())
 	}
-	wantOutput = "==> Removed workspace plugin inspect\n  - Path: " + destination + "\n  - Workspace: " + canonicalWorkspace + "\n"
+	wantOutput = "==> Removed workspace plugin inspect\n  - Path: plugins/inspect.py\n  - Workspace: " + canonicalWorkspace + "\n"
 	if output.String() != wantOutput {
 		t.Fatalf("remove output = %q, want %q", output.String(), wantOutput)
 	}
@@ -669,7 +672,7 @@ func TestAskPluginOverwriteAcceptsOnlyExplicitYes(t *testing.T) {
 			if overwrite != test.overwrite {
 				t.Fatalf("overwrite = %t, want %t", overwrite, test.overwrite)
 			}
-			if output.String() != "Plugin inspect is already installed. Overwrite? [y/N]: " {
+			if output.String() != "  => Overwrite plugin inspect? [y/N]: " {
 				t.Fatalf("prompt = %q", output.String())
 			}
 		})
@@ -706,7 +709,7 @@ func TestAskPluginOverwriteContextStopsWhenCancelledWithoutInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prompt != "Plugin inspect is already installed. Overwrite? [y/N]:" {
+	if prompt != "  => Overwrite plugin inspect? [y/N]:" {
 		t.Fatalf("prompt = %q", prompt)
 	}
 	cancel()
@@ -761,8 +764,17 @@ func TestPluginsDuplicateInstallRequiresTerminalAndPreservesExistingPlugin(t *te
 	if code := app.Run([]string{"plugins", "--install", secondSource}); code != 1 {
 		t.Fatalf("duplicate install exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errorOutput.String(), "overwrite confirmation requires an interactive terminal") {
-		t.Fatalf("duplicate install stderr = %q", errorOutput.String())
+	for _, expected := range []string{
+		"Warning: Workspace plugin already exists.",
+		"  - Plugin: inspect",
+		"  - Path: plugins/inspect.py",
+		"  - Existing plugin was not changed.",
+		"  => conven plugins --remove inspect",
+		"conven: workspace plugin \"inspect\": overwrite confirmation requires an interactive terminal",
+	} {
+		if !strings.Contains(errorOutput.String(), expected) {
+			t.Fatalf("duplicate install stderr is missing %q: %q", expected, errorOutput.String())
+		}
 	}
 	position, err := input.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -805,7 +817,7 @@ func TestPluginsDuplicateGlobalInstallSuggestsGlobalRemoval(t *testing.T) {
 	if code := app.Run([]string{"plugins", "--install", "--global", secondSource}); code != 1 {
 		t.Fatalf("duplicate install exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errorOutput.String(), "use conven plugins --remove --global inspect first") {
+	if !strings.Contains(errorOutput.String(), "  => conven plugins --remove --global inspect") {
 		t.Fatalf("duplicate global install stderr = %q", errorOutput.String())
 	}
 }
@@ -899,7 +911,7 @@ func TestPluginsGlobalInstallAndListWorkOutsideWorkspace(t *testing.T) {
 	if code := app.Run([]string{"plugins", "--list", "--global"}); code != 0 {
 		t.Fatalf("list exit code = %d: %s", code, errorOutput.String())
 	}
-	if output.String() != "Global plugins ("+directory+"):\n  inspect\n" {
+	if output.String() != "==> Global plugins\n  - inspect\n" {
 		t.Fatalf("global list output = %q", output.String())
 	}
 	output.Reset()
@@ -952,49 +964,207 @@ done
 	if output.String() != want {
 		t.Fatalf("stdout = %q, want %q", output.String(), want)
 	}
-	if !strings.Contains(errorOutput.String(), "running workspace plugin generator") {
+	for _, expected := range []string{
+		"Warning: Plugin name omitted; selected the only workspace plugin.",
+		"  - Plugin: generator",
+	} {
+		if !strings.Contains(errorOutput.String(), expected) {
+			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
+		}
+	}
+}
+
+func TestPluginsRunWithoutNameSelectsFromMultipleWorkspacePlugins(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	pluginDirectory := filepath.Join(workspace, ".conven", "plugins")
+	if err := os.MkdirAll(pluginDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		content := "#!/bin/sh\necho " + name + "\nprintf 'arg=%s\\n' \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(pluginDirectory, name+".py"), []byte(content), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	globalDirectory := filepath.Join(home, ".conven", "plugins")
+	if err := os.MkdirAll(globalDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDirectory, "global.py"), []byte("#!/bin/sh\necho should-not-run\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	selectorCalled := false
+	app := App{
+		Output:  &output,
+		Error:   &errorOutput,
+		Context: context.Background(),
+		Cwd:     workspace,
+		Version: "test-version",
+		SingleSelector: func(_ context.Context, _ *os.File, _ io.Writer, prompt selector.Prompt, candidates []selector.Candidate) (selector.Candidate, bool, error) {
+			selectorCalled = true
+			if prompt.Title != "Select a workspace plugin" || prompt.ConfirmationLabel != "Running plugin" || prompt.EmptySelectionNotice != "Select one plugin before confirming." {
+				t.Fatalf("prompt = %#v", prompt)
+			}
+			if len(candidates) != 2 || candidates[0].Name != "alpha" || candidates[1].Name != "beta" || candidates[0].Tag != "" || candidates[1].Tag != "" {
+				t.Fatalf("candidates = %#v", candidates)
+			}
+			return candidates[1], true, nil
+		},
+	}
+	if code := app.Run([]string{"plugins", "--run", "--output", "candidate.yaml"}); code != 0 {
+		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+	}
+	if !selectorCalled {
+		t.Fatal("workspace plugin selector was not called")
+	}
+	if !strings.Contains(output.String(), "beta\n") || !strings.Contains(output.String(), "arg=--output\narg=candidate.yaml\n") {
+		t.Fatalf("stdout = %q", output.String())
+	}
+	if errorOutput.Len() != 0 {
 		t.Fatalf("stderr = %q", errorOutput.String())
 	}
 }
 
-func TestPluginsRunWithoutNameRejectsZeroOrMultipleWorkspacePlugins(t *testing.T) {
-	for _, count := range []int{0, 2} {
-		t.Run(fmt.Sprintf("workspace-%d", count), func(t *testing.T) {
+func TestPluginsRunWithoutNameSelectsGlobalPluginWhenWorkspaceHasNone(t *testing.T) {
+	for _, count := range []int{1, 2} {
+		t.Run(fmt.Sprintf("global-%d", count), func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			workspace := t.TempDir()
-			workspacePlugins := filepath.Join(workspace, ".conven", "plugins")
-			if err := os.MkdirAll(workspacePlugins, 0700); err != nil {
+			if err := os.MkdirAll(filepath.Join(workspace, ".conven", "plugins"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			globalDirectory := filepath.Join(home, ".conven", "plugins")
+			if err := os.MkdirAll(globalDirectory, 0700); err != nil {
 				t.Fatal(err)
 			}
 			for index := 0; index < count; index++ {
-				name := fmt.Sprintf("workspace-%d.py", index)
-				if err := os.WriteFile(filepath.Join(workspacePlugins, name), []byte("#!/bin/sh\n"), 0700); err != nil {
+				name := fmt.Sprintf("global-%d", index)
+				content := "#!/bin/sh\necho " + name + "\n"
+				if err := os.WriteFile(filepath.Join(globalDirectory, name+".py"), []byte(content), 0700); err != nil {
 					t.Fatal(err)
 				}
 			}
-			globalPlugins := filepath.Join(home, ".conven", "plugins")
-			if err := os.MkdirAll(globalPlugins, 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(globalPlugins, "global.py"), []byte("#!/bin/sh\necho should-not-run\n"), 0700); err != nil {
-				t.Fatal(err)
-			}
 			var output bytes.Buffer
 			var errorOutput bytes.Buffer
-			app := App{Output: &output, Error: &errorOutput, Context: context.Background(), Cwd: workspace, Version: "test-version"}
-			if code := app.Run([]string{"plugins", "--run", "--output"}); code != 1 {
+			selectorCalled := false
+			app := App{
+				Output:  &output,
+				Error:   &errorOutput,
+				Context: context.Background(),
+				Cwd:     workspace,
+				Version: "test-version",
+				SingleSelector: func(_ context.Context, _ *os.File, _ io.Writer, prompt selector.Prompt, candidates []selector.Candidate) (selector.Candidate, bool, error) {
+					selectorCalled = true
+					if prompt.Title != "Select a global plugin" || len(candidates) != count {
+						t.Fatalf("prompt=%#v candidates=%#v", prompt, candidates)
+					}
+					for _, candidate := range candidates {
+						if candidate.Tag != "global" {
+							t.Fatalf("global candidate = %#v", candidate)
+						}
+					}
+					return candidates[len(candidates)-1], true, nil
+				},
+			}
+			if code := app.Run([]string{"plugins", "--run", "--output"}); code != 0 {
 				t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
 			}
-			if output.Len() != 0 {
-				t.Fatalf("global plugin unexpectedly ran: %q", output.String())
+			if !selectorCalled {
+				t.Fatal("global plugin selector was not called")
 			}
-			for _, expected := range []string{"Workspace plugins", "Global plugins", "global"} {
-				if !strings.Contains(errorOutput.String(), expected) {
-					t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
-				}
+			if !strings.Contains(output.String(), fmt.Sprintf("global-%d\n", count-1)) {
+				t.Fatalf("stdout = %q", output.String())
+			}
+			if !strings.Contains(errorOutput.String(), "Warning: Running a global plugin.") || !strings.Contains(errorOutput.String(), fmt.Sprintf("  - Plugin: global-%d", count-1)) {
+				t.Fatalf("stderr = %q", errorOutput.String())
 			}
 		})
+	}
+}
+
+func TestPluginsRunWithoutNameCanCancelSelection(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	pluginDirectory := filepath.Join(workspace, ".conven", "plugins")
+	if err := os.MkdirAll(pluginDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		if err := os.WriteFile(filepath.Join(pluginDirectory, name+".py"), []byte("#!/bin/sh\necho should-not-run\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{
+		Output:  &output,
+		Error:   &errorOutput,
+		Context: context.Background(),
+		Cwd:     workspace,
+		Version: "test-version",
+		SingleSelector: func(_ context.Context, _ *os.File, _ io.Writer, _ selector.Prompt, _ []selector.Candidate) (selector.Candidate, bool, error) {
+			return selector.Candidate{}, false, nil
+		},
+	}
+	if code := app.Run([]string{"plugins", "--run"}); code != 0 {
+		t.Fatalf("exit code = %d: stderr=%q", code, errorOutput.String())
+	}
+	if output.String() != "==> Plugin run cancelled\n  - No plugin was run.\n" || errorOutput.Len() != 0 {
+		t.Fatalf("stdout=%q stderr=%q", output.String(), errorOutput.String())
+	}
+}
+
+func TestPluginsRunWithoutNameReportsNonInteractiveSelection(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	pluginDirectory := filepath.Join(workspace, ".conven", "plugins")
+	if err := os.MkdirAll(pluginDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		if err := os.WriteFile(filepath.Join(pluginDirectory, name+".py"), []byte("#!/bin/sh\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{
+		Output:  &output,
+		Error:   &errorOutput,
+		Context: context.Background(),
+		Cwd:     workspace,
+		Version: "test-version",
+		SingleSelector: func(context.Context, *os.File, io.Writer, selector.Prompt, []selector.Candidate) (selector.Candidate, bool, error) {
+			return selector.Candidate{}, false, selector.ErrNotTerminal
+		},
+	}
+	if code := app.Run([]string{"plugins", "--run"}); code != 1 {
+		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+	}
+	if output.Len() != 0 || !strings.Contains(errorOutput.String(), "plugin selection requires an interactive terminal; specify a plugin name explicitly") {
+		t.Fatalf("stdout=%q stderr=%q", output.String(), errorOutput.String())
+	}
+}
+
+func TestPluginsRunWithoutNameRequiresAnInstalledPlugin(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".conven", "plugins"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test-version"}
+	if code := app.Run([]string{"plugins", "--run"}); code != 1 {
+		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+	}
+	if output.Len() != 0 || !strings.Contains(errorOutput.String(), "no workspace or global plugin is installed") {
+		t.Fatalf("stdout=%q stderr=%q", output.String(), errorOutput.String())
 	}
 }
 
@@ -1032,7 +1202,7 @@ func TestPluginsExplicitNamePrefersWorkspaceAndWarnsOnGlobalFallback(t *testing.
 	if code := app.Run([]string{"plugins", "--run", "global-only"}); code != 0 {
 		t.Fatalf("global fallback exit code = %d: %s", code, errorOutput.String())
 	}
-	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "running global plugin global-only") {
+	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "Warning: Workspace plugin not found; using the global plugin.") || !strings.Contains(errorOutput.String(), "  - Plugin: global-only") {
 		t.Fatalf("global fallback stdout=%q stderr=%q", output.String(), errorOutput.String())
 	}
 	output.Reset()
@@ -1040,7 +1210,7 @@ func TestPluginsExplicitNamePrefersWorkspaceAndWarnsOnGlobalFallback(t *testing.
 	if code := app.Run([]string{"plugins", "--run", "global-only.py"}); code != 0 {
 		t.Fatalf("global .py fallback exit code = %d: %s", code, errorOutput.String())
 	}
-	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "running global plugin global-only") {
+	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "Warning: Workspace plugin not found; using the global plugin.") || !strings.Contains(errorOutput.String(), "  - Plugin: global-only") {
 		t.Fatalf("global .py fallback stdout=%q stderr=%q", output.String(), errorOutput.String())
 	}
 	output.Reset()
@@ -1048,8 +1218,29 @@ func TestPluginsExplicitNamePrefersWorkspaceAndWarnsOnGlobalFallback(t *testing.
 	if code := app.Run([]string{"plugins", "--run", "--global", "global-only.py"}); code != 0 {
 		t.Fatalf("forced global .py run exit code = %d: %s", code, errorOutput.String())
 	}
-	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "Running global plugin global-only.py") {
+	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "Warning: Running a global plugin.") || !strings.Contains(errorOutput.String(), "  - Plugin: global-only") {
 		t.Fatalf("forced global .py stdout=%q stderr=%q", output.String(), errorOutput.String())
+	}
+	output.Reset()
+	errorOutput.Reset()
+	if code := app.Run([]string{"plugins", "--global", "--run", "global-only.py"}); code != 0 {
+		t.Fatalf("prefix global .py run exit code = %d: %s", code, errorOutput.String())
+	}
+	if output.String() != "global-only\n" || !strings.Contains(errorOutput.String(), "Warning: Running a global plugin.") || !strings.Contains(errorOutput.String(), "  - Plugin: global-only") {
+		t.Fatalf("prefix global .py stdout=%q stderr=%q", output.String(), errorOutput.String())
+	}
+	for _, arguments := range [][]string{
+		{"plugins", "--run", "--global"},
+		{"plugins", "--global", "--run"},
+	} {
+		output.Reset()
+		errorOutput.Reset()
+		if code := app.Run(arguments); code != 1 {
+			t.Fatalf("%v exit code = %d: %s", arguments, code, errorOutput.String())
+		}
+		if output.Len() != 0 || !strings.Contains(errorOutput.String(), "conven: plugins --global --run requires a plugin name") {
+			t.Fatalf("%v stdout=%q stderr=%q", arguments, output.String(), errorOutput.String())
+		}
 	}
 }
 
@@ -1187,12 +1378,12 @@ func TestRestartEnvironmentFlagHintPrecedesParseError(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		arguments []string
-		hint      string
+		action    string
 	}{
-		{name: "test", arguments: []string{"--test"}, hint: "Hint: --restart reuses the current session environment; switch with conven services --start --test."},
-		{name: "dev", arguments: []string{"--dev"}, hint: "Hint: --restart reuses the current session environment; switch with conven services --start --dev."},
-		{name: "env value", arguments: []string{"--env", "staging"}, hint: "Hint: --restart reuses the current session environment; switch with conven services --start --env NAME."},
-		{name: "env equals", arguments: []string{"--env=staging"}, hint: "Hint: --restart reuses the current session environment; switch with conven services --start --env NAME."},
+		{name: "test", arguments: []string{"--test"}, action: "  => switch with conven services --start --test."},
+		{name: "dev", arguments: []string{"--dev"}, action: "  => switch with conven services --start --dev."},
+		{name: "env value", arguments: []string{"--env", "staging"}, action: "  => switch with conven services --start --env NAME."},
+		{name: "env equals", arguments: []string{"--env=staging"}, action: "  => switch with conven services --start --env NAME."},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
@@ -1202,10 +1393,14 @@ func TestRestartEnvironmentFlagHintPrecedesParseError(t *testing.T) {
 			if code := app.Run(arguments); code != 2 {
 				t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
 			}
-			hintIndex := strings.Index(errorOutput.String(), test.hint)
-			errorIndex := strings.Index(errorOutput.String(), "flag provided but not defined:")
-			if hintIndex < 0 || errorIndex < 0 || hintIndex >= errorIndex {
-				t.Fatalf("restart hint does not precede the parse error: %q", errorOutput.String())
+			hintIndex := strings.Index(errorOutput.String(), "Warning: --restart reuses the current session environment;")
+			actionIndex := strings.Index(errorOutput.String(), test.action)
+			usageIndex := strings.Index(errorOutput.String(), "Usage:\n")
+			if hintIndex < 0 || actionIndex < hintIndex || usageIndex < 0 || actionIndex >= usageIndex {
+				t.Fatalf("restart hint does not precede usage: %q", errorOutput.String())
+			}
+			if strings.Contains(errorOutput.String(), "flag provided but not defined:") {
+				t.Fatalf("restart hint still includes the redundant parser error: %q", errorOutput.String())
 			}
 			if output.Len() != 0 {
 				t.Fatalf("stdout = %q", output.String())
@@ -1719,7 +1914,7 @@ func TestStopAllShortcutMatchesStopAll(t *testing.T) {
 	if outputs[0] != outputs[1] {
 		t.Fatalf("--stop --all output %q differs from --stop-all output %q", outputs[0], outputs[1])
 	}
-	if !strings.Contains(outputs[0], "No Conven session found.") {
+	if !strings.Contains(outputs[0], "Warning: No Conven session found.") {
 		t.Fatalf("stop-all output = %q", outputs[0])
 	}
 }
@@ -1780,7 +1975,7 @@ func TestServicesListStatusRestartAndStopRoutes(t *testing.T) {
 		message   string
 	}{
 		{name: "list", arguments: []string{"services", "--list"}, code: 0, message: "api"},
-		{name: "status", arguments: []string{"services", "--status"}, code: 0, message: "No Conven session found."},
+		{name: "status", arguments: []string{"services", "--status"}, code: 0, message: "Warning: No Conven session found."},
 		{name: "restart", arguments: []string{"services", "--restart"}, code: 1, message: "no running Conven session found"},
 		{name: "stop requires target", arguments: []string{"services", "--stop"}, code: 1, message: "requires service names or --all"},
 	} {
@@ -1939,7 +2134,7 @@ func TestAskStartReplacementOffersStopOrCancel(t *testing.T) {
 					t.Fatalf("prompt = %q, want %q", output.String(), expected)
 				}
 			}
-			if test.name == "retry invalid" && !strings.Contains(output.String(), "Please choose") {
+			if test.name == "retry invalid" && !strings.Contains(output.String(), "  => Choose [s] Stop then start or [c] Cancel:") {
 				t.Fatalf("invalid answer was not retried: %q", output.String())
 			}
 		})
@@ -1972,7 +2167,7 @@ func TestAskStartReplacementContextStopsWhenCancelledWithoutInput(t *testing.T) 
 		done <- result{replace: replace, err: err}
 	}()
 
-	expectedPrompt := "Workspace already has running services: api\nChoose: [s] Stop then start  [c] Cancel (default): "
+	expectedPrompt := "Warning: Workspace already has running services.\n  - Services: api\n  => Choose [s] Stop then start or [c] Cancel (default): "
 	prompt := make([]byte, len(expectedPrompt))
 	if _, err := io.ReadFull(promptReader, prompt); err != nil {
 		t.Fatal(err)
@@ -2067,11 +2262,11 @@ func TestStartRunningSessionUsesInjectedReplacementConfirmation(t *testing.T) {
 				if current.Services[0].PID != oldProcess.PID || !convenruntime.ProcessAlive(oldProcess.PID) {
 					t.Fatalf("cancel changed the running process: old=%#v current=%#v", oldProcess, current.Services)
 				}
-				if !strings.Contains(errorOutput.String(), "Cancelled; running services were left unchanged.") {
+				if errorOutput.Len() != 0 {
 					t.Fatalf("cancel stderr = %q; stdout = %q", errorOutput.String(), output.String())
 				}
-				if strings.Contains(output.String(), "Cancelled; running services were left unchanged.") {
-					t.Fatalf("cancel message was written to stdout: %q", output.String())
+				if !strings.Contains(output.String(), "==> Start cancelled\n  - Running services were left unchanged.") {
+					t.Fatalf("cancel stdout = %q", output.String())
 				}
 				return
 			}
@@ -2216,7 +2411,9 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`if [ "$subcommand" = "plugins" ]`,
 		`[ "${COMP_WORDS[action_index + 1]}" = "--global" ]`,
 		`options="--global --output --disable-bindings"`,
-		`options="--install --list --remove --run --help"`,
+		`options="--global --install --list --remove --run --help"`,
+		`elif [ "$action" = "--global" ]; then`,
+		`options="--run"`,
 		`compopt -o filenames 2>/dev/null`,
 	} {
 		if !strings.Contains(bash, expected) {
@@ -2265,7 +2462,10 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--install[install a Python plugin]`,
 		`--remove[remove an installed plugin]`,
 		`--run[run an installed plugin]`,
+		`--global[force a named user-global plugin run]`,
 		`--global[use the user-global plugin scope]`,
+		`words=($words[1] $words[3,-1])`,
+		`'1:global plugin:'`,
 		`--output[generator output path; omit the value for application.yaml]`,
 		`--disable-bindings[replace disabled RPC bindings for this generator run]`,
 		`'1::plugin:'`,
@@ -2300,6 +2500,9 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`function __conven_plugins_without_action`,
 		`function __conven_plugins_action`,
 		`function __conven_plugins_scope_position`,
+		`function __conven_plugins_global_without_action`,
+		`function __conven_plugins_global_run`,
+		`function __conven_plugins_run_arguments`,
 		`__conven_without_command' -a services`,
 		`__conven_without_command' -a policy`,
 		`__conven_without_command' -a plugins`,
@@ -2330,11 +2533,13 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l list`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l remove`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l run`,
+		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l global`,
+		`__conven_plugins_global_without_action' -l run`,
 		`__conven_plugins_scope_position --install' -l global`,
 		`__conven_plugins_scope_position --list' -l global`,
 		`__conven_plugins_scope_position --run' -l global`,
-		`__conven_plugins_action --run' -l output`,
-		`__conven_plugins_action --run' -l disable-bindings`,
+		`__conven_plugins_run_arguments' -l output`,
+		`__conven_plugins_run_arguments' -l disable-bindings`,
 	} {
 		if !strings.Contains(fish, expected) {
 			t.Fatalf("fish completion is missing %q", expected)
@@ -2456,6 +2661,8 @@ func TestBashPluginGlobalCompletionOnlyImmediatelyAfterAction(t *testing.T) {
 	}{
 		{name: "run scope", words: "conven plugins --run --g", want: "--global\n"},
 		{name: "run after name", words: "conven plugins --run generator --g", want: ""},
+		{name: "prefix global action", words: "conven plugins --global --r", want: "--run\n"},
+		{name: "prefix global requires name", words: "conven plugins --global --run --g", want: ""},
 		{name: "list scope", words: "conven plugins --list --g", want: "--global\n"},
 		{name: "list after scope", words: "conven plugins --list --global --g", want: ""},
 	} {
@@ -2591,12 +2798,26 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	if err := os.WriteFile(ignorePath, []byte("custom-rule\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	var output bytes.Buffer
-	app := App{Output: &output, Error: &output, Cwd: workspace, Version: "test"}
-	if code := app.Run([]string{"init"}); code != 0 {
-		t.Fatalf("exit code = %d: %s", code, output.String())
-	}
 	path := filepath.Join(workspace, ".conven", "conven.yaml")
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test"}
+	if code := app.Run([]string{"init"}); code != 0 {
+		t.Fatalf("exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
+	}
+	wantInitFiles := "==> Initialized Conven workspace\n" +
+		"  - Manifest: " + path + "\n" +
+		"  - services.properties\n" +
+		"  - disabled-services.properties\n" +
+		"  - CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md\n" +
+		"  - README.md\n" +
+		"==> Initial service registry scan complete\n"
+	if !strings.Contains(output.String(), wantInitFiles) || !strings.Contains(output.String(), "  - Discovered services: none") {
+		t.Fatalf("init stdout = %q", output.String())
+	}
+	if errorOutput.String() != "Warning: No supported child repositories were detected.\n  - Manifest source: embedded example\n" {
+		t.Fatalf("init stderr = %q", errorOutput.String())
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -2626,8 +2847,19 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 		t.Fatal(err)
 	}
 	output.Reset()
+	errorOutput.Reset()
 	if code := app.Run([]string{"init"}); code != 0 {
 		t.Fatalf("reinitialize exit code = %d: %s", code, output.String())
+	}
+	wantReinitFiles := "==> Reused Conven workspace\n" +
+		"  - Manifest: " + path + "\n" +
+		"  - services.properties Skipped\n" +
+		"  - disabled-services.properties Skipped\n" +
+		"  - CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md Skipped\n" +
+		"  - README.md Skipped\n" +
+		"  - Existing manifest was not overwritten.\n"
+	if !strings.Contains(output.String(), wantReinitFiles) {
+		t.Fatalf("reinitialize stdout = %q", output.String())
 	}
 	data, err = os.ReadFile(path)
 	if err != nil {
@@ -2649,6 +2881,35 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	if strings.Contains(strings.ToLower(output.String()), "plugin") {
 		t.Fatalf("reinitialize misleadingly reported plugins when no built-ins exist: %q", output.String())
 	}
+	if errorOutput.Len() != 0 {
+		t.Fatalf("reinitialize stderr = %q", errorOutput.String())
+	}
+
+	missingWorkspaceFile := filepath.Join(workspace, "disabled-services.properties")
+	if err := os.Remove(missingWorkspaceFile); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	errorOutput.Reset()
+	if code := app.Run([]string{"init"}); code != 0 {
+		t.Fatalf("repair init exit code = %d: %s", code, output.String())
+	}
+	wantRepairFiles := "==> Reused Conven workspace\n" +
+		"  - Manifest: " + path + "\n" +
+		"  - services.properties Skipped\n" +
+		"  - disabled-services.properties\n" +
+		"  - CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md Skipped\n" +
+		"  - README.md Skipped\n" +
+		"  - Existing manifest was not overwritten.\n"
+	if !strings.Contains(output.String(), wantRepairFiles) {
+		t.Fatalf("repair init stdout = %q", output.String())
+	}
+	if _, err := os.Stat(missingWorkspaceFile); err != nil {
+		t.Fatalf("repair init did not recreate disabled-services.properties: %v", err)
+	}
+	if errorOutput.Len() != 0 {
+		t.Fatalf("repair init stderr = %q", errorOutput.String())
+	}
 }
 
 func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
@@ -2660,7 +2921,7 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 	if code := app.Run([]string{"init"}); code != 0 {
 		t.Fatalf("init exit code = %d: %s", code, output.String())
 	}
-	if !strings.Contains(output.String(), "Discovered supported services: alpha-service") {
+	if !strings.Contains(output.String(), "==> Initial service registry scan complete\n  - Discovered services: alpha-service") {
 		t.Fatalf("init output = %q", output.String())
 	}
 	servicesPath := filepath.Join(workspace, "services.properties")
@@ -2679,9 +2940,10 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 		t.Fatalf("registry exit code = %d: %s", code, output.String())
 	}
 	for _, expected := range []string{
-		"Discovered supported services: alpha-service, beta-service",
-		"Added services: beta-service",
-		"Updated Conven manifest:",
+		"==> Service registry scan complete",
+		"  - Discovered services: alpha-service, beta-service",
+		"  - Added services: beta-service",
+		"  - Manifest:",
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("registry output is missing %q: %q", expected, output.String())
@@ -2737,7 +2999,7 @@ services:
 	if code := app.Run([]string{"policy", "--edit"}); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
 	}
-	if !called || !strings.Contains(output.String(), "Updated Conven policy manifest:") || errorOutput.Len() != 0 {
+	if !called || !strings.Contains(output.String(), "==> Updated Conven policy manifest\n  - Manifest:") || errorOutput.Len() != 0 {
 		t.Fatalf("called=%v stdout=%q stderr=%q", called, output.String(), errorOutput.String())
 	}
 	data, err := os.ReadFile(manifestPath)
@@ -2777,17 +3039,24 @@ services:
 		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
 	}
 	for _, expected := range []string{
-		"Discovered supported services: api-service",
-		"Reset Conven policy manifest to scan baseline:",
-		"Pre-reset manifest backup:",
-		"re-declare policies, environments, ports, dependencies",
+		"==> Reset Conven policy manifest to scan baseline",
+		"  - Discovered services: api-service",
+		"  - Manifest:",
+		"  - Backup:",
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("output is missing %q: %q", expected, output.String())
 		}
 	}
-	if errorOutput.Len() != 0 {
-		t.Fatalf("stderr = %q", errorOutput.String())
+	for _, expected := range []string{
+		"Warning: Policy reset rebuilds the complete workspace manifest.",
+		"  - Review and restore manually declared policies, environments, ports, dependencies, health checks, patches, and runner changes.",
+		"  => conven doctor",
+		"  => conven services --start --dry-run",
+	} {
+		if !strings.Contains(errorOutput.String(), expected) {
+			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
+		}
 	}
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -2795,6 +3064,29 @@ services:
 	}
 	if strings.Contains(string(data), "custom-api") || !strings.Contains(string(data), "api-service") {
 		t.Fatalf("manifest = %s", data)
+	}
+}
+
+func TestPolicyResetAlreadyAtScanBaselineDoesNotWarn(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	writeCLIServiceRepository(t, workspace, "api-service")
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test"}
+	if code := app.Run([]string{"init"}); code != 0 {
+		t.Fatalf("init exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
+	}
+	output.Reset()
+	errorOutput.Reset()
+	if code := app.Run([]string{"policy", "--reset"}); code != 0 {
+		t.Fatalf("reset exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
+	}
+	if !strings.Contains(output.String(), "==> Conven policy manifest already matches scan baseline") {
+		t.Fatalf("reset stdout = %q", output.String())
+	}
+	if errorOutput.Len() != 0 {
+		t.Fatalf("reset stderr = %q", errorOutput.String())
 	}
 }
 
@@ -2841,6 +3133,10 @@ services:
 			t.Fatal("policy --import without --edit launched the editor")
 			return nil
 		},
+		SingleSelector: func(context.Context, *os.File, io.Writer, selector.Prompt, []selector.Candidate) (selector.Candidate, bool, error) {
+			t.Fatal("explicit policy import unexpectedly opened the selector")
+			return selector.Candidate{}, false, nil
+		},
 	}
 	if code := app.Run([]string{"policy", "--import", importPath}); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
@@ -2853,18 +3149,24 @@ services:
 		t.Fatalf("manifest = %s", data)
 	}
 	for _, expected := range []string{
-		"Replaced Conven policy manifest from imported file",
-		"Pre-import manifest backup:",
-		"without merging repository scan results",
-		"conven doctor",
-		"conven services --start --dry-run",
+		"==> Replaced Conven policy manifest",
+		"  - Source: "+importPath,
+		"  - Manifest: "+manifestPath,
+		"  - Backup:",
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("output is missing %q: %q", expected, output.String())
 		}
 	}
-	if errorOutput.Len() != 0 {
-		t.Fatalf("stderr = %q", errorOutput.String())
+	for _, expected := range []string{
+		"Warning: Policy import treats the source as the complete workspace manifest.",
+		"  - Repository scan results were not merged.",
+		"  => conven doctor",
+		"  => conven services --start --dry-run",
+	} {
+		if !strings.Contains(errorOutput.String(), expected) {
+			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
+		}
 	}
 
 	output.Reset()
@@ -2877,7 +3179,7 @@ services:
 	}
 }
 
-func TestPolicyImportUsesWorkspaceApplicationYAMLByDefault(t *testing.T) {
+func TestPolicyImportWithoutFilenameSelectsTheOnlyWorkspaceYAML(t *testing.T) {
 	workspace := t.TempDir()
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
@@ -2915,9 +3217,28 @@ services:
 
 	var output bytes.Buffer
 	var errorOutput bytes.Buffer
-	app := App{Output: &output, Error: &errorOutput, Cwd: nested, Version: "test"}
+	selectorCalled := false
+	app := App{
+		Output:  &output,
+		Error:   &errorOutput,
+		Cwd:     nested,
+		Version: "test",
+		SingleSelector: func(_ context.Context, _ *os.File, _ io.Writer, prompt selector.Prompt, candidates []selector.Candidate) (selector.Candidate, bool, error) {
+			selectorCalled = true
+			if prompt.Title != "Select a policy file" || prompt.ConfirmationLabel != "Importing policy file" || prompt.EmptySelectionNotice != "Select one policy file before confirming." {
+				t.Fatalf("prompt = %#v", prompt)
+			}
+			if len(candidates) != 1 || candidates[0].Name != "application.yaml" {
+				t.Fatalf("candidates = %#v", candidates)
+			}
+			return candidates[0], true, nil
+		},
+	}
 	if code := app.Run([]string{"policy", "--import"}); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
+	}
+	if !selectorCalled {
+		t.Fatal("policy selector was not called for the sole YAML file")
 	}
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -2926,15 +3247,17 @@ services:
 	if !bytes.Equal(data, []byte(imported)) {
 		t.Fatalf("manifest = %s", data)
 	}
-	if !strings.Contains(output.String(), "using workspace default: "+defaultPath) {
-		t.Fatalf("stdout = %q", output.String())
+	for _, expected := range []string{"Warning: Policy import treats the source as the complete workspace manifest."} {
+		if !strings.Contains(errorOutput.String(), expected) {
+			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
+		}
 	}
-	if errorOutput.Len() != 0 {
-		t.Fatalf("stderr = %q", errorOutput.String())
+	if !strings.Contains(output.String(), "==> Replaced Conven policy manifest\n  - Source: "+defaultPath) {
+		t.Fatalf("stdout = %q", output.String())
 	}
 }
 
-func TestPolicyImportDefaultRequiresWorkspaceApplicationYAML(t *testing.T) {
+func TestPolicyImportWithoutFilenameRequiresWorkspaceYAML(t *testing.T) {
 	workspace := t.TempDir()
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
@@ -2959,11 +3282,10 @@ services:
 	if code := app.Run([]string{"policy", "--import"}); code != 1 {
 		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
 	}
-	defaultPath := filepath.Join(workspace, "application.yaml")
-	if !strings.Contains(output.String(), "using workspace default: "+defaultPath) {
+	if output.Len() != 0 {
 		t.Fatalf("stdout = %q", output.String())
 	}
-	for _, expected := range []string{"does not exist", "specify a YAML filename", "generate application.yaml first"} {
+	for _, expected := range []string{"no YAML policy files were found in the workspace root", "specify a YAML filename"} {
 		if !strings.Contains(errorOutput.String(), expected) {
 			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
 		}
@@ -2974,6 +3296,162 @@ services:
 	}
 	if !bytes.Equal(data, []byte(original)) {
 		t.Fatalf("missing default import changed manifest: %s", data)
+	}
+}
+
+func TestWorkspaceYAMLCandidatesUseSortedDirectRegularFiles(t *testing.T) {
+	workspace := t.TempDir()
+	for _, name := range []string{"z.yml", "a.yaml", "M.YAML", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(workspace, name), []byte("candidate"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(workspace, "directory.yaml"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(workspace, "nested")
+	if err := os.Mkdir(nested, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "nested.yaml"), []byte("candidate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(workspace, "a.yaml"), filepath.Join(workspace, "link.yaml")); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := workspaceYAMLCandidates(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 3 || candidates[0].Name != "M.YAML" || candidates[1].Name != "a.yaml" || candidates[2].Name != "z.yml" {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+}
+
+func TestPolicyImportWithoutFilenameSelectsAmongMultipleWorkspaceYAMLFiles(t *testing.T) {
+	workspace := t.TempDir()
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := `version: 1
+workspace:
+  name: before
+services:
+  api:
+    path: api
+    runner:
+      run: [api]
+`
+	if err := os.WriteFile(manifestPath, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	alpha := strings.Replace(original, "name: before", "name: alpha", 1)
+	beta := strings.Replace(original, "name: before", "name: beta", 1)
+	if err := os.WriteFile(filepath.Join(workspace, "alpha.yaml"), []byte(alpha), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "beta.yml"), []byte(beta), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{
+		Output:  &output,
+		Error:   &errorOutput,
+		Cwd:     workspace,
+		Version: "test",
+		SingleSelector: func(_ context.Context, _ *os.File, _ io.Writer, _ selector.Prompt, candidates []selector.Candidate) (selector.Candidate, bool, error) {
+			if len(candidates) != 2 || candidates[0].Name != "alpha.yaml" || candidates[1].Name != "beta.yml" {
+				t.Fatalf("candidates = %#v", candidates)
+			}
+			return candidates[1], true, nil
+		},
+	}
+	if code := app.Run([]string{"policy", "--import"}); code != 0 {
+		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != beta {
+		t.Fatalf("manifest = %s", data)
+	}
+	if !strings.Contains(output.String(), "  - Source: "+filepath.Join(workspace, "beta.yml")) {
+		t.Fatalf("stdout = %q", output.String())
+	}
+}
+
+func TestPolicyImportWithoutFilenameCanCancelSelection(t *testing.T) {
+	workspace := t.TempDir()
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	original := `version: 1
+workspace:
+  name: unchanged
+services:
+  api:
+    path: api
+    runner:
+      run: [api]
+`
+	if err := os.WriteFile(manifestPath, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "candidate.yaml"), []byte(strings.Replace(original, "unchanged", "changed", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{
+		Output:  &output,
+		Error:   &errorOutput,
+		Cwd:     workspace,
+		Version: "test",
+		SingleSelector: func(context.Context, *os.File, io.Writer, selector.Prompt, []selector.Candidate) (selector.Candidate, bool, error) {
+			return selector.Candidate{}, false, nil
+		},
+	}
+	if code := app.Run([]string{"policy", "--import"}); code != 0 {
+		t.Fatalf("exit code = %d: stderr=%q", code, errorOutput.String())
+	}
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original || output.String() != "==> Policy import cancelled\n  - Conven policy manifest was not changed.\n" || errorOutput.Len() != 0 {
+		t.Fatalf("manifest=%s stdout=%q stderr=%q", data, output.String(), errorOutput.String())
+	}
+}
+
+func TestPolicyImportWithoutFilenameReportsNonInteractiveSelection(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "candidate.yaml"), []byte("candidate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{
+		Output:  &output,
+		Error:   &errorOutput,
+		Cwd:     workspace,
+		Version: "test",
+		SingleSelector: func(context.Context, *os.File, io.Writer, selector.Prompt, []selector.Candidate) (selector.Candidate, bool, error) {
+			return selector.Candidate{}, false, selector.ErrNotTerminal
+		},
+	}
+	if code := app.Run([]string{"policy", "--import"}); code != 1 {
+		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
+	}
+	if output.Len() != 0 || !strings.Contains(errorOutput.String(), "policy import selection requires an interactive terminal; specify a YAML filename explicitly") {
+		t.Fatalf("stdout=%q stderr=%q", output.String(), errorOutput.String())
 	}
 }
 
@@ -3178,18 +3656,28 @@ services:
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	app := App{Output: &output, Error: &output, Cwd: workspace, Version: "test"}
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test"}
 	if code := app.Run([]string{"services", "--registry"}); code != 0 {
-		t.Fatalf("exit code = %d: %s", code, output.String())
+		t.Fatalf("exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
 	}
-	if !strings.Contains(output.String(), "Manifest unchanged; missing repositories were kept.") {
+	if !strings.Contains(output.String(), "  - Manifest: unchanged; missing repositories kept") {
 		t.Fatalf("output = %q", output.String())
 	}
 	if strings.Contains(output.String(), "already matches") {
 		t.Fatalf("output contradicts missing repository status: %q", output.String())
 	}
-	if !strings.Contains(output.String(), "conven services --registry --prune") || strings.Contains(output.String(), "conven discover") {
-		t.Fatalf("output does not use the registry action: %q", output.String())
+	for _, expected := range []string{
+		"Warning: Service registry scan requires review.",
+		"  - Missing repositories kept: removed-service",
+		"  => conven services --registry --prune",
+	} {
+		if !strings.Contains(errorOutput.String(), expected) {
+			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
+		}
+	}
+	if strings.Contains(errorOutput.String(), "conven discover") {
+		t.Fatalf("stderr uses the obsolete discovery command: %q", errorOutput.String())
 	}
 }
 

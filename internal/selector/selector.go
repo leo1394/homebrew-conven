@@ -17,9 +17,15 @@ import (
 )
 
 var (
-	ErrNoCandidates = errors.New("selector: no service candidates")
+	ErrNoCandidates = errors.New("selector: no candidates")
 	ErrNotTerminal   = errors.New("selector: input is not a terminal")
 )
+
+var servicePrompt = Prompt{
+	Title:                "Select local services",
+	ConfirmationLabel:    "Convening local services",
+	EmptySelectionNotice: "Select at least one service before confirming.",
+}
 
 const (
 	selectorEnterScreen    = "\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H"
@@ -30,6 +36,29 @@ const (
 var errConfirmationRetriesExceeded = errors.New("confirmation failed after 3 invalid retries")
 
 func Select(ctx context.Context, in *os.File, out io.Writer, candidates []Candidate) (names []string, confirmed bool, err error) {
+	selected, confirmed, err := selectCandidates(ctx, in, out, servicePrompt, selectionMany, candidates)
+	if err != nil || !confirmed {
+		return nil, confirmed, err
+	}
+	names = make([]string, 0, len(selected))
+	for _, candidate := range selected {
+		names = append(names, candidate.Name)
+	}
+	return names, true, nil
+}
+
+func SelectOne(ctx context.Context, in *os.File, out io.Writer, prompt Prompt, candidates []Candidate) (Candidate, bool, error) {
+	selected, confirmed, err := selectCandidates(ctx, in, out, prompt, selectionOne, candidates)
+	if err != nil || !confirmed {
+		return Candidate{}, confirmed, err
+	}
+	if len(selected) != 1 {
+		return Candidate{}, false, errors.New("selector: single selection did not produce exactly one candidate")
+	}
+	return selected[0], true, nil
+}
+
+func selectCandidates(ctx context.Context, in *os.File, out io.Writer, prompt Prompt, cardinality selectionCardinality, candidates []Candidate) (selected []Candidate, confirmed bool, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -59,7 +88,7 @@ func Select(ctx context.Context, in *os.File, out io.Writer, candidates []Candid
 	defer func() {
 		restoreErr := term.Restore(fd, previousState)
 		if restoreErr != nil {
-			names = nil
+			selected = nil
 			confirmed = false
 			err = errors.Join(err, fmt.Errorf("selector: restore terminal: %w", restoreErr))
 		}
@@ -68,7 +97,7 @@ func Select(ctx context.Context, in *os.File, out io.Writer, candidates []Candid
 	defer func() {
 		if screenActive {
 			if _, leaveErr := io.WriteString(out, selectorLeaveScreen); leaveErr != nil {
-				names = nil
+				selected = nil
 				confirmed = false
 				err = errors.Join(err, fmt.Errorf("selector: leave alternate screen: %w", leaveErr))
 			}
@@ -79,7 +108,7 @@ func Select(ctx context.Context, in *os.File, out io.Writer, candidates []Candid
 		return nil, false, fmt.Errorf("selector: enter alternate screen: %w", err)
 	}
 
-	state := newPickerState(candidates)
+	state := newPickerStateWithOptions(candidates, prompt, cardinality)
 	reader := bufio.NewReader(in)
 	for {
 		width, height := terminalSize(fd)
@@ -106,10 +135,10 @@ func Select(ctx context.Context, in *os.File, out io.Writer, candidates []Candid
 	}
 }
 
-func confirmSelection(ctx context.Context, reader *bufio.Reader, fd int, out io.Writer, state *pickerState) (names []string, confirmed bool, err error) {
+func confirmSelection(ctx context.Context, reader *bufio.Reader, fd int, out io.Writer, state *pickerState) (selected []Candidate, confirmed bool, err error) {
 	defer func() {
 		if _, newlineErr := io.WriteString(out, "\r\n"); newlineErr != nil {
-			names = nil
+			selected = nil
 			confirmed = false
 			err = errors.Join(err, fmt.Errorf("selector: finish confirmation: %w", newlineErr))
 		}
@@ -142,7 +171,7 @@ func confirmSelection(ctx context.Context, reader *bufio.Reader, fd int, out io.
 		}
 		switch state.mode {
 		case modeConfirmed:
-			return state.selectedNames(), true, nil
+			return state.selectedCandidates(), true, nil
 		case modeCancelled:
 			return nil, false, nil
 		}
@@ -197,7 +226,7 @@ func render(out io.Writer, state *pickerState, width int, height int) error {
 
 func renderPicker(out io.Writer, state *pickerState, width int, height int) error {
 	style := terminal.New(out)
-	if _, err := io.WriteString(out, "Select local services\r\n\r\n"); err != nil {
+	if _, err := fmt.Fprintf(out, "%s\r\n\r\n", state.prompt.Title); err != nil {
 		return fmt.Errorf("selector: render: %w", err)
 	}
 
@@ -235,9 +264,14 @@ func renderPicker(out io.Writer, state *pickerState, width int, height int) erro
 		if metadata != "" {
 			line += "  " + metadata
 		}
-		line = clip(line, width)
 		if state.selected[index] {
+			if candidate.Tag != "" {
+				line += " · " + candidate.Tag
+			}
+			line = clip(line, width)
 			line = style.Selection(line, index == state.cursor)
+		} else {
+			line = renderUnselectedCandidateLine(style, line, candidate.Tag, width)
 		}
 		if _, err := fmt.Fprintf(out, "%s\r\n", line); err != nil {
 			return fmt.Errorf("selector: render: %w", err)
@@ -248,7 +282,11 @@ func renderPicker(out io.Writer, state *pickerState, width int, height int) erro
 	if _, err := fmt.Fprintf(out, "\r\nShowing %d-%d of %d · selected %s\r\n", start+1, end, len(state.candidates), selectedCount); err != nil {
 		return fmt.Errorf("selector: render: %w", err)
 	}
-	if _, err := io.WriteString(out, "[f|A] selection · [Enter] confirm · [q/Esc] cancel\r\n"); err != nil {
+	controls := "[f|A] selection · [Enter] confirm · [q/Esc] cancel\r\n"
+	if state.cardinality == selectionOne {
+		controls = "[f] selection · [Enter] confirm · [q/Esc] cancel\r\n"
+	}
+	if _, err := io.WriteString(out, controls); err != nil {
 		return fmt.Errorf("selector: render: %w", err)
 	}
 	if state.notice != "" {
@@ -260,14 +298,14 @@ func renderPicker(out io.Writer, state *pickerState, width int, height int) erro
 }
 
 func renderConfirmation(out io.Writer, state *pickerState) error {
-	if _, err := fmt.Fprintf(out, "Convening local services: %s\r\n\r\n", strings.Join(state.selectedNames(), ", ")); err != nil {
+	if _, err := fmt.Fprintf(out, "%s: %s\r\n\r\n", state.prompt.ConfirmationLabel, strings.Join(state.selectedNames(), ", ")); err != nil {
 		return fmt.Errorf("selector: render confirmation: %w", err)
 	}
 	return renderConfirmationPrompt(out)
 }
 
 func renderConfirmationPrompt(out io.Writer) error {
-	if _, err := io.WriteString(out, "Confirm? [y/yes] continue · [n/no] cancel: "); err != nil {
+	if _, err := io.WriteString(out, "Confirm? [y] continue · [n] cancel: "); err != nil {
 		return fmt.Errorf("selector: render confirmation: %w", err)
 	}
 	return nil
@@ -282,6 +320,18 @@ func candidateMetadata(candidate Candidate) string {
 		parts = append(parts, candidate.Detail)
 	}
 	return strings.Join(parts, " · ")
+}
+
+func renderUnselectedCandidateLine(style terminal.Style, line string, tag string, width int) string {
+	if tag == "" {
+		return clip(line, width)
+	}
+	suffix := " · " + tag
+	baseWidth := width - utf8.RuneCountInString(suffix)
+	if baseWidth < 2 {
+		return clip(line+suffix, width)
+	}
+	return clip(line, baseWidth) + " · " + style.Warning(tag)
 }
 
 func clip(value string, width int) string {

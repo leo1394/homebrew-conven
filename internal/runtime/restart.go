@@ -254,13 +254,15 @@ func restartTargets(plan *Plan, session *Session, requested []string) ([]string,
 }
 
 func rollbackRestartGroup(workspace *WorkspaceData, session *Session, originals map[string]ServiceProcess, started []string, output io.Writer, failure error) error {
-	style := terminal.New(output)
 	problems := []error{failure}
 	for index := len(started) - 1; index >= 0; index-- {
 		name := started[index]
 		process := sessionProcess(session, name)
 		if err := StopProcess(process, 3*time.Second); err != nil {
-			fmt.Fprintf(output, "%s %s: %v\n", style.Warning("Restart rollback warning for"), style.Identifier(name), err)
+			terminal.PrintWarningBlock(output, "Restart rollback could not stop a service.", []string{
+				"Service: " + name,
+				"Error: " + err.Error(),
+			}, nil)
 			problems = append(problems, fmt.Errorf("stop restarted %s: %w", name, err))
 			continue
 		}

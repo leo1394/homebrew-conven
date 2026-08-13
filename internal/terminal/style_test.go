@@ -23,6 +23,9 @@ func TestStyleUsesANSIForTerminal(t *testing.T) {
 	if got := style.Detail("Environment: dev"); got != "  - Environment: dev" {
 		t.Fatalf("detail style = %q", got)
 	}
+	if got := style.Action("conven doctor"); got != "  => conven doctor" {
+		t.Fatalf("action style = %q", got)
+	}
 	if got := style.Label("Workspace"); got != "Workspace" {
 		t.Fatalf("label style = %q", got)
 	}
@@ -117,6 +120,7 @@ func TestStyleMethodsDoNotAlterPlainText(t *testing.T) {
 		style.Label("Workspace"),
 		style.Stage("Building"),
 		style.Detail("Environment: dev"),
+		style.Action("conven doctor"),
 		style.Identifier("api-service"),
 		style.Warning("warning"),
 		style.Failure("failed"),
@@ -124,7 +128,16 @@ func TestStyleMethodsDoNotAlterPlainText(t *testing.T) {
 		style.Selection("selected", false),
 		style.Selection("active", true),
 	}
-	if got := strings.Join(values, "|"); got != "Workspace|==> Building|  - Environment: dev|api-service|warning|failed|ready|selected|active" {
+	if got := strings.Join(values, "|"); got != "Workspace|==> Building|  - Environment: dev|  => conven doctor|api-service|warning|failed|ready|selected|active" {
 		t.Fatalf("plain styles = %q", got)
+	}
+}
+
+func TestPrintWarningBlockUsesCanonicalPlainTextLayout(t *testing.T) {
+	var output strings.Builder
+	PrintWarningBlock(&output, "Review required.", []string{"Service: api"}, []string{"conven doctor"})
+	want := "Warning: Review required.\n  - Service: api\n  => conven doctor\n"
+	if output.String() != want {
+		t.Fatalf("warning block = %q, want %q", output.String(), want)
 	}
 }

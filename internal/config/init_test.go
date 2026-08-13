@@ -79,10 +79,18 @@ func TestInitWorkspaceCreatesManifestAndDoesNotOverwrite(t *testing.T) {
 
 func TestInitWorkspaceCreatesAndPreservesWorkspaceFiles(t *testing.T) {
 	workspace := t.TempDir()
-	if _, _, err := InitWorkspace(workspace, []byte("version: 1\n")); err != nil {
+	result, err := InitWorkspaceDetailsWithPolicySpecification(workspace, []byte("version: 1\n"), examples.WorkspacePolicyGeneratorAISpec)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range examples.WorkspaceFiles() {
+	workspaceFiles := examples.WorkspaceFiles()
+	if len(result.Files) != len(workspaceFiles) {
+		t.Fatalf("initialized file results = %#v", result.Files)
+	}
+	for index, file := range workspaceFiles {
+		if result.Files[index].Name != file.Name || !result.Files[index].Created {
+			t.Fatalf("initialized file result %d = %#v", index, result.Files[index])
+		}
 		path := filepath.Join(workspace, file.Name)
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -101,7 +109,7 @@ func TestInitWorkspaceCreatesAndPreservesWorkspaceFiles(t *testing.T) {
 	}
 
 	preserved := make(map[string]string)
-	for _, file := range examples.WorkspaceFiles() {
+	for _, file := range workspaceFiles {
 		value := "custom " + file.Name + "\n"
 		preserved[file.Name] = value
 		if err := os.WriteFile(filepath.Join(workspace, file.Name), []byte(value), 0644); err != nil {
@@ -112,10 +120,18 @@ func TestInitWorkspaceCreatesAndPreservesWorkspaceFiles(t *testing.T) {
 	if err := os.Remove(filepath.Join(workspace, missing)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := InitWorkspace(workspace, []byte("replacement\n")); err != nil {
+	result, err = InitWorkspaceDetailsWithPolicySpecification(workspace, []byte("replacement\n"), examples.WorkspacePolicyGeneratorAISpec)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range examples.WorkspaceFiles() {
+	if len(result.Files) != len(workspaceFiles) {
+		t.Fatalf("reinitialized file results = %#v", result.Files)
+	}
+	for index, file := range workspaceFiles {
+		wantCreated := file.Name == missing
+		if result.Files[index].Name != file.Name || result.Files[index].Created != wantCreated {
+			t.Fatalf("reinitialized file result %d = %#v, want name %q created %v", index, result.Files[index], file.Name, wantCreated)
+		}
 		data, err := os.ReadFile(filepath.Join(workspace, file.Name))
 		if err != nil {
 			t.Fatal(err)
@@ -456,5 +472,35 @@ func TestPublishNewManifestDoesNotReplaceConcurrentFile(t *testing.T) {
 	}
 	if string(data) != "concurrent\n" {
 		t.Fatalf("manifest = %q", data)
+	}
+}
+
+func TestPublishNewManifestRejectsConcurrentNonRegularFile(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(string) error
+	}{
+		{name: "directory", setup: func(path string) error { return os.Mkdir(path, 0700) }},
+		{name: "symbolic link", setup: func(path string) error {
+			target := filepath.Join(filepath.Dir(path), "target.yaml")
+			if err := os.WriteFile(target, []byte("target\n"), 0600); err != nil {
+				return err
+			}
+			return os.Symlink(target, path)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "conven.yaml")
+			if err := test.setup(path); err != nil {
+				t.Fatal(err)
+			}
+			created, err := publishNewManifest(path, []byte("generated\n"))
+			if err == nil || !strings.Contains(err.Error(), "must be a regular file") {
+				t.Fatalf("error = %v, want regular file error", err)
+			}
+			if created {
+				t.Fatal("publish reported replacing a non-regular manifest")
+			}
+		})
 	}
 }

@@ -342,8 +342,12 @@ func checkBuildDiskSpaceAndWarn(output io.Writer, path string) error {
 		return err
 	}
 	if warning := buildDiskSpaceWarning(path, available); warning != "" {
-		style := terminal.New(output)
-		fmt.Fprintln(output, style.Warning("Warning: "+warning))
+		terminal.PrintWarningBlock(output, "Low disk space for service builds.", []string{
+			"Path: " + path,
+			"Available: " + formatDiskSpace(available),
+			"Recommended minimum: " + formatDiskSpace(warningBuildDiskSpace),
+			"Free disk space to avoid dependency download and build failures.",
+		}, nil)
 	}
 	return nil
 }
@@ -385,7 +389,7 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 		return err
 	}
 	if session == nil {
-		fmt.Fprintln(output, style.Warning("No Conven session found."))
+		terminal.PrintWarningBlock(output, "No Conven session found.", nil, nil)
 		if all && force {
 			recovered, err := recoverUnleasedConnections(ctx, workspace.Store.Root, output)
 			if err != nil {
@@ -466,7 +470,10 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 			} else if session.Connection.Owned {
 				fmt.Fprintf(output, "%s %s\n", style.Stage("Stopping Conven-owned connection"), style.Identifier(session.Connection.Driver))
 			} else {
-				fmt.Fprintf(output, "%s %s connection running; Conven does not own it.\n", style.Warning("Leaving external"), style.Identifier(session.Connection.Driver))
+				terminal.PrintWarningBlock(output, "External connection was left running.", []string{
+					"Connection: " + session.Connection.Driver,
+					"Reason: Conven does not own it.",
+				}, nil)
 			}
 			if err := releaseConnection(ctx, session.Connection, workspace.Store.Root, force, output); err != nil {
 				fmt.Fprintf(output, "%s: %v\n", style.Failure("✗ Error releasing connection"), err)
@@ -502,7 +509,7 @@ func Status(ctx context.Context, workspace *WorkspaceData, output io.Writer) err
 		return err
 	}
 	if session == nil {
-		fmt.Fprintln(output, style.Warning("No Conven session found."))
+		terminal.PrintWarningBlock(output, "No Conven session found.", nil, nil)
 		_, err := printSharedConnectionStatus(ctx, output)
 		return err
 	}
@@ -827,7 +834,10 @@ func rollbackSession(workspace *WorkspaceData, session *Session, connection *Con
 	for index := len(session.Services) - 1; index >= 0; index-- {
 		process := session.Services[index]
 		if err := StopProcess(process, 3*time.Second); err != nil {
-			fmt.Fprintf(output, "%s %s: %v\n", style.Warning("Rollback warning for"), style.Identifier(process.Name), err)
+			terminal.PrintWarningBlock(output, "Startup rollback could not stop a service.", []string{
+				"Service: " + process.Name,
+				"Error: " + err.Error(),
+			}, nil)
 			failedNames[process.Name] = true
 			problems = append(problems, fmt.Errorf("stop %s: %w", process.Name, err))
 		}
@@ -844,7 +854,9 @@ func rollbackSession(workspace *WorkspaceData, session *Session, connection *Con
 		session.Connection = connection
 	} else {
 		if err := releaseConnection(context.Background(), connection, workspace.Store.Root, false, output); err != nil {
-			fmt.Fprintf(output, "%s: %v\n", style.Warning("Rollback warning for connection"), err)
+			terminal.PrintWarningBlock(output, "Startup rollback could not release the connection.", []string{
+				"Error: " + err.Error(),
+			}, nil)
 			session.Connection = connection
 			problems = append(problems, fmt.Errorf("stop connection: %w", err))
 		} else {
@@ -879,8 +891,12 @@ func validateKubeconfig(path string) error {
 func printKubeconfigPermissionWarning(output io.Writer, path string) {
 	info, err := os.Stat(path)
 	if err == nil && info.Mode().Perm()&0077 != 0 {
-		style := terminal.New(output)
-		fmt.Fprintln(output, style.Warning(fmt.Sprintf("Warning: kubeconfig permissions are %o; consider chmod 600 %s", info.Mode().Perm(), path)))
+		terminal.PrintWarningBlock(output, "Kubeconfig permissions are too broad.", []string{
+			fmt.Sprintf("Permissions: %o", info.Mode().Perm()),
+			"Path: " + path,
+		}, []string{
+			"Restrict kubeconfig permissions to 600.",
+		})
 	}
 }
 

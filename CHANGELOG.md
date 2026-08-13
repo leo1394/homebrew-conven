@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.12 - 2026-08-13
+
+- Add a reusable single-selection terminal picker for ambiguous plugin and
+  workspace-root policy choices while preserving the existing multi-service
+  selector and confirmation behavior.
+- Report every no-clobber workspace guidance file from `conven init`, shorten
+  selector confirmation hints to `[y]` and `[n]`, and normalize workspace
+  plugin paths and warning blocks.
+- Require a name for explicitly global plugin runs, support
+  `conven plugins --global --run NAME`, and select global candidates only when
+  an unqualified run has no workspace plugin.
+
 ## 0.2.11 - 2026-08-13
 
 - Initialize missing workspace generator guidance files without overwriting

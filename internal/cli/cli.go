@@ -18,15 +18,16 @@ import (
 )
 
 type App struct {
-	Input        *os.File
-	Output       io.Writer
-	Error        io.Writer
-	Context      context.Context
-	Cwd          string
-	Version      string
-	VersionDate  string
-	PolicyEditor func(context.Context, string) error
+	Input                     *os.File
+	Output                    io.Writer
+	Error                     io.Writer
+	Context                   context.Context
+	Cwd                       string
+	Version                   string
+	VersionDate               string
+	PolicyEditor              func(context.Context, string) error
 	StartReplacementConfirmer func(context.Context, []string) (bool, error)
+	SingleSelector            func(context.Context, *os.File, io.Writer, selector.Prompt, []selector.Candidate) (selector.Candidate, bool, error)
 }
 
 type commonFlags struct {
@@ -235,7 +236,7 @@ func (app App) runStart(arguments []string) int {
 			return app.fail(err)
 		}
 		if !confirmed {
-			fmt.Fprintln(app.Output, "Cancelled; no services were started.")
+			printStartCancelled(app.Output, "No services were started.")
 			return 0
 		}
 		services = selected
@@ -256,7 +257,7 @@ func (app App) runStart(arguments []string) int {
 			return app.fail(promptErr)
 		}
 		if !replace {
-			fmt.Fprintln(app.Error, "Cancelled; running services were left unchanged.")
+			printStartCancelled(app.Output, "Running services were left unchanged.")
 			return 0
 		}
 		session, err = convenruntime.ReplaceStart(app.Context, workspace, startOptions, running.SessionToken)
@@ -574,7 +575,7 @@ func parseCommandFlags(flags *flag.FlagSet, arguments []string, helpOutput io.Wr
 	return parseCommandFlagsWithHint(flags, arguments, helpOutput, nil)
 }
 
-func parseCommandFlagsWithHint(flags *flag.FlagSet, arguments []string, helpOutput io.Writer, hint func(error) string) (bool, int) {
+func parseCommandFlagsWithHint(flags *flag.FlagSet, arguments []string, helpOutput io.Writer, hint func(error) (string, string)) (bool, int) {
 	normalized, err := intersperseFlags(flags, arguments)
 	if err != nil {
 		fmt.Fprintln(flags.Output(), err)
@@ -587,15 +588,23 @@ func parseCommandFlagsWithHint(flags *flag.FlagSet, arguments []string, helpOutp
 	flags.SetOutput(errorOutput)
 	if parseOutput.Len() > 0 {
 		output := errorOutput
+		parsedOutput := parseOutput.String()
 		if errors.Is(err, flag.ErrHelp) {
 			output = helpOutput
 		}
 		if hint != nil && err != nil && !errors.Is(err, flag.ErrHelp) {
-			if message := hint(err); message != "" {
-				fmt.Fprintln(output, terminal.New(output).Warning(message))
+			if summary, action := hint(err); summary != "" {
+				actions := []string(nil)
+				if action != "" {
+					actions = []string{action}
+				}
+				printWarningBlock(output, summary, nil, actions)
+				if usageIndex := strings.Index(parsedOutput, "Usage:\n"); usageIndex >= 0 {
+					parsedOutput = parsedOutput[usageIndex:]
+				}
 			}
 		}
-		fmt.Fprint(output, canonicalFlagOutput(parseOutput.String()))
+		fmt.Fprint(output, canonicalFlagOutput(parsedOutput))
 	}
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -761,6 +770,9 @@ func (app App) withDefaults() App {
 		app.StartReplacementConfirmer = func(ctx context.Context, services []string) (bool, error) {
 			return confirmStartReplacement(ctx, input, errorOutput, services)
 		}
+	}
+	if app.SingleSelector == nil {
+		app.SingleSelector = selector.SelectOne
 	}
 	return app
 }

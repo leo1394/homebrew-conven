@@ -233,11 +233,13 @@ https://github.com/leo1394/homebrew-conven
 ### Workspace onboarding and plugin acceptance
 
 For a release that changes workspace onboarding or plugins, smoke-test the
-built binary in an isolated workspace. The first `init` must create all four
-workspace assets, and a repeated `init` must preserve every existing byte.
+built binary in an isolated workspace. The first `init` must create the
+manifest plus all four workspace guidance files, and a repeated `init` must
+preserve every existing byte.
 `services --registry` may update `.conven/conven.yaml`, but must not modify the
 properties catalogs. Omitting the source from `policy --import` must select the
-workspace-root `application.yaml`:
+workspace-root YAML candidates interactively; automated checks must pass the
+source explicitly:
 
 ```bash
 CONVEN_SMOKE_ROOT="$(mktemp -d /tmp/conven-release-smoke.XXXXXX)"
@@ -247,8 +249,12 @@ CONVEN_SMOKE_HOME="$CONVEN_SMOKE_ROOT/home"
 mkdir "$CONVEN_SMOKE_WORKSPACE" "$CONVEN_SMOKE_CHINESE_WORKSPACE" \
   "$CONVEN_SMOKE_HOME"
 
+CONVEN_SMOKE_INIT_OUTPUT="$CONVEN_SMOKE_ROOT/init-output.txt"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
-  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init | \
+  tee "$CONVEN_SMOKE_INIT_OUTPUT"
+grep -Fq '==> Initialized Conven workspace' "$CONVEN_SMOKE_INIT_OUTPUT"
+grep -Fq '  - Manifest: ' "$CONVEN_SMOKE_INIT_OUTPUT"
 for CONVEN_SMOKE_ASSET in \
   services.properties \
   disabled-services.properties \
@@ -256,6 +262,7 @@ for CONVEN_SMOKE_ASSET in \
   README.md
 do
   test -f "$CONVEN_SMOKE_WORKSPACE/$CONVEN_SMOKE_ASSET"
+  grep -Fxq "  - $CONVEN_SMOKE_ASSET" "$CONVEN_SMOKE_INIT_OUTPUT"
   printf '\n# release-preserve-check\n' >> "$CONVEN_SMOKE_WORKSPACE/$CONVEN_SMOKE_ASSET"
 done
 grep -Fq 'language: en' \
@@ -274,8 +281,18 @@ CONVEN_ASSET_SHA_BEFORE="$(shasum \
   "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
+CONVEN_SMOKE_REINIT_OUTPUT="$CONVEN_SMOKE_ROOT/reinit-output.txt"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
-  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init | \
+  tee "$CONVEN_SMOKE_REINIT_OUTPUT"
+for CONVEN_SMOKE_ASSET in \
+  services.properties \
+  disabled-services.properties \
+  CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
+  README.md
+do
+  grep -Fq "  - $CONVEN_SMOKE_ASSET Skipped" "$CONVEN_SMOKE_REINIT_OUTPUT"
+done
 CONVEN_ASSET_SHA_AFTER="$(shasum \
   "$CONVEN_SMOKE_WORKSPACE/services.properties" \
   "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
@@ -295,11 +312,9 @@ test "$CONVEN_CATALOG_SHA_BEFORE" = "$CONVEN_CATALOG_SHA_AFTER"
 
 cp "$CONVEN_SMOKE_WORKSPACE/.conven/conven.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/application.yaml"
-CONVEN_IMPORT_OUTPUT="$(env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
-  /tmp/conven-release \
-  -C "$CONVEN_SMOKE_WORKSPACE" policy --import)"
-printf '%s\n' "$CONVEN_IMPORT_OUTPUT" | \
-  grep -F "using workspace default: $CONVEN_SMOKE_WORKSPACE/application.yaml"
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" \
+  policy --import "$CONVEN_SMOKE_WORKSPACE/application.yaml"
 ```
 
 The plugin regression gate must additionally prove all of these contracts:
@@ -311,10 +326,12 @@ The plugin regression gate must additionally prove all of these contracts:
   shows only the global group;
 - an explicit name prefers the workspace plugin and falls back to a global
   plugin with a warning;
-- an omitted name runs the sole workspace plugin with a warning; zero or
-  multiple workspace plugins fail and show the workspace/global candidates;
-  global plugins are never selected implicitly merely because the workspace
-  has none.
+- an omitted name runs the sole workspace plugin with a warning, selects from
+  multiple workspace plugins with the single selector, or selects from global
+  candidates when the workspace has none; a sole global candidate still
+  requires selection and confirmation;
+- `plugins --global --run NAME` requires NAME and resolves only the global
+  scope.
 
 These behaviors are covered by the focused CLI and plugin tests as well as the
 full suite. Keep the focused command available when diagnosing a release:
@@ -336,6 +353,10 @@ release:
 ```bash
 git add cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb
 git add README.md README-ZH.md RELEASING.md RELEASING-ZH.md
+git add docs/conven.1 docs/COMMAND-OUTPUT-EXAMPLES.md
+git add examples/workspace/README.md
+git add examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
+git add examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
 git diff --cached
 git commit -m "Release conven $CONVEN_RELEASE_VERSION"
 ```

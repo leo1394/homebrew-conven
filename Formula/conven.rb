@@ -27,9 +27,10 @@ class Conven < Formula
     ENV["LC_ALL"] = "en_US.UTF-8"
     new_cli = build.head? || version >= "0.2.9"
     scoped_plugins = build.head? || version >= "0.2.11"
+    plugin_selector = build.head? || version >= "0.2.12"
     if build.head?
       expected_version = <<~EOS
-        conven version 0.2.11 (2026-08-13)
+        conven version 0.2.12 (2026-08-13)
         https://github.com/leo1394/homebrew-conven
       EOS
       expected_version = Regexp.new("\\A#{Regexp.escape(expected_version)}\\z")
@@ -86,9 +87,15 @@ class Conven < Formula
       if scoped_plugins
         assert_includes plugin_list, "Workspace plugins"
         assert_includes plugin_list, "Global plugins"
-        assert_includes plugin_list.lines, "  formula-plugin\n"
+        expected_plugin_line = plugin_selector ? "  - formula-plugin\n" : "  formula-plugin\n"
+        assert_includes plugin_list.lines, expected_plugin_line
         local_run = shell_output("#{bin}/conven plugins --run 2>&1")
-        assert_includes local_run, "running workspace plugin formula-plugin"
+        if plugin_selector
+          assert_includes local_run, "Warning: Plugin name omitted; selected the only workspace plugin."
+          assert_includes local_run, "  - Plugin: formula-plugin"
+        else
+          assert_includes local_run, "running workspace plugin formula-plugin"
+        end
         assert_includes local_run, "formula plugin"
         global_plugin_source = testpath/"global-formula-plugin.py"
         global_plugin_source.write("#!/usr/bin/env python3\nprint('global formula plugin')\n")
@@ -96,9 +103,23 @@ class Conven < Formula
         system bin/"conven", "plugins", "--install", "--global", global_plugin_source
         assert_path_exists testpath/".conven/plugins/global-formula-plugin.py"
         assert_includes shell_output("#{bin}/conven plugins --list --global"), "global-formula-plugin"
-        global_run = shell_output("#{bin}/conven plugins --run global-formula-plugin 2>&1")
-        assert_includes global_run, "running global plugin global-formula-plugin"
+        global_run_command = if plugin_selector
+          "#{bin}/conven plugins --global --run global-formula-plugin 2>&1"
+        else
+          "#{bin}/conven plugins --run global-formula-plugin 2>&1"
+        end
+        global_run = shell_output(global_run_command)
+        if plugin_selector
+          assert_includes global_run, "Warning: Running a global plugin."
+          assert_includes global_run, "  - Plugin: global-formula-plugin"
+        else
+          assert_includes global_run, "running global plugin global-formula-plugin"
+        end
         assert_includes global_run, "global formula plugin"
+        if plugin_selector
+          missing_global_name = shell_output("#{bin}/conven plugins --global --run 2>&1", 1)
+          assert_includes missing_global_name, "plugins --global --run requires a plugin name"
+        end
       else
         assert_includes plugin_list.lines, "formula-plugin\n"
       end
@@ -123,11 +144,7 @@ class Conven < Formula
       imported_manifest = expected_manifest.sub(/^  name: .+$/, "  name: formula-import")
       refute_equal expected_manifest, imported_manifest
       imported_policy.write(imported_manifest)
-      if scoped_plugins
-        system bin/"conven", "policy", "--import"
-      else
-        system bin/"conven", "policy", "--import", imported_policy
-      end
+      system bin/"conven", "policy", "--import", imported_policy
       assert_equal imported_manifest, manifest.read
       assert_predicate workspace_state/"backups", :directory?
       import_backups = (workspace_state/"backups").children

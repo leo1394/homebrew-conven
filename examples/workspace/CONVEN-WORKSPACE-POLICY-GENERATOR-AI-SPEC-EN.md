@@ -96,10 +96,11 @@ Plugins are installed to `<workspace>/.conven/plugins` by default;
 scopes. An explicit `NAME` uses the workspace plugin first and falls back to the global plugin only
 when no local plugin exists, with a warning. If a local entry with the same name exists but is
 damaged, execution MUST fail instead of silently falling back. When `NAME` is omitted, Conven runs
-the plugin with a warning only if the workspace contains exactly one valid plugin. If the workspace
-contains zero or multiple plugins, Conven lists the workspace/global groups and fails; it MUST NOT
-select a global plugin automatically. The plugin itself MUST NOT read or depend on its installed
-name.
+the plugin with a warning if the workspace contains exactly one valid plugin, opens its single
+selector when it contains multiple plugins, or opens the selector for global candidates when no
+workspace plugin exists. Even one global candidate requires selection and confirmation. An
+explicitly global run uses `conven plugins --global --run NAME` and requires `NAME`. The plugin
+itself MUST NOT read or depend on its installed name.
 
 Invocation examples:
 

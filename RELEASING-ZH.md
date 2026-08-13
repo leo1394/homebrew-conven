@@ -201,10 +201,10 @@ https://github.com/leo1394/homebrew-conven
 ### Workspace 接入与插件验收
 
 如果本次发布修改了 workspace 接入或插件行为，必须使用构建出的二进制在隔离
-workspace 中执行 smoke test。首次 `init` 必须生成四个 workspace 资产；再次执行
-`init` 必须逐字节保留全部已有文件。`services --registry` 可以更新
+workspace 中执行 smoke test。首次 `init` 必须生成 manifest 和四个 workspace
+指导文件；再次执行 `init` 必须逐字节保留全部已有文件。`services --registry` 可以更新
 `.conven/conven.yaml`，但不得修改 properties catalog。`policy --import` 省略来源文件
-时必须选择 workspace 根目录的 `application.yaml`：
+时必须交互选择 workspace 根目录的 YAML 候选；自动检查必须显式传入来源文件：
 
 ```bash
 CONVEN_SMOKE_ROOT="$(mktemp -d /tmp/conven-release-smoke.XXXXXX)"
@@ -214,8 +214,12 @@ CONVEN_SMOKE_HOME="$CONVEN_SMOKE_ROOT/home"
 mkdir "$CONVEN_SMOKE_WORKSPACE" "$CONVEN_SMOKE_CHINESE_WORKSPACE" \
   "$CONVEN_SMOKE_HOME"
 
+CONVEN_SMOKE_INIT_OUTPUT="$CONVEN_SMOKE_ROOT/init-output.txt"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
-  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init | \
+  tee "$CONVEN_SMOKE_INIT_OUTPUT"
+grep -Fq '==> Initialized Conven workspace' "$CONVEN_SMOKE_INIT_OUTPUT"
+grep -Fq '  - Manifest: ' "$CONVEN_SMOKE_INIT_OUTPUT"
 for CONVEN_SMOKE_ASSET in \
   services.properties \
   disabled-services.properties \
@@ -223,6 +227,7 @@ for CONVEN_SMOKE_ASSET in \
   README.md
 do
   test -f "$CONVEN_SMOKE_WORKSPACE/$CONVEN_SMOKE_ASSET"
+  grep -Fxq "  - $CONVEN_SMOKE_ASSET" "$CONVEN_SMOKE_INIT_OUTPUT"
   printf '\n# release-preserve-check\n' >> "$CONVEN_SMOKE_WORKSPACE/$CONVEN_SMOKE_ASSET"
 done
 grep -Fq 'language: en' \
@@ -241,8 +246,18 @@ CONVEN_ASSET_SHA_BEFORE="$(shasum \
   "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
+CONVEN_SMOKE_REINIT_OUTPUT="$CONVEN_SMOKE_ROOT/reinit-output.txt"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
-  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init | \
+  tee "$CONVEN_SMOKE_REINIT_OUTPUT"
+for CONVEN_SMOKE_ASSET in \
+  services.properties \
+  disabled-services.properties \
+  CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
+  README.md
+do
+  grep -Fq "  - $CONVEN_SMOKE_ASSET Skipped" "$CONVEN_SMOKE_REINIT_OUTPUT"
+done
 CONVEN_ASSET_SHA_AFTER="$(shasum \
   "$CONVEN_SMOKE_WORKSPACE/services.properties" \
   "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
@@ -262,11 +277,9 @@ test "$CONVEN_CATALOG_SHA_BEFORE" = "$CONVEN_CATALOG_SHA_AFTER"
 
 cp "$CONVEN_SMOKE_WORKSPACE/.conven/conven.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/application.yaml"
-CONVEN_IMPORT_OUTPUT="$(env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
-  /tmp/conven-release \
-  -C "$CONVEN_SMOKE_WORKSPACE" policy --import)"
-printf '%s\n' "$CONVEN_IMPORT_OUTPUT" | \
-  grep -F "using workspace default: $CONVEN_SMOKE_WORKSPACE/application.yaml"
+env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
+  /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" \
+  policy --import "$CONVEN_SMOKE_WORKSPACE/application.yaml"
 ```
 
 插件回归门禁还必须证明以下全部契约：
@@ -275,9 +288,10 @@ printf '%s\n' "$CONVEN_IMPORT_OUTPUT" | \
   使用 `~/.conven/plugins`；两个作用域允许存在同名插件；
 - 默认 list 分组显示 workspace 和 global 插件，`--list --global` 只显示 global 分组；
 - 显式 NAME 优先执行 workspace 插件；workspace 中不存在时回退 global，并输出 warning；
-- 缺省 NAME 时，仅当 workspace 恰好有一个插件才执行，并输出 warning；workspace
-  插件为零个或多个时必须失败并列出 workspace/global 候选；不能仅因为 workspace
-  没有插件就隐式选择 global 插件。
+- 缺省 NAME 时，workspace 恰好有一个插件会直接执行并输出 warning；存在多个
+  workspace 插件时通过单选器选择；workspace 没有插件时从 global 候选中选择，
+  即使只有一个 global 候选也必须选择并确认；
+- `plugins --global --run NAME` 必须提供 NAME，并且只从 global 作用域解析。
 
 完整测试和下列聚焦测试都会覆盖这些行为。发布诊断时保留下列命令：
 
@@ -295,6 +309,10 @@ go test -count=1 ./internal/cli ./internal/plugins \
 ```bash
 git add cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb
 git add README.md README-ZH.md RELEASING.md RELEASING-ZH.md
+git add docs/conven.1 docs/COMMAND-OUTPUT-EXAMPLES.md
+git add examples/workspace/README.md
+git add examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
+git add examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
 git diff --cached
 git commit -m "Release conven $CONVEN_RELEASE_VERSION"
 ```

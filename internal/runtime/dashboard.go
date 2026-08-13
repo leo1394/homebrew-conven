@@ -1102,7 +1102,6 @@ func dashboardHorizontalRuleLine(width int) dashboardLine {
 		ruleWidth = 1
 	}
 	return dashboardLine{Segments: []dashboardSegment{
-		{Text: "  "},
 		{Text: strings.Repeat("─", ruleWidth), Style: dashboardWhite},
 	}}
 }

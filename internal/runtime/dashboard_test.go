@@ -109,6 +109,10 @@ func TestDashboardBannerUsesWhiteLabelsGreenCountAndCenteredYellowHint(t *testin
 	if !strings.Contains(joined, dashboardWhite+strings.Repeat("─", width-2)+dashboardReset) {
 		t.Fatalf("dashboard top rule is not white: %q", joined)
 	}
+	topRule := strings.TrimRight(plainDashboardText(rendered[1]), " ")
+	if topRule != strings.Repeat("─", width-2) {
+		t.Fatalf("dashboard top rule is not left-aligned: %q", topRule)
+	}
 	for _, label := range []string{"WORKSPACE", "ENV", "LAN", "CLUSTER", "SERVICES", "RPC", "HTTP"} {
 		if !strings.Contains(joined, dashboardWhite+label+dashboardReset) {
 			t.Fatalf("dashboard label %q is not white: %q", label, joined)

@@ -1439,8 +1439,14 @@ func TestStopAllLeavesExternalConnectionRunning(t *testing.T) {
 	if session != nil {
 		t.Fatalf("stop all retained external connection session: %#v", session)
 	}
-	if !strings.Contains(output.String(), "Leaving external ktctl connection running; Conven does not own it.") {
-		t.Fatalf("external connection retention was not reported: %s", output.String())
+	for _, expected := range []string{
+		"Warning: External connection was left running.",
+		"  - Connection: ktctl",
+		"  - Reason: Conven does not own it.",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("external connection retention is missing %q: %s", expected, output.String())
+		}
 	}
 }
 
@@ -1538,7 +1544,7 @@ func TestStatusWithoutSessionShowsSharedConnectionRecoveryIdentifiers(t *testing
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		"No Conven session found.",
+		"Warning: No Conven session found.",
 		"Shared connection records in this Conven state root:",
 		"fingerprint=status-preview",
 		"pid=99999931 pgid=99999921",
@@ -1547,6 +1553,25 @@ func TestStatusWithoutSessionShowsSharedConnectionRecoveryIdentifiers(t *testing
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("status is missing %q: %s", expected, output.String())
 		}
+	}
+}
+
+func TestKubeconfigPermissionWarningUsesCanonicalLayout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(path, []byte("test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	printKubeconfigPermissionWarning(&output, path)
+	want := "Warning: Kubeconfig permissions are too broad.\n" +
+		"  - Permissions: 644\n" +
+		"  - Path: " + path + "\n" +
+		"  => Restrict kubeconfig permissions to 600.\n"
+	if output.String() != want {
+		t.Fatalf("kubeconfig warning = %q, want %q", output.String(), want)
 	}
 }
 

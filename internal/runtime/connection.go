@@ -188,8 +188,10 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 		config.Timeout = 60 * time.Second
 	}
 	if config.Driver == "ktctl" && config.Timeout <= 60*time.Second {
-		fmt.Fprintln(output, style.Warning("Warning: ktctl connection timeout is 60s or less; first-time shadow pod creation may use the entire budget."))
-		fmt.Fprintln(output, style.Detail("Recommended: timeout: 240s with args [--podCreationTimeout, \"120\", --portForwardTimeout, \"30\"]."))
+		terminal.PrintWarningBlock(output, "ktctl connection timeout is 60s or less.", []string{
+			"First-time shadow pod creation may use the entire budget.",
+			"Suggested config: timeout: 240s with args [--podCreationTimeout, \"120\", --portForwardTimeout, \"30\"].",
+		}, nil)
 	}
 	if config.Sudo {
 		if err := authorizeSudo(ctx, output); err != nil {
@@ -833,7 +835,9 @@ func authorizeElevatedConnectionStop() error {
 
 func authorizeSudo(ctx context.Context, output io.Writer) error {
 	style := terminal.New(output)
-	fmt.Fprintln(output, style.Warning("Sudo authorization required; password input is hidden."))
+	terminal.PrintWarningBlock(output, "Sudo authorization required.", []string{
+		"Password input is hidden.",
+	}, nil)
 	validation := exec.CommandContext(ctx, "sudo", "-v")
 	validation.Stdin = os.Stdin
 	validation.Stdout = output

@@ -137,11 +137,19 @@ conven services --start --dev user-svc order-svc
 ```
 
 `init` performs the initial registry scan, conservatively identifying Git
-repositories that are immediate children of the workspace. It also creates the
-following workspace guidance files when they do not already exist:
-`services.properties`,
-`disabled-services.properties`, `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md`,
-and `README.md`. For supported Go main-module layouts, it records only verified
+repositories that are immediate children of the workspace. It initializes these
+files:
+
+| File | Purpose |
+| --- | --- |
+| `.conven/conven.yaml` | Canonical workspace manifest for environments, services, policies, and runtime behavior. |
+| `services.properties` | Service catalog used by the workspace policy generator. |
+| `disabled-services.properties` | RPC bindings disabled when the workspace policy is generated. |
+| `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` | AI-readable specification for implementing the workspace policy generator plugin. |
+| `README.md` | Workspace-local quick start for the generated files and Conven workflow. |
+
+Each file is created only when missing; an existing regular file is preserved.
+For supported Go main-module layouts, `init` records only verified
 paths, runners, service kinds, and binding candidates. It does **not** infer
 ports, a complete business dependency graph, organization-specific policy,
 Apollo credentials, or cluster connection details. Review the generated
@@ -332,17 +340,21 @@ conven plugins --remove plugin
 # Use the user-global plugin scope explicitly.
 conven plugins --install --global ./plugin.py
 conven plugins --list --global
-conven plugins --run --global plugin --output
+conven plugins --global --run plugin --output
 conven plugins --remove --global plugin
 ```
 
 Workspace plugins live in `.conven/plugins`; global plugins live in
 `~/.conven/plugins`. The two scopes may contain the same name. An explicit run
 name prefers the workspace copy and warns before falling back to global. When
-the workspace has exactly one plugin, the name may be omitted. `--output`
+the workspace has exactly one plugin, the name may be omitted; multiple
+workspace plugins open the single selector. If none exists locally, the same
+selector shows global candidates, including a sole candidate. An explicitly
+global run requires its name. `--output`
 without a filename is passed to the plugin, whose generator convention writes
-`application.yaml`; `policy --import` without a filename imports that workspace
-file. Plugins run with the canonical workspace as their working directory.
+`application.yaml`; `policy --import` without a filename opens the single
+selector for `.yaml` and `.yml` files in the workspace root. Plugins run with
+the canonical workspace as their working directory.
 Treat them as trusted local code and review generated policy candidates before
 import. The grouped default list requires a workspace; outside one, use
 `conven plugins --list --global`.
@@ -388,7 +400,9 @@ man conven
 ```
 
 The installed manual is the authoritative reference for that Conven version.
-The source manual is available at [`docs/conven.1`](docs/conven.1). Release
+The source manual is available at [`docs/conven.1`](docs/conven.1), and
+representative stdout/stderr formats at
+[`docs/COMMAND-OUTPUT-EXAMPLES.md`](docs/COMMAND-OUTPUT-EXAMPLES.md). Release
 steps are documented in [`RELEASING.md`](RELEASING.md), and version changes in
 [`CHANGELOG.md`](CHANGELOG.md).
 

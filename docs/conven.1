@@ -1,4 +1,4 @@
-.TH CONVEN 1 "August 12, 2026" "Conven" "User Commands"
+.TH CONVEN 1 "August 13, 2026" "Conven" "User Commands"
 .SH NAME
 conven \- run a focused set of local microservices with remote dependencies
 .SH SYNOPSIS
@@ -90,10 +90,21 @@ Use
 .BR "\-\-list [\-\-global]" ,
 .BR "\-\-remove [\-\-global] name" ,
 or
-.BR "\-\-run [\-\-global] [name] [plugin-args...]" .
+.BR "\-\-run [name] [plugin-args...]" .
+Use
+.BR "plugins \-\-global \-\-run name [plugin-args...]"
+to require the user-global plugin with an explicit name; the older
+.BR "plugins \-\-run \-\-global name"
+ordering is also accepted.
 The unqualified list is grouped by workspace and global scope. An explicit
 name prefers workspace and warns before global fallback. An omitted name runs
-only when exactly one workspace plugin is installed.
+the sole workspace plugin with a warning, opens a single-selection picker when
+multiple workspace plugins exist, or opens the picker for global candidates
+when no workspace plugin exists. Global candidates carry a highlighted
+.B global
+label; even a sole global candidate requires selection and confirmation.
+An explicitly global run always requires
+.IR name .
 The grouped list requires a workspace; outside one, use
 .BR "plugins \-\-list \-\-global" .
 Generator options are passed through unchanged. Compatible policy generators
@@ -104,6 +115,16 @@ accept
 and
 .BR "\-\-disable-bindings binding..." ;
 the plugin, not Conven, owns overwrite confirmation.
+An immediate
+.B \-\-global
+after
+.B \-\-run
+selects the global scope; use
+.B \-\-
+before it to pass that argument to an automatically selected plugin.
+Conven injects the reserved
+.B \-\-workspace
+argument, which plugin arguments cannot override.
 .TP
 .B services
 List, start, restart, stop, clean, and inspect services in the effective
@@ -238,6 +259,14 @@ Use
 .B \-\-dashboard
 to request the Dashboard explicitly. If both mode options appear, the last one
 selects the effective mode.
+Restart always reuses the current session environment. Passing
+.BR \-\-dev ,
+.BR \-\-test ,
+or
+.B \-\-env
+prints a one-line warning and points to the corresponding
+.B services \-\-start
+command before showing restart usage.
 .TP
 .B "\-\-stop [\-\-force] (service...|\-\-all)"
 Stop selected services or the entire effective workspace session.
@@ -332,9 +361,14 @@ service discovery, materialization, routing, and local-isolation rules.
 publishes a temporary edited copy only after strict validation.
 .B conven policy \-\-import
 installs an entire local YAML file, backs up the previous manifest, and does not
-merge it with repository scan results. If the filename is omitted, Conven uses
-.IR <workspace>/application.yaml
-and reports that default before importing.
+merge it with repository scan results. If the filename is omitted, Conven scans
+regular
+.I .yaml
+and
+.I .yml
+files directly under the workspace root and opens a single-selection picker,
+even when only one candidate exists. Non-interactive callers must pass the
+filename explicitly.
 .B conven policy \-\-reset
 destructively rebuilds the whole manifest from facts that built-in analyzers can
 prove; manual rules must be restored from the backup or declared again.

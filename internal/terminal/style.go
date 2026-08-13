@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -51,12 +52,28 @@ func (style Style) Detail(value string) string {
 	return "  - " + value
 }
 
+func (style Style) Action(value string) string {
+	return "  => " + value
+}
+
 func (style Style) Identifier(value string) string {
 	return style.wrap(boldCyan, value)
 }
 
 func (style Style) Warning(value string) string {
 	return style.wrap(boldYellow, value)
+}
+
+// PrintWarningBlock writes one highlighted summary followed by plain details and actions.
+func PrintWarningBlock(output io.Writer, summary string, details []string, actions []string) {
+	style := New(output)
+	fmt.Fprintln(output, style.Warning("Warning: "+summary))
+	for _, detail := range details {
+		fmt.Fprintln(output, style.Detail(detail))
+	}
+	for _, action := range actions {
+		fmt.Fprintln(output, style.Action(action))
+	}
 }
 
 func (style Style) Failure(value string) string {

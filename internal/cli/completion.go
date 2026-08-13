@@ -110,7 +110,15 @@ func Completion(shell string) (string, error) {
     if [ "$subcommand" = "plugins" ]; then
         action="${COMP_WORDS[action_index]}"
         if [ "$COMP_CWORD" -eq "$action_index" ]; then
-            options="--install --list --remove --run --help"
+            options="--global --install --list --remove --run --help"
+        elif [ "$action" = "--global" ]; then
+            if [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
+                options="--run"
+            elif [ "${COMP_WORDS[action_index + 1]}" = "--run" ] && [ "$COMP_CWORD" -gt $((action_index + 2)) ]; then
+                options="--output --disable-bindings"
+            else
+                options=""
+            fi
         elif [ "$action" = "--install" ] && { [ "$COMP_CWORD" -eq $((action_index + 1)) ] || { [ "${COMP_WORDS[action_index + 1]}" = "--global" ] && [ "$COMP_CWORD" -eq $((action_index + 2)) ]; }; }; then
             compopt -o filenames 2>/dev/null
             COMPREPLY=()
@@ -126,6 +134,8 @@ func Completion(shell string) (string, error) {
         elif [ "$action" = "--run" ]; then
             if [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
                 options="--global --output --disable-bindings"
+            elif [ "${COMP_WORDS[action_index + 1]}" = "--global" ] && [ "$COMP_CWORD" -eq $((action_index + 2)) ]; then
+                options=""
             else
                 options="--output --disable-bindings"
             fi
@@ -362,8 +372,20 @@ _conven() {
                         '1:plugin:'
                     ;;
                 --run)
-                    if [[ $words[2] == --* && $words[2] != --global ]] ||
-                       [[ $words[2] == --global && $words[3] == --* ]]; then
+                    if [[ $words[2] == --global ]]; then
+                        words=($words[1] $words[3,-1])
+                        (( CURRENT -= 1 ))
+                        if (( CURRENT == 2 )); then
+                            _arguments \
+                                '1:global plugin:'
+                        else
+                            _arguments \
+                                '--output[generator output path; omit the value for application.yaml]::output file:_files' \
+                                '--disable-bindings[replace disabled RPC bindings for this generator run]:binding:' \
+                                '1:global plugin:' \
+                                '*:plugin argument:'
+                        fi
+                    elif [[ $words[2] == --* ]]; then
                         _arguments \
                             '--output[generator output path; omit the value for application.yaml]::output file:_files' \
                             '--disable-bindings[replace disabled RPC bindings for this generator run]:binding:' \
@@ -377,9 +399,29 @@ _conven() {
                             '*:plugin argument:'
                     fi
                     ;;
+                --global)
+                    if (( CURRENT == 2 )); then
+                        _arguments \
+                            '1:global action:(--run)'
+                    else
+                        words=($words[1] $words[3,-1])
+                        (( CURRENT -= 1 ))
+                        if (( CURRENT == 2 )); then
+                            _arguments \
+                                '1:global plugin:'
+                        else
+                            _arguments \
+                                '--output[generator output path; omit the value for application.yaml]::output file:_files' \
+                                '--disable-bindings[replace disabled RPC bindings for this generator run]:binding:' \
+                                '1:global plugin:' \
+                                '*:plugin argument:'
+                        fi
+                    fi
+                    ;;
                 *)
                     if (( CURRENT == 3 )); then
                         _arguments \
+                            '--global[force a named user-global plugin run]' \
                             '--install[install a Python plugin]:Python plugin file:_files -g "*.py"' \
                             '--list[list installed plugins]' \
                             '--remove[remove an installed plugin]:plugin:' \
@@ -496,6 +538,31 @@ function __conven_plugins_scope_position
     test (count $tokens) -eq 3
 end
 
+function __conven_plugins_global_without_action
+    set -l tokens (__conven_command_tokens)
+    test (count $tokens) -eq 3; or return 1
+    test "$tokens[2]" = plugins; or return 1
+    test "$tokens[3]" = --global
+end
+
+function __conven_plugins_global_run
+    set -l tokens (__conven_command_tokens)
+    test (count $tokens) -ge 5; or return 1
+    test "$tokens[2]" = plugins; or return 1
+    test "$tokens[3]" = --global; or return 1
+    test "$tokens[4]" = --run
+end
+
+function __conven_plugins_run_arguments
+    set -l tokens (__conven_command_tokens)
+    __conven_plugins_action --run; or return 1
+    if test (count $tokens) -ge 4; and test "$tokens[4]" = --global
+        test (count $tokens) -ge 5
+        return
+    end
+    return 0
+end
+
 function __conven_policy_action
     set -l tokens (__conven_command_tokens)
     test (count $tokens) -ge 3; or return 1
@@ -541,12 +608,16 @@ complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_w
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l list -d 'List installed plugins'
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l remove -r -d 'Remove an installed plugin'
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l run -d 'Run an installed plugin'
+complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l global -d 'Force a named user-global plugin run'
+complete -c conven -n '__conven_plugins_global_without_action' -l run -d 'Run a named user-global plugin'
 complete -c conven -n '__conven_plugins_scope_position --install' -l global -d 'Install in the user-global plugin directory'
 complete -c conven -n '__conven_plugins_scope_position --list' -l global -d 'List only user-global plugins'
 complete -c conven -n '__conven_plugins_scope_position --remove' -l global -d 'Remove from the user-global plugin directory'
 complete -c conven -n '__conven_plugins_scope_position --run' -l global -d 'Force the user-global plugin scope'
-complete -c conven -n '__conven_plugins_action --run' -l output -d 'Generator output path; omit its value for application.yaml'
-complete -c conven -n '__conven_plugins_action --run' -l disable-bindings -r -d 'Replace disabled RPC bindings for this generator run'
+complete -c conven -n '__conven_plugins_run_arguments' -l output -d 'Generator output path; omit its value for application.yaml'
+complete -c conven -n '__conven_plugins_run_arguments' -l disable-bindings -r -d 'Replace disabled RPC bindings for this generator run'
+complete -c conven -n '__conven_plugins_global_run' -l output -d 'Generator output path; omit its value for application.yaml'
+complete -c conven -n '__conven_plugins_global_run' -l disable-bindings -r -d 'Replace disabled RPC bindings for this generator run'
 complete -c conven -n '__conven_using_subcommand doctor' -l env -r -d 'Environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l dev -d 'Use the dev environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l test -d 'Use the test environment profile'

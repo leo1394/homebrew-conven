@@ -150,7 +150,7 @@ exit 1
 	if authorizationPGID != foregroundPGID {
 		t.Fatalf("interactive sudo process group = %d, want foreground process group %d", authorizationPGID, foregroundPGID)
 	}
-	if !strings.Contains(output.String(), "password input is hidden") {
+	if !strings.Contains(output.String(), "Warning: Sudo authorization required.\n  - Password input is hidden.") {
 		t.Fatalf("authorization output does not explain hidden password input: %q", output.String())
 	}
 	if !strings.Contains(output.String(), "Sudo authorization confirmed.") {
@@ -347,7 +347,15 @@ func TestEnsureConnectionExitReportsStatusLogAndEndpoints(t *testing.T) {
 			t.Fatalf("exit error %q does not contain %q", err, expected)
 		}
 	}
-	for _, expected := range []string{"first-time shadow pod creation", "cluster-api", address, "secrets are not redacted", "Post /api/v1/namespaces/default/pods: EOF"} {
+	for _, expected := range []string{
+		"Warning: ktctl connection timeout is 60s or less.",
+		"  - First-time shadow pod creation may use the entire budget.",
+		"  - Suggested config: timeout: 240s",
+		"cluster-api",
+		address,
+		"secrets are not redacted",
+		"Post /api/v1/namespaces/default/pods: EOF",
+	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("connection diagnostics %q do not contain %q", output.String(), expected)
 		}

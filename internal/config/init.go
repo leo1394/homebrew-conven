@@ -15,9 +15,15 @@ const backupsIgnoreRule = "/backups/"
 type InitResult struct {
 	Path        string
 	Created     bool
+	Files       []InitFileResult
 	Discovered  []string
 	Skipped     []string
 	UsedExample bool
+}
+
+type InitFileResult struct {
+	Name    string
+	Created bool
 }
 
 func InitWorkspace(cwd string, application []byte) (string, bool, error) {
@@ -60,9 +66,11 @@ func InitWorkspaceDetailsWithPolicySpecification(cwd string, application []byte,
 		if err := ensureRuntimeIgnored(boundary); err != nil {
 			return result, err
 		}
-		if err := ensureWorkspaceFiles(workspace, workspaceFiles); err != nil {
+		files, err := ensureWorkspaceFiles(workspace, workspaceFiles)
+		if err != nil {
 			return result, err
 		}
+		result.Files = files
 		return result, nil
 	}
 	if !os.IsNotExist(err) {
@@ -95,9 +103,11 @@ func InitWorkspaceDetailsWithPolicySpecification(cwd string, application []byte,
 		return result, err
 	}
 	result.Created = created
-	if err := ensureWorkspaceFiles(workspace, workspaceFiles); err != nil {
+	files, err := ensureWorkspaceFiles(workspace, workspaceFiles)
+	if err != nil {
 		return result, err
 	}
+	result.Files = files
 	return result, nil
 }
 
@@ -121,35 +131,39 @@ func validateWorkspaceFiles(workspace string, workspaceFiles []examples.Workspac
 	return nil
 }
 
-func ensureWorkspaceFiles(workspace string, workspaceFiles []examples.WorkspaceFile) error {
+func ensureWorkspaceFiles(workspace string, workspaceFiles []examples.WorkspaceFile) ([]InitFileResult, error) {
+	results := make([]InitFileResult, 0, len(workspaceFiles))
 	for _, file := range workspaceFiles {
 		path := filepath.Join(workspace, file.Name)
 		info, err := os.Lstat(path)
 		if err == nil {
 			if err := validateWorkspaceFile(path, info); err != nil {
-				return err
+				return nil, err
 			}
+			results = append(results, InitFileResult{Name: file.Name})
 			continue
 		}
 		if !os.IsNotExist(err) {
-			return fmt.Errorf("inspect Conven workspace file %q: %w", path, err)
+			return nil, fmt.Errorf("inspect Conven workspace file %q: %w", path, err)
 		}
 		created, err := publishNewFile(path, file.Data, 0644, "Conven workspace file")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if created {
+			results = append(results, InitFileResult{Name: file.Name, Created: true})
 			continue
 		}
 		info, err = os.Lstat(path)
 		if err != nil {
-			return fmt.Errorf("inspect concurrently created Conven workspace file %q: %w", path, err)
+			return nil, fmt.Errorf("inspect concurrently created Conven workspace file %q: %w", path, err)
 		}
 		if err := validateWorkspaceFile(path, info); err != nil {
-			return err
+			return nil, err
 		}
+		results = append(results, InitFileResult{Name: file.Name})
 	}
-	return nil
+	return results, nil
 }
 
 func validateWorkspaceFile(path string, info os.FileInfo) error {
@@ -211,7 +225,18 @@ func ensureConvenPathIgnored(boundary string, rule string) error {
 }
 
 func publishNewManifest(path string, data []byte) (bool, error) {
-	return publishNewFile(path, data, 0600, "Conven manifest")
+	created, err := publishNewFile(path, data, 0600, "Conven manifest")
+	if err != nil || created {
+		return created, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false, fmt.Errorf("inspect concurrently created Conven manifest %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, fmt.Errorf("Conven manifest %q must be a regular file, not a symbolic link", path)
+	}
+	return false, nil
 }
 
 func publishNewFile(path string, data []byte, mode os.FileMode, label string) (bool, error) {

@@ -8,6 +8,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
 func TestReadKeyRecognizesMovement(t *testing.T) {
@@ -46,7 +49,7 @@ func TestRenderConfirmationIncludesConveningServices(t *testing.T) {
 	if !strings.Contains(output.String(), want) {
 		t.Fatalf("confirmation output %q does not contain %q", output.String(), want)
 	}
-	if !strings.Contains(output.String(), "Confirm? [y/yes] continue · [n/no] cancel: ") {
+	if !strings.Contains(output.String(), "Confirm? [y] continue · [n] cancel: ") {
 		t.Fatalf("confirmation output has the wrong prompt: %q", output.String())
 	}
 }
@@ -59,7 +62,7 @@ func TestConfirmationRendersOnceAndEchoesInput(t *testing.T) {
 	if !confirmed || len(names) != 1 || names[0] != "user-svc" {
 		t.Fatalf("confirmation result names=%v confirmed=%t", names, confirmed)
 	}
-	if strings.Count(output, "Convening local services:") != 1 || strings.Count(output, "Confirm? [y/yes] continue · [n/no] cancel: ") != 1 {
+	if strings.Count(output, "Convening local services:") != 1 || strings.Count(output, "Confirm? [y] continue · [n] cancel: ") != 1 {
 		t.Fatalf("confirmation output was redrawn: %q", output)
 	}
 	if !strings.HasSuffix(output, "yes\r\n") {
@@ -75,7 +78,7 @@ func TestConfirmationAcceptsNoWithoutRetry(t *testing.T) {
 	if confirmed || names != nil {
 		t.Fatalf("confirmation result names=%v confirmed=%t, want cancellation", names, confirmed)
 	}
-	if strings.Count(output, "Confirm? [y/yes] continue · [n/no] cancel: ") != 1 {
+	if strings.Count(output, "Confirm? [y] continue · [n] cancel: ") != 1 {
 		t.Fatalf("confirmation unexpectedly retried: %q", output)
 	}
 	if !strings.HasSuffix(output, "no\r\n") {
@@ -94,7 +97,7 @@ func TestConfirmationRetriesInvalidInputThreeTimesThenConfirms(t *testing.T) {
 	if strings.Count(output, "Convening local services:") != 1 {
 		t.Fatalf("confirmation summary was redrawn: %q", output)
 	}
-	if strings.Count(output, "Confirm? [y/yes] continue · [n/no] cancel: ") != 4 {
+	if strings.Count(output, "Confirm? [y] continue · [n] cancel: ") != 4 {
 		t.Fatalf("confirmation prompt count is wrong: %q", output)
 	}
 	if strings.Count(output, "Please enter y/yes or n/no.") != 3 {
@@ -113,7 +116,7 @@ func TestConfirmationStopsAfterThreeRetries(t *testing.T) {
 	if confirmed || names != nil {
 		t.Fatalf("confirmation result names=%v confirmed=%t after retry exhaustion", names, confirmed)
 	}
-	if strings.Count(output, "Confirm? [y/yes] continue · [n/no] cancel: ") != 4 {
+	if strings.Count(output, "Confirm? [y] continue · [n] cancel: ") != 4 {
 		t.Fatalf("confirmation prompt count is wrong: %q", output)
 	}
 	if strings.Count(output, "Please enter y/yes or n/no.") != 3 {
@@ -187,6 +190,106 @@ func TestRenderPickerShowsEmptySelectionNotice(t *testing.T) {
 	}
 }
 
+func TestRenderSinglePickerUsesPromptAndSingleSelectionControls(t *testing.T) {
+	prompt := Prompt{
+		Title:                "Select a plugin",
+		ConfirmationLabel:    "Running plugin",
+		EmptySelectionNotice: "Select one plugin before confirming.",
+	}
+	state := newSinglePickerState([]Candidate{{Name: "generate-policy", Tag: "global"}}, prompt)
+	var output bytes.Buffer
+
+	if err := render(&output, state, 100, 24); err != nil {
+		t.Fatalf("render returned an error: %v", err)
+	}
+
+	for _, expected := range []string{
+		"Select a plugin",
+		"> [ ] generate-policy · global",
+		"[f] selection · [Enter] confirm · [q/Esc] cancel",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("single picker output %q does not contain %q", output.String(), expected)
+		}
+	}
+	if strings.Contains(output.String(), "[f|A]") {
+		t.Fatalf("single picker output exposes multi-select control: %q", output.String())
+	}
+
+	state.handle(key{kind: keyEnter})
+	if state.notice != prompt.EmptySelectionNotice {
+		t.Fatalf("single picker notice = %q, want %q", state.notice, prompt.EmptySelectionNotice)
+	}
+	state.handle(key{kind: keyRune, rune: 'f'})
+	state.handle(key{kind: keyEnter})
+	output.Reset()
+	if err := render(&output, state, 100, 24); err != nil {
+		t.Fatalf("render confirmation returned an error: %v", err)
+	}
+	if !strings.Contains(output.String(), "Running plugin: generate-policy") {
+		t.Fatalf("single confirmation output = %q", output.String())
+	}
+}
+
+func TestRenderUnselectedCandidateTagReservesWidthBeforeStyling(t *testing.T) {
+	style := terminal.New(&bytes.Buffer{})
+	line := renderUnselectedCandidateLine(style, "> [ ] generate-policy  /a/very/long/path", "global", 30)
+	if utf8.RuneCountInString(line) > 30 {
+		t.Fatalf("tagged line exceeds width: %q", line)
+	}
+	if !strings.HasSuffix(line, " · global") {
+		t.Fatalf("tagged line does not preserve tag: %q", line)
+	}
+}
+
+func TestSingleConfirmationReturnsCompleteCandidate(t *testing.T) {
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	if _, err := write.WriteString("yes\r"); err != nil {
+		write.Close()
+		t.Fatal(err)
+	}
+	if err := write.Close(); err != nil {
+		t.Fatal(err)
+	}
+	candidate := Candidate{Name: "generate-policy", Path: "/plugins/generate-policy.py", Detail: "Python", Tag: "global"}
+	state := newSinglePickerState([]Candidate{candidate}, Prompt{
+		ConfirmationLabel:    "Running plugin",
+		EmptySelectionNotice: "Select one plugin before confirming.",
+	})
+	state.handle(key{kind: keyRune, rune: 'f'})
+	state.handle(key{kind: keyEnter})
+	var output bytes.Buffer
+
+	selected, confirmed, err := confirmSelection(context.Background(), bufio.NewReader(read), int(read.Fd()), &output, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !confirmed || len(selected) != 1 || selected[0] != candidate {
+		t.Fatalf("single confirmation selected=%#v confirmed=%t", selected, confirmed)
+	}
+}
+
+func TestSelectOneRejectsNoCandidates(t *testing.T) {
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	defer write.Close()
+
+	selected, confirmed, err := SelectOne(context.Background(), read, &bytes.Buffer{}, Prompt{}, nil)
+	if !errors.Is(err, ErrNoCandidates) {
+		t.Fatalf("SelectOne error = %v, want ErrNoCandidates", err)
+	}
+	if confirmed || selected != (Candidate{}) {
+		t.Fatalf("SelectOne result selected=%#v confirmed=%t", selected, confirmed)
+	}
+}
+
 func TestSelectRejectsNoCandidates(t *testing.T) {
 	read, write, err := os.Pipe()
 	if err != nil {
@@ -238,6 +341,13 @@ func runConfirmation(t *testing.T, input string) ([]string, bool, error, string)
 	state := selectedPickerState()
 	var output bytes.Buffer
 
-	names, confirmed, err := confirmSelection(context.Background(), bufio.NewReader(read), int(read.Fd()), &output, state)
+	selected, confirmed, err := confirmSelection(context.Background(), bufio.NewReader(read), int(read.Fd()), &output, state)
+	var names []string
+	if selected != nil {
+		names = make([]string, 0, len(selected))
+		for _, candidate := range selected {
+			names = append(names, candidate.Name)
+		}
+	}
 	return names, confirmed, err, output.String()
 }

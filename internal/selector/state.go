@@ -4,6 +4,13 @@ type Candidate struct {
 	Name   string
 	Path   string
 	Detail string
+	Tag    string
+}
+
+type Prompt struct {
+	Title                string
+	ConfirmationLabel    string
+	EmptySelectionNotice string
 }
 
 type pickerMode uint8
@@ -31,6 +38,13 @@ type key struct {
 	rune rune
 }
 
+type selectionCardinality uint8
+
+const (
+	selectionMany selectionCardinality = iota
+	selectionOne
+)
+
 type pickerState struct {
 	candidates   []Candidate
 	cursor       int
@@ -38,13 +52,25 @@ type pickerState struct {
 	mode         pickerMode
 	confirmation []rune
 	notice       string
+	prompt       Prompt
+	cardinality  selectionCardinality
 }
 
 func newPickerState(candidates []Candidate) *pickerState {
+	return newPickerStateWithOptions(candidates, servicePrompt, selectionMany)
+}
+
+func newSinglePickerState(candidates []Candidate, prompt Prompt) *pickerState {
+	return newPickerStateWithOptions(candidates, prompt, selectionOne)
+}
+
+func newPickerStateWithOptions(candidates []Candidate, prompt Prompt, cardinality selectionCardinality) *pickerState {
 	return &pickerState{
-		candidates: candidates,
-		selected:   make([]bool, len(candidates)),
-		mode:       modePicking,
+		candidates:  candidates,
+		selected:    make([]bool, len(candidates)),
+		mode:        modePicking,
+		prompt:      prompt,
+		cardinality: cardinality,
 	}
 }
 
@@ -64,7 +90,7 @@ func (s *pickerState) handle(input key) {
 		s.move(1)
 	case keyEnter:
 		if s.selectedCount() == 0 {
-			s.notice = "Select at least one service before confirming."
+			s.notice = s.prompt.EmptySelectionNotice
 			return
 		}
 		s.mode = modeConfirming
@@ -88,7 +114,9 @@ func (s *pickerState) handlePickerRune(value rune) {
 		s.toggleCurrent()
 		s.move(1)
 	case 'A':
-		s.toggleAll()
+		if s.cardinality == selectionMany {
+			s.toggleAll()
+		}
 	case 'q':
 		s.mode = modeCancelled
 	}
@@ -155,7 +183,13 @@ func (s *pickerState) toggleCurrent() {
 	if len(s.candidates) == 0 {
 		return
 	}
-	s.selected[s.cursor] = !s.selected[s.cursor]
+	wasSelected := s.selected[s.cursor]
+	if s.cardinality == selectionOne {
+		for index := range s.selected {
+			s.selected[index] = false
+		}
+	}
+	s.selected[s.cursor] = !wasSelected
 	s.notice = ""
 }
 
@@ -185,4 +219,14 @@ func (s *pickerState) selectedNames() []string {
 		}
 	}
 	return names
+}
+
+func (s *pickerState) selectedCandidates() []Candidate {
+	candidates := make([]Candidate, 0, s.selectedCount())
+	for index, selected := range s.selected {
+		if selected {
+			candidates = append(candidates, s.candidates[index])
+		}
+	}
+	return candidates
 }

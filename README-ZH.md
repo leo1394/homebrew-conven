@@ -124,10 +124,18 @@ conven services --start --dev --dry-run user-svc order-svc
 conven services --start --dev user-svc order-svc
 ```
 
-`init` 会完成首次一级子仓库 registry 扫描，并以 no-clobber 方式创建
-`services.properties`、`disabled-services.properties`、
-`CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` 和 `README.md` 工作区说明文件。
-它可以识别支持的 Go main module布局，并记录可以证明的路径、runner、服务类型和绑定候选。它**不会**猜测端口、
+`init` 会完成首次一级子仓库 registry 扫描，并初始化以下文件：
+
+| 文件 | 用途 |
+| --- | --- |
+| `.conven/conven.yaml` | 定义环境、服务、Policy 和运行行为的规范 workspace manifest。 |
+| `services.properties` | workspace Policy 生成器使用的服务目录。 |
+| `disabled-services.properties` | 生成 workspace Policy 时需要禁用的 RPC binding。 |
+| `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` | 用于实现 workspace Policy 生成器插件的 AI 可读规范。 |
+| `README.md` | 介绍生成文件和 Conven 工作流的 workspace 本地快速上手文档。 |
+
+每个文件仅在缺失时创建；已有的普通文件会保持不变。`init` 可以识别支持的 Go main module
+布局，并记录可以证明的路径、runner、服务类型和绑定候选。它**不会**猜测端口、
 完整业务依赖图、公司 Policy、Apollo 凭据或集群连接信息。启动前需要人工确认
 一次候选配置。
 
@@ -303,14 +311,16 @@ conven plugins --remove plugin
 # 显式使用用户全局插件范围。
 conven plugins --install --global ./plugin.py
 conven plugins --list --global
-conven plugins --run --global plugin --output
+conven plugins --global --run plugin --output
 conven plugins --remove --global plugin
 ```
 
 workspace 插件位于 `.conven/plugins`，全局插件位于 `~/.conven/plugins`，两层允许
 同名。显式名称优先执行 workspace 插件，回退到全局插件前会 warning；workspace
-只有一个插件时可以省略名称。`--output` 不带文件名时会原样传给插件，生成器约定写入
-`application.yaml`；`policy --import` 不带文件名时导入 workspace 根目录的该文件。
+只有一个插件时可以省略名称，存在多个时会打开单选器；workspace 没有插件时，单选器
+会显示 global 候选，即使只有一个候选也需要确认。显式 global run 必须提供名称。
+`--output` 不带文件名时会原样传给插件，生成器约定写入 `application.yaml`；
+`policy --import` 不带文件名时会从 workspace 根目录的 `.yaml` 和 `.yml` 文件中单选。
 插件以规范 workspace 作为工作目录运行。请将插件视为可信本地代码，并在导入前检查
 它生成的 Policy 候选配置。默认分组列表需要处于 workspace 中；在 workspace 外请使用
 `conven plugins --list --global`。
@@ -351,8 +361,9 @@ man conven
 ```
 
 安装版本附带的手册是该版本最权威的参考。源码手册位于
-[`docs/conven.1`](docs/conven.1)，发布步骤见 [`RELEASING-ZH.md`](RELEASING-ZH.md)，版本
-变更见 [`CHANGELOG.md`](CHANGELOG.md)。
+[`docs/conven.1`](docs/conven.1)，stdout/stderr 代表性格式见
+[`docs/COMMAND-OUTPUT-EXAMPLES.md`](docs/COMMAND-OUTPUT-EXAMPLES.md)，发布步骤见
+[`RELEASING-ZH.md`](RELEASING-ZH.md)，版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 在项目根目录运行仓库检查：
 

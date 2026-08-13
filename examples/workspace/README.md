@@ -16,6 +16,8 @@ Conven repository: [leo1394/homebrew-conven](https://github.com/leo1394/homebrew
   disable in local runtime configuration. Add one binding per line.
 - `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` is a complete AI-readable
   contract for implementing or updating a workspace policy generator plugin.
+- `README.md` is this workspace-local quick start for the generated files and
+  Conven workflow.
 
 `conven init` never overwrites these files. The first init performs the same
 direct-child repository scan used by `conven services --registry`; it does not
@@ -72,7 +74,8 @@ conven plugins --run --output
 conven policy --import --edit
 ```
 
-If more than one plugin is installed, provide the plugin name explicitly:
+If more than one workspace plugin is installed, Conven opens its single
+selector; the name can still be provided explicitly:
 
 ```bash
 conven plugins --run generate-workspace-policy --output

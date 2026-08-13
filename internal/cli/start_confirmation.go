@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 	"golang.org/x/term"
 )
 
@@ -41,7 +42,7 @@ func askStartReplacement(input io.Reader, output io.Writer, services []string) (
 		if errors.Is(err, io.EOF) {
 			return false, nil
 		}
-		if _, err := fmt.Fprint(output, "Please choose [s] Stop then start or [c] Cancel: "); err != nil {
+		if _, err := fmt.Fprint(output, terminal.New(output).Action("Choose [s] Stop then start or [c] Cancel: ")); err != nil {
 			return false, fmt.Errorf("write start replacement prompt: %w", err)
 		}
 	}
@@ -82,14 +83,17 @@ func askStartReplacementContext(ctx context.Context, input *os.File, output io.W
 		if errors.Is(err, io.EOF) {
 			return false, nil
 		}
-		if _, err := fmt.Fprint(output, "Please choose [s] Stop then start or [c] Cancel: "); err != nil {
+		if _, err := fmt.Fprint(output, terminal.New(output).Action("Choose [s] Stop then start or [c] Cancel: ")); err != nil {
 			return false, fmt.Errorf("write start replacement prompt: %w", err)
 		}
 	}
 }
 
 func writeStartReplacementPrompt(output io.Writer, services []string) error {
-	_, err := fmt.Fprintf(output, "Workspace already has running services: %s\nChoose: [s] Stop then start  [c] Cancel (default): ", strings.Join(services, ", "))
+	printWarningBlock(output, "Workspace already has running services.", []string{
+		"Services: " + strings.Join(services, ", "),
+	}, nil)
+	_, err := fmt.Fprint(output, terminal.New(output).Action("Choose [s] Stop then start or [c] Cancel (default): "))
 	return err
 }
 
