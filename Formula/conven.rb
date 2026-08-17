@@ -28,6 +28,7 @@ class Conven < Formula
     new_cli = build.head? || version >= "0.2.9"
     scoped_plugins = build.head? || version >= "0.2.11"
     plugin_selector = build.head? || version >= "0.2.12"
+    workspace_catalog = build.head? || version >= "0.2.13"
     if build.head?
       expected_version = <<~EOS
         conven version 0.2.13 (2026-08-17)
@@ -54,7 +55,7 @@ class Conven < Formula
       manifest = workspace_state/"conven.yaml"
       system bin/"conven", "init"
       assert_path_exists manifest
-      if build.head?
+      if workspace_catalog
         system bin/"conven", "catalog", "--validate"
         status = shell_output("#{bin}/conven status")
         assert_includes status, "Workspace"
@@ -66,7 +67,7 @@ class Conven < Formula
           CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
           README.md
         ]
-        workspace_assets.unshift(".conven/catalog.yaml") if build.head?
+        workspace_assets.unshift(".conven/catalog.yaml") if workspace_catalog
         workspace_assets.each do |filename|
           assert_path_exists workspace/filename
         end
@@ -137,7 +138,7 @@ class Conven < Formula
         workspace_asset_contents.each do |filename, contents|
           assert_equal contents, (workspace/filename).read
         end
-        catalog_files = build.head? ? %w[.conven/catalog.yaml] : []
+        catalog_files = workspace_catalog ? %w[.conven/catalog.yaml] : []
         catalog_contents = catalog_files.to_h do |filename|
           [filename, (workspace/filename).read]
         end
@@ -165,17 +166,17 @@ class Conven < Formula
     assert_path_exists zsh_completion/"_conven"
     assert_path_exists fish_completion/"conven.fish"
     top_level_commands = %w[init services config policy plugins doctor help version]
-    top_level_commands.insert(3, "catalog") if build.head?
-    top_level_commands.insert(6, "status") if build.head?
+    top_level_commands.insert(3, "catalog") if workspace_catalog
+    top_level_commands.insert(6, "status") if workspace_catalog
     service_actions = %w[list registry status logs start restart stop stop-all]
     service_actions.insert(4, "dashboard") if build.head? || version >= "0.2.5"
     service_actions << "cleanup" if build.head? || version >= "0.2.7"
     policy_actions = %w[edit import reset]
-    catalog_actions = build.head? ? %w[edit validate] : []
+    catalog_actions = workspace_catalog ? %w[edit validate] : []
     plugin_actions = %w[install list run]
     plugin_actions.insert(2, "remove") if build.head? || version >= "0.2.2"
     removed_top_level_commands = %w[discover list logs start restart stop]
-    removed_top_level_commands.insert(2, "status") unless build.head?
+    removed_top_level_commands.insert(2, "status") unless workspace_catalog
     %w[bash zsh fish].each do |shell|
       completion = shell_output("#{bin}/conven __completion #{shell}")
       case shell
