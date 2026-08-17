@@ -5,8 +5,7 @@
 [![CI](https://github.com/leo1394/homebrew-conven/actions/workflows/ci.yml/badge.svg)](https://github.com/leo1394/homebrew-conven/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> Run the services you are changing locally. Keep the rest reachable through
-> the development cluster.
+![Conven — Run changed services locally and keep cluster dependencies connected](assets/conven-banner-en.png)
 
 Conven is a focused local microservice orchestrator. It selects a local service
 group, routes selected dependencies to `127.0.0.1`, preserves remote discovery
@@ -113,6 +112,7 @@ Replace the example names with values from `conven services --list`. In an
 interactive terminal you may omit the names and select services in the picker.
 After startup, Conven opens the Dashboard by default. Press `q` or `Ctrl-C` to
 detach; the services keep running.
+![Conven services Dashboard](assets/conven-services-dashboard-snapshot.png)
 
 Stop the workspace session explicitly:
 
@@ -128,6 +128,7 @@ Run `init` from the directory containing the service repositories:
 cd /path/to/workspace
 
 conven init
+conven catalog --validate
 conven services --list
 conven policy --edit
 
@@ -143,8 +144,7 @@ files:
 | File | Purpose |
 | --- | --- |
 | `.conven/conven.yaml` | Canonical workspace manifest for environments, services, policies, and runtime behavior. |
-| `services.properties` | Service catalog used by the workspace policy generator. |
-| `disabled-services.properties` | RPC bindings disabled when the workspace policy is generated. |
+| `.conven/catalog.yaml` | Declarative generator catalog for repository and RPC-binding identities, service kinds, unique local ports, and disabled RPC bindings. |
 | `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` | AI-readable specification for implementing the workspace policy generator plugin. |
 | `README.md` | Workspace-local quick start for the generated files and Conven workflow. |
 
@@ -155,10 +155,11 @@ ports, a complete business dependency graph, organization-specific policy,
 Apollo credentials, or cluster connection details. Review the generated
 workspace manifest before starting services.
 
-Later `services --registry` runs update only `.conven/conven.yaml`; they never
-guess ports or edit the two generator property files. Keep
-`services.properties` as a user- or AI-reviewed superset when repositories are
-added, removed, or temporarily absent from the workspace.
+Later `services --registry` runs refresh repository entries without guessing
+ports or editing `.conven/catalog.yaml`. Catalog entries may use `repository`,
+`rpcBinding`, or both, so a service does not require a local checkout. Use
+`conven catalog --edit` to update the catalog and `conven catalog --validate`
+to check it.
 
 If the project maintains a policy generator, install it and run the sole
 workspace plugin or name it explicitly. Complete the workspace-specific
@@ -184,6 +185,45 @@ validates and replaces the complete manifest; it is not a YAML merge.
    start, and health checks.
 6. Record process identity and aggregate service logs for later status,
    restart, and stop operations.
+
+### Configuration materialization order
+
+Step 4 follows two related pipelines. Here, `runtime/current/application.yaml`
+is shorthand for a service-scoped runtime copy; the actual file lives at
+`.conven/runtime/current/configs/<service>/application.yaml`. The full Apollo
+replacement applies only to this guarded runtime copy and never overwrites the
+repository file.
+
+The end-to-end path from the repository baseline to remote-dependency
+preflight is:
+
+```text
+repository resources/application.yaml
+  → full-document replacement from Apollo application.yml
+  → Conven manifest patches
+  → runtime/current/application.yaml
+  → Consul preflight
+```
+
+When Apollo `application.yml` supplies the runtime baseline, patches and the
+safety guard are applied in this order:
+
+```text
+Apollo application.yml
+  → policy patch
+  → server patch
+  → services.portal-api-service.config.patches
+  → dependency-routing patch
+  → local-isolation guard
+  → runtime/current
+```
+
+The second pipeline also defines precedence: each later patch operates on the
+result of the previous stage. `services.portal-api-service.config.patches` is
+a concrete example of a service-scoped manifest patch. The local-isolation
+guard enforces and verifies final listener and registration behavior, while
+Consul preflight checks the remote dependencies that remain enabled in the
+final runtime configuration.
 
 `services --start --dry-run` stops after static planning. It does not contact
 Apollo, establish a connection, materialize configuration, build code, start a
@@ -255,6 +295,9 @@ you explicitly use a shell such as `[sh, -c, "..."]`.
 
 | Task | Command |
 | --- | --- |
+| Inspect the complete workspace state | `conven status` |
+| Edit the generator service catalog | `conven catalog --edit` |
+| Validate the generator service catalog | `conven catalog --validate` |
 | List manifest services | `conven services --list` |
 | Refresh scanned repositories | `conven services --registry` |
 | Validate one environment | `conven doctor --test` |
@@ -278,6 +321,10 @@ restarts only changed or exited services; unchanged services and a shared
 connection stay running. Stop preserves the current logs and generated files
 for inspection until the next safe fresh start.
 
+`--start` and `--restart` also watch running services for source changes. A
+successful build passes preflight before controlled replacement; a failed build
+leaves the last-known-good process running. `--stop-all` stops the watcher.
+
 After `--stop-all`, `--cleanup` removes `runtime/current/artifacts` and
 `runtime/current/logs`. It refuses while a session is saved and preserves
 runtime configs plus the shared connection log.
@@ -291,6 +338,10 @@ Conven offers two deliberately different viewers:
 | Dashboard | Live overview | Fixed workspace banner, wrapped long lines, app-owned scrolling and `/` search, up to 10,000 retained logical lines |
 | Plain | Terminal-native search/export | Normal scrollback, `Command+F`, pipes and redirects, up to 10,000 replayed lines before following |
 
+The Dashboard keeps workspace context, local services, disabled RPC bindings,
+start time, and live logs in one view.
+
+
 ```bash
 # Full-screen viewer; the alias below is equivalent.
 conven services --dashboard
@@ -300,17 +351,9 @@ conven services --logs --dashboard
 conven services --logs --tail
 ```
 
-Interactive `services --start` and `services --restart` open the Dashboard by
-default. Explicit `--tail` selects Plain mode; a non-interactive start or
-restart returns after completing and leaves services running. Restart also
-accepts an explicit `--dashboard`. If `--dashboard` and `--tail` both appear
-under `services --logs` or `services --restart`, the last one wins.
-
-Dashboard wraps long logical log lines to the terminal width without replacing
-their hidden content with an ellipsis. Its arrows and mouse wheel scroll by
-visual row; `PgUp`/`PgDn` page, `g`/`G` jump, `/` searches, `n`/`N` navigates
-matches, and `Esc` clears search. `q` or `Ctrl-C` detaches. In Plain mode,
-`Ctrl-C` detaches. Neither action stops the services.
+Interactive starts and restarts open the Dashboard by default; `--tail` selects
+Plain mode. The Dashboard supports wrapped logs, scrolling, and `/` search.
+Press `q` or `Ctrl-C` to detach without stopping services.
 
 ## Configuration and plugins
 
@@ -400,9 +443,7 @@ man conven
 ```
 
 The installed manual is the authoritative reference for that Conven version.
-The source manual is available at [`docs/conven.1`](docs/conven.1), and
-representative stdout/stderr formats at
-[`docs/COMMAND-OUTPUT-EXAMPLES.md`](docs/COMMAND-OUTPUT-EXAMPLES.md). Release
+The source manual is available at [`docs/conven.1`](docs/conven.1). Release
 steps are documented in [`RELEASING.md`](RELEASING.md), and version changes in
 [`CHANGELOG.md`](CHANGELOG.md).
 

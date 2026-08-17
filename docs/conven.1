@@ -1,4 +1,4 @@
-.TH CONVEN 1 "August 13, 2026" "Conven" "User Commands"
+.TH CONVEN 1 "August 17, 2026" "Conven" "User Commands"
 .SH NAME
 conven \- run a focused set of local microservices with remote dependencies
 .SH SYNOPSIS
@@ -46,8 +46,7 @@ Conven scans direct-child Git repositories for supported service layouts and
 creates
 .IR .conven/conven.yaml .
 This scan is the initial registry pass. Initialization also creates missing
-.IR services.properties ,
-.IR disabled-services.properties ,
+.IR .conven/catalog.yaml ,
 .IR CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md ,
 and
 .IR README.md
@@ -67,6 +66,15 @@ The valid forms are:
     conven config [\-\-global] key value
     conven config [\-\-global] \-\-unset key
 .fi
+.TP
+.B catalog
+Edit or validate the declarative service catalog at
+.IR <workspace>/.conven/catalog.yaml .
+Exactly one of
+.BR \-\-edit
+or
+.BR \-\-validate
+is required. Edit publishes a temporary copy only after strict validation.
 .TP
 .B policy
 Edit, import, or reset the canonical workspace manifest.
@@ -133,6 +141,11 @@ See
 .B SERVICES ACTIONS
 below.
 .TP
+.B status
+Show the complete workspace overview: workspace and manifest paths, declared
+services with types and ports, disabled RPC bindings from the catalog, and the
+saved runtime session state, including the hot-reload watcher.
+.TP
 .B doctor
 Validate the resolved workspace, selected environment, connection settings,
 and static startup configuration without starting services.
@@ -145,12 +158,14 @@ is equivalent to
 .BR "conven services \-\-help" .
 .TP
 .B version
-Print the Conven version, release date, and project homepage in this two-line
-format:
+Print a compact Conven ASCII mark followed by the version, release date, and
+project homepage:
 .nf
     conven version VERSION (YYYY-MM-DD)
     https://github.com/leo1394/homebrew-conven
 .fi
+The mark uses terminal colors when available and remains plain ASCII when color
+is disabled.
 The
 .BR \-v " and " \-\-version
 forms are equivalent.
@@ -169,12 +184,14 @@ With
 remove manifest services whose repositories no longer exist.
 .TP
 .B \-\-status
-Show the saved local session, service PID and PGID information, and relevant
-shared connection state.
+Show the saved local session, hot-reload watcher, service PID and PGID
+information, and relevant shared connection state.
 .TP
 .B "\-\-dashboard [service...]"
 Open the full-screen Dashboard for the current session and optional service
 selection.
+The banner lists disabled RPC bindings and places the earliest start time of
+the displayed services at the far right of the title.
 The equivalent alias is
 .BR "services \-\-logs \-\-dashboard [service...]" .
 Its fixed banner remains visible while the application retains and scrolls up
@@ -244,6 +261,11 @@ to a usable interactive terminal.
 Without such a terminal, start returns and leaves the services running unless
 .B \-\-tail
 was explicitly requested.
+Successful starts also launch a workspace hot-reload watcher. Source changes
+are debounced and rebuild only affected running services. Compiler output is
+copied to the build log and service log. A failed build leaves the
+last-known-good process running; only a successful build and preflight enter
+the controlled stop/start handoff.
 .TP
 .B "\-\-restart [options] [service...]"
 Restart named services, or detect changed and exited services in the current
@@ -267,6 +289,9 @@ or
 prints a one-line warning and points to the corresponding
 .B services \-\-start
 command before showing restart usage.
+Successful restarts ensure that the same workspace hot-reload watcher remains
+active. The watcher is terminated by
+.BR "services \-\-stop\-all" .
 .TP
 .B "\-\-stop [\-\-force] (service...|\-\-all)"
 Stop selected services or the entire effective workspace session.
@@ -387,12 +412,17 @@ Workspace-local settings.
 .I <workspace>/.conven/plugins
 Workspace-local Python plugins; this scope takes precedence over global plugins.
 .TP
-.I <workspace>/services.properties
-User- or AI-reviewed service, binding, kind, and local-port catalog for policy
-generators.
-.TP
-.I <workspace>/disabled-services.properties
-RPC bindings disabled by compatible policy generators.
+.I <workspace>/.conven/catalog.yaml
+User- or AI-reviewed policy-generator catalog. A service declares
+.IR repository ,
+.IR rpcBinding ,
+or both, together with
+.I kind
+and a unique local
+.IR port .
+The
+.I disabledRpcBindings
+list keeps selected RPC dependencies remote.
 .TP
 .I <workspace>/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 AI-readable policy-generator implementation and validation contract created
@@ -433,7 +463,9 @@ Cross-workspace shared connection lease metadata.
 .TP
 .B CONVEN_EDITOR
 Editor command used by
-.BR "policy \-\-edit" .
+.BR "policy \-\-edit"
+and
+.BR "catalog \-\-edit" .
 Falls back to
 .BR VISUAL ,
 then
@@ -494,16 +526,19 @@ not
 .B conven start
 or
 .BR "conven services start" .
-The former top-level
+The former top-level service lifecycle commands
 .BR list ,
 .BR discover ,
-.BR status ,
 .BR logs ,
 .BR start ,
 .BR restart ,
 and
 .B stop
-commands have been removed.
+have been removed.
+The top-level
+.B status
+command is an aggregate workspace overview; runtime-only status remains
+.BR "services \-\-status" .
 The former
 .B \-\-follow
 option is now
@@ -524,7 +559,10 @@ conven init
 conven \-C /path/of/workspace services \-\-start \-\-test service1 service2
 conven help services
 conven \-\-version
+conven catalog \-\-validate
+conven catalog \-\-edit
 conven policy \-\-edit
+conven status
 conven doctor \-\-test \-\-namespace test
 conven services \-\-start \-\-dry\-run api service-a
 conven services \-\-start \-\-test \-\-namespace test \-\-tail api service-a

@@ -258,12 +258,21 @@ func (app App) runRestart(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
+	mode := resolveRestartLogDisplayMode(arguments, *tail, *dashboard, convenruntime.DashboardAvailable(app.Input, app.Output))
+	var dashboardOptions convenruntime.TailOptions
+	if mode == logDisplayDashboard {
+		dashboardOptions, err = dashboardTailOptions(workspace, flags.Args(), app.Version)
+		if err != nil {
+			return app.fail(err)
+		}
+	}
 	session, err := convenruntime.Restart(app.Context, workspace, convenruntime.RestartOptions{
-		Common:     options,
-		Services:   flags.Args(),
-		SkipBuild:  *skipBuild,
-		SkipVerify: *skipVerify,
-		Output:     app.Output,
+		Common:              options,
+		Services:            flags.Args(),
+		SkipBuild:           *skipBuild,
+		SkipVerify:          *skipVerify,
+		HotReloadExecutable: app.Executable,
+		Output:              app.Output,
 	})
 	if err != nil {
 		return app.fail(err)
@@ -271,7 +280,6 @@ func (app App) runRestart(arguments []string) int {
 	if session == nil {
 		return 0
 	}
-	mode := resolveRestartLogDisplayMode(arguments, *tail, *dashboard, convenruntime.DashboardAvailable(app.Input, app.Output))
 	if mode == logDisplayPlain {
 		if err := convenruntime.ShowLogs(app.Context, session, flags.Args(), true, app.Output); err != nil {
 			return app.fail(err)
@@ -279,7 +287,7 @@ func (app App) runRestart(arguments []string) int {
 		return 0
 	}
 	if mode == logDisplayDashboard {
-		if err := convenruntime.TailLogs(app.Context, workspace, session, convenruntime.TailOptions{Names: flags.Args(), Version: app.Version}, app.Input, app.Output); err != nil {
+		if err := convenruntime.TailLogs(app.Context, workspace, session, dashboardOptions, app.Input, app.Output); err != nil {
 			return app.fail(err)
 		}
 	}

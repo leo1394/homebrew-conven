@@ -29,6 +29,9 @@ func TestStyleUsesANSIForTerminal(t *testing.T) {
 	if got := style.Label("Workspace"); got != "Workspace" {
 		t.Fatalf("label style = %q", got)
 	}
+	if got := style.Brand("Conven"); got != boldBlue+"Conven"+reset {
+		t.Fatalf("brand style = %q", got)
+	}
 	if got := style.Identifier("api-service"); got != boldCyan+"api-service"+reset {
 		t.Fatalf("identifier style = %q", got)
 	}
@@ -118,6 +121,7 @@ func TestStyleMethodsDoNotAlterPlainText(t *testing.T) {
 	style := Style{}
 	values := []string{
 		style.Label("Workspace"),
+		style.Brand("Conven"),
 		style.Stage("Building"),
 		style.Detail("Environment: dev"),
 		style.Action("conven doctor"),
@@ -128,7 +132,7 @@ func TestStyleMethodsDoNotAlterPlainText(t *testing.T) {
 		style.Selection("selected", false),
 		style.Selection("active", true),
 	}
-	if got := strings.Join(values, "|"); got != "Workspace|==> Building|  - Environment: dev|  => conven doctor|api-service|warning|failed|ready|selected|active" {
+	if got := strings.Join(values, "|"); got != "Workspace|Conven|==> Building|  - Environment: dev|  => conven doctor|api-service|warning|failed|ready|selected|active" {
 		t.Fatalf("plain styles = %q", got)
 	}
 }

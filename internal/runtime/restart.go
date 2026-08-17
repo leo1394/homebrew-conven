@@ -13,11 +13,12 @@ import (
 )
 
 type RestartOptions struct {
-	Common     CommonOptions
-	Services   []string
-	SkipBuild  bool
-	SkipVerify bool
-	Output     io.Writer
+	Common              CommonOptions
+	Services            []string
+	SkipBuild            bool
+	SkipVerify           bool
+	HotReloadExecutable string
+	Output              io.Writer
 }
 
 func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptions) (*Session, error) {
@@ -70,6 +71,9 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		return nil, err
 	}
 	if len(targets) == 0 {
+		if err := ensureHotReloadWatcherLocked(workspace, session, options.HotReloadExecutable, output); err != nil {
+			return nil, err
+		}
 		fmt.Fprintln(output, style.Success("✓ No changed local services to restart."))
 		return session, nil
 	}
@@ -195,6 +199,9 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		if err := workspace.Store.Save(session); err != nil {
 			return nil, err
 		}
+	}
+	if err := ensureHotReloadWatcherLocked(workspace, session, options.HotReloadExecutable, output); err != nil {
+		return nil, err
 	}
 	fmt.Fprintln(output, style.Success("✓ Changed local services were restarted."))
 	return session, nil

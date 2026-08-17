@@ -56,11 +56,10 @@ specification.
 | Type | Name | Required | Specification |
 | --- | --- | --- | --- |
 | Process input | `--workspace PATH` | Yes | Canonical workspace injected by Conven |
-| File input | `services.properties` | Yes | Explicit service identity, kind, and local port catalog |
-| File input | `disabled-services.properties` | No | One RPC binding to disable per line |
+| File input | `.conven/catalog.yaml` | Yes | Explicit repository/RPC identity, kind, local port, and disabled-binding catalog |
 | File input | `conven-generator.json` | Yes | Explicit non-sensitive profile, environment, and connection inputs |
 | Read-only input | Direct child repositories | Yes | Source code, build entry point, application configuration, and environment bootstrap |
-| CLI override | `--disable-bindings` | No | Completely replaces the contents of the disabled file |
+| CLI override | `--disable-bindings` | No | Completely replaces `catalog.yaml`'s `disabledRpcBindings` for this run |
 | Primary output | Conven manifest v1 YAML | Yes | UTF-8, one document, strict fields, complete candidate |
 | Diagnostic output | stderr | As needed | Warnings, unresolved items, and fatal errors; MUST NOT be mixed into `--stdout` YAML |
 | AI implementation artifact | Executable Python 3 plugin | Yes | Installable and accepts the process inputs listed in this table |
@@ -239,7 +238,7 @@ When neither `--stdout` nor `--output` is provided:
 
 - explicitly disables one or more RPC bindings;
 - may be repeated, with the result deduplicated and stably sorted;
-- when provided explicitly, completely replaces `disabled-services.properties` rather than
+- when provided explicitly, completely replaces `catalog.yaml`'s `disabledRpcBindings` rather than
   appending to it;
 - there MUST NOT be any binding that is hard-coded as “always disabled.”
 
@@ -248,7 +247,7 @@ When neither `--stdout` nor `--output` is provided:
 Inputs come from the following sources, in descending order of priority:
 
 1. explicit CLI arguments;
-2. human-declared files at the workspace root;
+2. human-declared workspace files, including `.conven/catalog.yaml` and `conven-generator.json`;
 3. build, entry-point, and runtime configuration in the current workspace files, including
    uncommitted local changes;
 4. inferred results that can be supported consistently by multiple independent pieces of code
@@ -270,67 +269,61 @@ When a required field cannot be proven, the generator MUST:
   ignore;
 - never invent a value merely to produce YAML that “looks complete.”
 
-## 6. `services.properties` Input Specification
+## 6. `.conven/catalog.yaml` Input Specification
 
 ### 6.1 Location and Purpose
 
 Fixed location:
 
 ```text
-<workspace>/services.properties
+<workspace>/.conven/catalog.yaml
 ```
 
-This file is the normative source for the service catalog and local ports. When the file is missing,
-empty, or contains only comments, generation MUST fail and print the record template plus the
+This file is the normative source for service identities, kinds, local ports, and disabled RPC
+bindings. When the file is missing or invalid, generation MUST fail and print the schema plus the
 discovered candidate repositories. The generator MUST NOT embed a fallback service catalog, invent
 ports, or implicitly select repositories based on directory names.
 
-An AI preparing a workspace MAY create this file from source evidence, but MUST request input when
-no unique port evidence exists. During plugin execution, the plugin only consumes the confirmed file
-and does not repeat guesswork.
+An AI preparing a workspace MAY edit this file from source evidence, but MUST request input when no
+unique port evidence exists. The supported Conven workflow is `conven catalog --edit`, followed by
+`conven catalog --validate`. During plugin execution, the plugin only consumes the confirmed file and
+does not repeat guesswork.
 
-### 6.2 Text Rules
+### 6.2 YAML Schema
 
-- UTF-8 text;
-- each non-comment line is one comma-separated record;
-- surrounding whitespace is removed from fields;
-- blank lines are ignored;
-- a complete line whose trimmed text starts with `#` is ignored as a comment;
-- trailing comments are not supported;
-- CSV quoting, escaping, and embedded commas are not supported.
+The file MUST be UTF-8, contain exactly one YAML document, reject unknown fields, and use this
+shape. Examples illustrate syntax only and are not default services:
 
-### 6.3 Record Formats
-
-Exactly these three formats are supported:
-
-```text
-repository,kind,port
-binding:<rpc-binding>,rpc,port
-repository,<rpc-binding>,rpc,port
+```yaml
+version: 1
+services:
+  - repository: catalog-api
+    kind: http
+    port: 18080
+  - rpcBinding: catalogRpc
+    kind: rpc
+    port: 18081
+  - repository: inventory-rpc
+    rpcBinding: inventoryRpc
+    kind: rpc
+    port: 18082
+disabledRpcBindings:
+  - searchRpc
 ```
 
-The examples below illustrate syntax only; they are not default services:
+`version` MUST equal `1`. `services` is an ordered sequence. Every service MUST declare
+`repository`, `rpcBinding`, or both; neither identity is implicitly synthesized. `kind` and `port`
+are required. `disabledRpcBindings` is an optional ordered sequence of RPC binding names.
 
-```properties
-# repository-backed HTTP service
-catalog-api,http,18080
-
-# repository-backed RPC service
-catalog-rpc,rpc,18081
-
-# only the Go binding is known; infer its provider repository
-binding:catalogRpc,rpc,18082
-
-# repository and consumer binding are both known
-inventory-rpc,inventoryRpc,rpc,18083
-```
+### 6.3 Field Constraints
 
 Field constraints:
 
 - `repository`: matches `[A-Za-z0-9][A-Za-z0-9._-]*`;
 - `kind`: the `go-zero-apollo-consul-v1` profile permits only `http` or `rpc`;
-- `rpc-binding`: starts with an ASCII letter or `_`, followed only by ASCII letters, digits, `_`, or
+- `rpcBinding`: starts with an ASCII letter or `_`, followed only by ASCII letters, digits, `_`, or
   `-`;
+- a service with `rpcBinding` MUST use `kind: rpc`;
 - `port`: a decimal integer in the range `1..65535`.
 
 The complete catalog MUST be validated before filtering it to workspace repositories:
@@ -340,8 +333,7 @@ The complete catalog MUST be validated before filtering it to workspace reposito
 - ports are globally unique;
 - format, kind, and character sets are valid.
 
-Declaration order is the stable output order. Comments and blank lines do not participate in
-sorting.
+Declaration order is the stable output order.
 
 ### 6.4 Workspace Subset Rules
 
@@ -353,29 +345,16 @@ sorting.
 - Repositories present in the workspace but absent from the catalog are ignored by default.
 - If no service can ultimately be generated, report an error.
 
-## 7. `disabled-services.properties` Input Specification
+## 7. Disabled RPC Binding Rules
 
-Fixed location:
-
-```text
-<workspace>/disabled-services.properties
-```
-
-Format: each non-comment line contains exactly one RPC binding.
-
-```properties
-# Keep this client disabled in local runtime config.
-searchRpc
-experimentalRpc
-```
-
-Text and binding character constraints are the same as for `services.properties`.
+The catalog's `disabledRpcBindings` sequence is the persisted disabled set. Every item uses the
+same binding character constraints as `services[].rpcBinding` and MUST be unique. An absent or empty
+sequence means the disabled set is empty. `--disable-bindings` replaces this sequence in memory for
+one generator run and does not edit the catalog.
 
 Processing rules:
 
-- a missing, empty, or comment-only file means the disabled set is empty;
-- duplicate records are deduplicated;
-- a file binding not declared in the final service code is ignored with a warning;
+- a catalog binding not declared in the final service code is ignored with a warning;
 - a CLI binding not declared in the final service code is an error;
 - each matched binding produces a service-level config patch for every local service that declares
   it;
@@ -616,7 +595,7 @@ For `binding:<rpc-binding>,rpc,port`:
 7. for a unique provider, scan it strictly with the full repository adapter;
 8. after adding a provider, reprocess other unresolved bindings to allow chained discovery;
 9. if a binding resolves to a repository that is already configured explicitly, report an error
-   and require consolidation into a four-field record.
+   and require consolidation into one entry that declares both `repository` and `rpcBinding`.
 
 For `repository,<binding>,rpc,port`:
 
@@ -888,7 +867,7 @@ Acceptance results MUST be classified by level:
 
 ### 15.1 Stable Ordering
 
-- services follow declaration order in `services.properties`;
+- services follow declaration order in `.conven/catalog.yaml`;
 - inferred services follow the order of the binding entries that triggered them;
 - disabled bindings are sorted by name;
 - dependency targets follow final service order;
@@ -922,7 +901,7 @@ Acceptance results MUST be classified by level:
 The following conditions MUST fail:
 
 - invalid workspace;
-- invalid properties format;
+- invalid catalog YAML or schema;
 - duplicate repository, binding, or port;
 - explicitly present repository with an incomplete structure;
 - catalog kind inconsistent with source kind;
@@ -937,8 +916,8 @@ The following conditions MUST continue after a warning:
 - a catalog repository is not checked out;
 - a binding-only entry lacks consumer-key evidence;
 - a binding-only entry has a unique key but no local provider;
-- a binding from the disabled file is not declared in final active services;
-- a four-field binding lacks consumer evidence, so its alias is unverified.
+- a binding from `disabledRpcBindings` is not declared in final active services;
+- a dual-identity entry lacks consumer evidence, so its RPC alias is unverified.
 
 These warnings MUST contain a source file and line number. They MUST NOT be silently ignored and
 MUST NOT output secret values.
@@ -1044,7 +1023,7 @@ conven services --start --env ENVIRONMENT --dry-run SERVICE...
 
 ### 17.4 Required Regression Scenarios
 
-- missing, empty, and comment-only properties files;
+- missing catalog, invalid YAML, multiple documents, unknown fields, and an empty service list;
 - missing generator JSON, unknown fields, invalid profile, and invalid connection driver;
 - `.`, `..`, path separators, whitespace, or non-ASCII-safe characters in environment names;
 - YAML-special values, control characters, and forbidden `${...}` in JSON connection strings;
@@ -1054,10 +1033,10 @@ conven services --start --env ENVIRONMENT --dry-run SERVICE...
 - an undeclared workspace repository;
 - successful binding-only inference;
 - missing key, missing provider, multiple keys, and multiple providers;
-- matching, mismatching, and unproven four-field bindings;
+- matching, mismatching, and unproven dual-identity entries;
 - HTTP root `discovType: consul` MUST be rejected;
-- missing, empty, unknown, and duplicate entries in the disabled file;
-- CLI disabled entries completely replace the file;
+- empty, invalid, and duplicate entries in `disabledRpcBindings`;
+- CLI disabled entries completely replace the catalog sequence in memory;
 - a disabled binding that points to an active provider still creates no local dependency;
 - `--stdout`, `--check`, new-file output, interactive overwrite, and non-interactive overwrite
   rejection;
@@ -1102,7 +1081,7 @@ organization names, real business service names, private addresses, environment 
 or port tables. Workspace-specific values in the candidate must come from explicit inputs or
 traceable code evidence.
 
-Read services.properties, disabled-services.properties, and conven-generator.json, and strictly
+Read .conven/catalog.yaml and conven-generator.json, and strictly
 follow this specification's syntax, subset, binding-only, disabling, environment, and dependency
 inference rules. Do not guess any port, business dependency, environment connection, or remote
 address that cannot be proven from code or explicit input. Report an error or list it as unresolved.

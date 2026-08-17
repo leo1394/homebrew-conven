@@ -30,13 +30,13 @@ class Conven < Formula
     plugin_selector = build.head? || version >= "0.2.12"
     if build.head?
       expected_version = <<~EOS
-        conven version 0.2.12 (2026-08-13)
+        conven version 0.2.13 (2026-08-17)
         https://github.com/leo1394/homebrew-conven
       EOS
-      expected_version = Regexp.new("\\A#{Regexp.escape(expected_version)}\\z")
+      expected_version = Regexp.new("#{Regexp.escape(expected_version)}\\z")
     elsif new_cli
       expected_version = Regexp.new(
-        "\\Aconven version #{Regexp.escape(version.to_s)} " \
+        "conven version #{Regexp.escape(version.to_s)} " \
         "\\(\\d{4}-\\d{2}-\\d{2}\\)\\n" \
         "https://github\\.com/leo1394/homebrew-conven\\n\\z",
       )
@@ -54,13 +54,19 @@ class Conven < Formula
       manifest = workspace_state/"conven.yaml"
       system bin/"conven", "init"
       assert_path_exists manifest
+      if build.head?
+        system bin/"conven", "catalog", "--validate"
+        status = shell_output("#{bin}/conven status")
+        assert_includes status, "Workspace"
+        assert_includes status, "Disabled RPC bindings"
+        assert_includes status, "No Conven session found."
+      end
       if scoped_plugins
         workspace_assets = %w[
-          services.properties
-          disabled-services.properties
           CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
           README.md
         ]
+        workspace_assets.unshift(".conven/catalog.yaml") if build.head?
         workspace_assets.each do |filename|
           assert_path_exists workspace/filename
         end
@@ -131,7 +137,8 @@ class Conven < Formula
         workspace_asset_contents.each do |filename, contents|
           assert_equal contents, (workspace/filename).read
         end
-        catalog_contents = %w[services.properties disabled-services.properties].to_h do |filename|
+        catalog_files = build.head? ? %w[.conven/catalog.yaml] : []
+        catalog_contents = catalog_files.to_h do |filename|
           [filename, (workspace/filename).read]
         end
         system bin/"conven", "services", "--registry"
@@ -158,13 +165,17 @@ class Conven < Formula
     assert_path_exists zsh_completion/"_conven"
     assert_path_exists fish_completion/"conven.fish"
     top_level_commands = %w[init services config policy plugins doctor help version]
+    top_level_commands.insert(3, "catalog") if build.head?
+    top_level_commands.insert(6, "status") if build.head?
     service_actions = %w[list registry status logs start restart stop stop-all]
     service_actions.insert(4, "dashboard") if build.head? || version >= "0.2.5"
     service_actions << "cleanup" if build.head? || version >= "0.2.7"
     policy_actions = %w[edit import reset]
+    catalog_actions = build.head? ? %w[edit validate] : []
     plugin_actions = %w[install list run]
     plugin_actions.insert(2, "remove") if build.head? || version >= "0.2.2"
-    removed_top_level_commands = %w[discover list status logs start restart stop]
+    removed_top_level_commands = %w[discover list logs start restart stop]
+    removed_top_level_commands.insert(2, "status") unless build.head?
     %w[bash zsh fish].each do |shell|
       completion = shell_output("#{bin}/conven __completion #{shell}")
       case shell
@@ -203,6 +214,13 @@ class Conven < Formula
         end
       end
       policy_actions.each do |action|
+        if shell == "fish"
+          assert_includes completion, "-l #{action}"
+        else
+          assert_includes completion, "--#{action}"
+        end
+      end
+      catalog_actions.each do |action|
         if shell == "fish"
           assert_includes completion, "-l #{action}"
         else

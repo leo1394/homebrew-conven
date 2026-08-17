@@ -253,6 +253,14 @@ can prove.
 }
 
 func launchPolicyEditor(ctx context.Context, input *os.File, output io.Writer, errorOutput io.Writer, path string) error {
+	return launchEditor(ctx, input, output, errorOutput, path, "conven-policy-editor", "policy")
+}
+
+func launchCatalogEditor(ctx context.Context, input *os.File, output io.Writer, errorOutput io.Writer, path string) error {
+	return launchEditor(ctx, input, output, errorOutput, path, "conven-catalog-editor", "catalog")
+}
+
+func launchEditor(ctx context.Context, input *os.File, output io.Writer, errorOutput io.Writer, path string, commandName string, label string) error {
 	editor := ""
 	for _, name := range []string{"CONVEN_EDITOR", "VISUAL", "EDITOR"} {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
@@ -263,7 +271,7 @@ func launchPolicyEditor(ctx context.Context, input *os.File, output io.Writer, e
 	if editor == "" {
 		editor = "vi"
 	}
-	command := exec.CommandContext(ctx, "/bin/sh", "-c", "exec "+editor+` "$1"`, "conven-policy-editor", path)
+	command := exec.CommandContext(ctx, "/bin/sh", "-c", "exec "+editor+` "$1"`, commandName, path)
 	command.Stdin = input
 	command.Stdout = output
 	command.Stderr = errorOutput
@@ -271,7 +279,7 @@ func launchPolicyEditor(ctx context.Context, input *os.File, output io.Writer, e
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("policy editor %q failed: %w", editor, err)
+		return fmt.Errorf("%s editor %q failed: %w", label, editor, err)
 	}
 	return nil
 }

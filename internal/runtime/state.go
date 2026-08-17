@@ -16,6 +16,8 @@ const stateVersion = 3
 
 const runtimeIgnoreRule = "/runtime/"
 
+var errWorkspaceLocked = errors.New("another Conven command is active for this workspace")
+
 type Session struct {
 	Version     int                 `json:"version"`
 	Workspace   string              `json:"workspace"`
@@ -25,6 +27,7 @@ type Session struct {
 	CreatedAt   time.Time           `json:"createdAt"`
 	Selected    []string            `json:"selected,omitempty"`
 	Services    []ServiceProcess    `json:"services"`
+	HotReload   *ServiceProcess     `json:"hotReload,omitempty"`
 	Connection  *ConnectionProcess  `json:"connection,omitempty"`
 }
 
@@ -170,7 +173,7 @@ func (store *Store) Lock() (func(), error) {
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		file.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			return nil, fmt.Errorf("another Conven command is active for this workspace")
+			return nil, errWorkspaceLocked
 		}
 		return nil, fmt.Errorf("lock workspace state: %w", err)
 	}

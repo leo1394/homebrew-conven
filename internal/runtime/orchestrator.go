@@ -19,12 +19,13 @@ import (
 )
 
 type StartOptions struct {
-	Common     CommonOptions
-	Services   []string
-	DryRun     bool
-	SkipBuild  bool
-	SkipVerify bool
-	Output     io.Writer
+	Common              CommonOptions
+	Services            []string
+	DryRun              bool
+	SkipBuild            bool
+	SkipVerify           bool
+	HotReloadExecutable string
+	Output              io.Writer
 }
 
 type RunningServicesError struct {
@@ -130,6 +131,9 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 			snapshot := *existing.Connection
 			snapshot.Command = append([]string(nil), existing.Connection.Command...)
 			retainedConnectionSnapshot = &snapshot
+		}
+		if err := stopHotReloadWatcherLocked(existing, false, output); err != nil {
+			return nil, fmt.Errorf("stop hot reload watcher for fresh start: %w", err)
 		}
 		if err := stopSessionServicesForReplacement(workspace, existing, output); err != nil {
 			return nil, err
@@ -311,6 +315,9 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 	if err := workspace.Store.Save(session); err != nil {
 		return nil, fail(err)
 	}
+	if err := ensureHotReloadWatcherLocked(workspace, session, options.HotReloadExecutable, output); err != nil {
+		return nil, fail(err)
+	}
 	fmt.Fprintln(output, style.Success("✓ Local services are ready. Use `conven services --dashboard` or `conven services --logs --tail` to observe them."))
 	return session, nil
 }
@@ -379,6 +386,15 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 	if !all && len(names) == 0 {
 		return errors.New("stop requires service names or --all")
 	}
+	if all {
+		snapshot, err := workspace.Store.Load()
+		if err != nil {
+			return err
+		}
+		if err := stopHotReloadWatcherLocked(snapshot, force, io.Discard); err != nil {
+			return fmt.Errorf("stop hot reload watcher before stopping all services: %w", err)
+		}
+	}
 	unlock, err := workspace.Store.Lock()
 	if err != nil {
 		return err
@@ -402,6 +418,11 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 			}
 		}
 		return nil
+	}
+	if all {
+		if err := stopHotReloadWatcherLocked(session, force, output); err != nil {
+			return fmt.Errorf("stop hot reload watcher: %w", err)
+		}
 	}
 	targets := make(map[string]bool)
 	if all {
@@ -464,6 +485,10 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 	}
 	session.Selected = selected
 	if len(session.Services) == 0 {
+		if err := stopHotReloadWatcherLocked(session, force, output); err != nil {
+			fmt.Fprintf(output, "%s: %v\n", style.Failure("✗ Error stopping hot reload watcher"), err)
+			failed = append(failed, hotReloadProcessName)
+		}
 		if session.Connection != nil {
 			if session.Connection.Managed {
 				fmt.Fprintf(output, "%s %s\n", style.Stage("Releasing connection lease"), style.Identifier(session.Connection.Driver))
@@ -485,7 +510,7 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 			session.Connection = nil
 		}
 	}
-	if len(session.Services) == 0 && session.Connection == nil {
+	if len(session.Services) == 0 && session.HotReload == nil && session.Connection == nil {
 		if err := workspace.Store.Clear(); err != nil {
 			return err
 		}
@@ -515,6 +540,15 @@ func Status(ctx context.Context, workspace *WorkspaceData, output io.Writer) err
 	}
 	fmt.Fprintln(output, style.Detail("Workspace: "+session.Workspace))
 	fmt.Fprintln(output, style.Detail("Environment: "+style.Identifier(session.Environment)))
+	if session.HotReload != nil {
+		state := "stopped"
+		if ProcessAlive(session.HotReload.PID) && VerifyProcess(*session.HotReload) == nil {
+			state = "watching"
+		} else if ProcessGroupAlive(session.HotReload.PGID) {
+			state = "unverified"
+		}
+		fmt.Fprintln(output, style.Detail(fmt.Sprintf("Hot reload: %s, pid=%d log=%s", styledProcessState(style, state, 0), session.HotReload.PID, session.HotReload.LogPath)))
+	}
 	fmt.Fprintln(output, style.Stage("Services"))
 	for _, process := range session.Services {
 		state := "stopped"
@@ -561,7 +595,7 @@ func styledProcessState(style terminal.Style, state string, width int) string {
 		display = fmt.Sprintf("%-*s", width, state)
 	}
 	switch state {
-	case "running", "reused", "shared":
+	case "running", "watching", "reused", "shared":
 		return style.Success(display)
 	case "stopped":
 		return style.Failure(display)
@@ -826,11 +860,14 @@ func failStartup(workspace *WorkspaceData, session *Session, connection *Connect
 
 func rollbackSession(workspace *WorkspaceData, session *Session, connection *ConnectionProcess, retainConnection bool, output io.Writer) error {
 	style := terminal.New(output)
+	problems := make([]error, 0)
+	if err := stopHotReloadWatcherLocked(session, false, output); err != nil {
+		problems = append(problems, fmt.Errorf("stop hot reload watcher: %w", err))
+	}
 	if len(session.Services) > 0 {
 		fmt.Fprintln(output, style.Failure("Startup failed; stopping services started by this command."))
 	}
 	failedNames := make(map[string]bool)
-	problems := make([]error, 0)
 	for index := len(session.Services) - 1; index >= 0; index-- {
 		process := session.Services[index]
 		if err := StopProcess(process, 3*time.Second); err != nil {
@@ -863,7 +900,7 @@ func rollbackSession(workspace *WorkspaceData, session *Session, connection *Con
 			session.Connection = nil
 		}
 	}
-	if len(session.Services) == 0 && session.Connection == nil {
+	if len(session.Services) == 0 && session.HotReload == nil && session.Connection == nil {
 		if err := workspace.Store.Clear(); err != nil {
 			problems = append(problems, err)
 		}

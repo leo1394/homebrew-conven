@@ -45,9 +45,6 @@ func InitWorkspaceDetailsWithPolicySpecification(cwd string, application []byte,
 	if sameDirectory(workspace, resolvedUserHome()) {
 		return result, fmt.Errorf("cannot initialize a Conven workspace in the user home directory %q: ~/.conven is reserved for global configuration", workspace)
 	}
-	if err := validateWorkspaceFiles(workspace, workspaceFiles); err != nil {
-		return result, err
-	}
 	boundary := filepath.Join(workspace, ".conven")
 	info, err := os.Lstat(boundary)
 	if err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
@@ -55,6 +52,9 @@ func InitWorkspaceDetailsWithPolicySpecification(cwd string, application []byte,
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return result, fmt.Errorf("inspect Conven workspace boundary %q: %w", boundary, err)
+	}
+	if err := validateWorkspaceFiles(workspace, workspaceFiles); err != nil {
+		return result, err
 	}
 	manifest := ManifestPath(workspace)
 	result.Path = manifest
@@ -113,10 +113,10 @@ func InitWorkspaceDetailsWithPolicySpecification(cwd string, application []byte,
 
 func validateWorkspaceFiles(workspace string, workspaceFiles []examples.WorkspaceFile) error {
 	for _, file := range workspaceFiles {
-		if file.Name == "" || filepath.Base(file.Name) != file.Name || file.Name == "." {
-			return fmt.Errorf("invalid Conven workspace file name %q", file.Name)
+		path, err := workspaceFilePath(workspace, file.Name)
+		if err != nil {
+			return err
 		}
-		path := filepath.Join(workspace, file.Name)
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) {
 			continue
@@ -134,7 +134,10 @@ func validateWorkspaceFiles(workspace string, workspaceFiles []examples.Workspac
 func ensureWorkspaceFiles(workspace string, workspaceFiles []examples.WorkspaceFile) ([]InitFileResult, error) {
 	results := make([]InitFileResult, 0, len(workspaceFiles))
 	for _, file := range workspaceFiles {
-		path := filepath.Join(workspace, file.Name)
+		path, err := workspaceFilePath(workspace, file.Name)
+		if err != nil {
+			return nil, err
+		}
 		info, err := os.Lstat(path)
 		if err == nil {
 			if err := validateWorkspaceFile(path, info); err != nil {
@@ -164,6 +167,18 @@ func ensureWorkspaceFiles(workspace string, workspaceFiles []examples.WorkspaceF
 		results = append(results, InitFileResult{Name: file.Name})
 	}
 	return results, nil
+}
+
+func workspaceFilePath(workspace string, name string) (string, error) {
+	clean := filepath.Clean(name)
+	if name == "" || filepath.IsAbs(name) || clean != name || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid Conven workspace file name %q", name)
+	}
+	directory := filepath.Dir(clean)
+	if directory != "." && directory != ".conven" {
+		return "", fmt.Errorf("invalid Conven workspace file name %q", name)
+	}
+	return filepath.Join(workspace, clean), nil
 }
 
 func validateWorkspaceFile(path string, info os.FileInfo) error {

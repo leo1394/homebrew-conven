@@ -1463,6 +1463,12 @@ func TestStatusShowsSavedProcessGroupIdentifiers(t *testing.T) {
 			PGID:    99999981,
 			LogPath: "/tmp/api.log",
 		}},
+		HotReload: &ServiceProcess{
+			Name:    hotReloadProcessName,
+			PID:     99999986,
+			PGID:    99999985,
+			LogPath: "/tmp/hot-reload.log",
+		},
 		Connection: &ConnectionProcess{
 			Driver:  "command",
 			PID:     99999971,
@@ -1479,6 +1485,7 @@ func TestStatusShowsSavedProcessGroupIdentifiers(t *testing.T) {
 	for _, expected := range []string{
 		"api",
 		"pid=99999991 pgid=99999981",
+		"Hot reload: stopped, pid=99999986 log=/tmp/hot-reload.log",
 		"connection/command",
 		"pid=99999971 pgid=99999961",
 	} {

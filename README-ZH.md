@@ -5,7 +5,7 @@
 [![CI](https://github.com/leo1394/homebrew-conven/actions/workflows/ci.yml/badge.svg)](https://github.com/leo1394/homebrew-conven/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> 只在本地运行正在修改的服务，其余依赖继续通过开发集群访问。
+![Conven——解决本地开发与集群环境隔离的痛点](assets/conven-banner-zh.png)
 
 Conven 是一个专注于本地开发的微服务编排工具。它选择一组服务在本地运行，
 将选中的依赖路由到 `127.0.0.1`，未选中的依赖继续使用远程服务发现，并把生成
@@ -101,6 +101,7 @@ conven services --start --dev user-svc order-svc
 请将示例服务名替换为 `conven services --list` 输出的名称。在交互式终端中也可以
 省略服务名，通过选择器选择。启动完成后，Conven 默认打开 Dashboard。按 `q`
 或 `Ctrl-C` 只会退出查看，服务会继续运行。
+![Conven services Dashboard](assets/conven-services-dashboard-snapshot.png)
 
 需要显式停止整个 workspace session：
 
@@ -116,6 +117,7 @@ conven services --stop-all
 cd /path/to/workspace
 
 conven init
+conven catalog --validate
 conven services --list
 conven policy --edit
 
@@ -129,8 +131,7 @@ conven services --start --dev user-svc order-svc
 | 文件 | 用途 |
 | --- | --- |
 | `.conven/conven.yaml` | 定义环境、服务、Policy 和运行行为的规范 workspace manifest。 |
-| `services.properties` | workspace Policy 生成器使用的服务目录。 |
-| `disabled-services.properties` | 生成 workspace Policy 时需要禁用的 RPC binding。 |
+| `.conven/catalog.yaml` | 声明 repository/RPC binding identity、服务类型、唯一 local port 和禁用 RPC binding 的生成器目录。 |
 | `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` | 用于实现 workspace Policy 生成器插件的 AI 可读规范。 |
 | `README.md` | 介绍生成文件和 Conven 工作流的 workspace 本地快速上手文档。 |
 
@@ -139,9 +140,10 @@ conven services --start --dev user-svc order-svc
 完整业务依赖图、公司 Policy、Apollo 凭据或集群连接信息。启动前需要人工确认
 一次候选配置。
 
-后续执行 `services --registry` 只更新 `.conven/conven.yaml`，不会猜测端口，也不会
-改写两个生成器 properties 文件。仓库新增、删除或暂时未检出时，应由用户或 AI
-复核并维护 `services.properties`，将它作为完整服务目录的超集。
+后续执行 `services --registry` 会刷新仓库条目，但不会猜测端口或改写
+`.conven/catalog.yaml`。catalog entry 可以使用 `repository`、`rpcBinding` 或同时
+使用两者，因此服务不必存在本地 checkout。使用 `conven catalog --edit` 更新目录，
+使用 `conven catalog --validate` 校验目录。
 
 如果项目维护了 Policy 生成器，请安装后运行唯一的 workspace 插件，或显式指定名称。
 首次运行前还需按生成的 AI 规范补全 workspace 专用的 `conven-generator.json`；`init`
@@ -164,6 +166,40 @@ Conven 当前不内置任何项目专用插件。`policy --import` 会验证并�
 4. 在 `.conven/runtime/current` 下生成运行时配置。
 5. 复用或建立环境连接，然后执行 prepare、build、start 和 health check。
 6. 记录进程身份并聚合服务日志，供后续 status、restart 和 stop 使用。
+
+### 配置物化顺序
+
+第 4 步按两条相互关联的链路完成。以下 `runtime/current/application.yaml` 是单个服务
+运行时配置副本的简写；实际文件位于
+`.conven/runtime/current/configs/<service>/application.yaml`。Apollo 整体替换只作用于
+这份受保护的运行时副本，不会覆盖仓库文件。
+
+从仓库基线配置到远程依赖预检的完整链路：
+
+```text
+仓库 resources/application.yaml
+  → Apollo application.yml 整体替换
+  → Conven manifest patches
+  → runtime/current/application.yaml
+  → Consul preflight
+```
+
+当 Apollo `application.yml` 作为运行时基线时，patch 和安全 guard 按以下顺序应用：
+
+```text
+Apollo application.yml
+  → policy patch
+  → server patch
+  → services.portal-api-service.config.patches
+  → dependency routing patch
+  → 本地隔离 guard
+  → runtime/current
+```
+
+第二条链路同时表示覆盖优先级：后面的 patch 基于前一步结果继续处理；
+`services.portal-api-service.config.patches` 是服务级 manifest patch 的具体示例。
+本地隔离 guard 强制并校验最终监听和注册行为，Consul preflight 则检查最终运行时配置
+中仍然启用的远程依赖。
 
 `services --start --dry-run` 在静态编排完成后结束。它不会访问 Apollo、建立连接、
 生成运行时配置、构建代码、启动进程或修改 runtime 目录。
@@ -231,6 +267,9 @@ services:
 
 | 操作 | 命令 |
 | --- | --- |
+| 查看完整 workspace 状态 | `conven status` |
+| 编辑生成器服务目录 | `conven catalog --edit` |
+| 校验生成器服务目录 | `conven catalog --validate` |
 | 列出 manifest 中的服务 | `conven services --list` |
 | 刷新扫描到的服务仓库 | `conven services --registry` |
 | 验证指定环境 | `conven doctor --test` |
@@ -253,6 +292,10 @@ fresh `--start` 会安全地重建 `runtime/current`。`--restart` 会复用该�
 发生变化或已经退出的服务；未变化的服务和共享连接会保持运行。stop 后仍会保留
 当前日志和生成文件，供排查使用，直到下一次安全的 fresh start。
 
+`--start` 和 `--restart` 还会监听运行中服务的源码变化。构建成功并通过 preflight
+后执行受控替换；构建失败时保留 last-known-good 进程继续运行。`--stop-all` 会同时
+终止 watcher。
+
 执行 `--stop-all` 后，可使用 `--cleanup` 删除 `runtime/current/artifacts` 和
 `runtime/current/logs`。存在 session 时会拒绝清理；运行配置和共享连接日志会保留。
 
@@ -265,6 +308,9 @@ Conven 提供两种用途明确的日志查看模式：
 | Dashboard | 实时概览 | 固定 workspace banner、长日志自动换行、应用内滚动和 `/` 搜索，最多保留 10,000 条原始日志 |
 | Plain | 使用终端原生搜索或导出 | 使用正常终端 scrollback、`Command+F`、管道和重定向，follow 前最多回放 10,000 行 |
 
+Dashboard 将 workspace、local services、禁用的 RPC bindings、启动时间和实时日志
+集中在一个视图。
+
 ```bash
 # 全屏查看器；下一条命令是等价别名。
 conven services --dashboard
@@ -274,15 +320,8 @@ conven services --logs --dashboard
 conven services --logs --tail
 ```
 
-交互式 `services --start` 和 `services --restart` 默认打开 Dashboard。显式指定
-`--tail` 会使用 Plain 模式；非交互式 start 或 restart 会在执行完成后返回，并让服务
-继续运行。restart 也支持显式指定 `--dashboard`。如果 `services --logs` 或
-`services --restart` 同时出现 `--dashboard` 和 `--tail`，最后一个参数生效。
-
-Dashboard 会按终端宽度自动折行显示长日志，不再用省略号隐藏超出一行的内容。
-方向键或鼠标滚轮按视觉行滚动，`PgUp`/`PgDn` 翻页，`g`/`G` 跳转，`/` 搜索，
-`n`/`N` 切换匹配项，`Esc` 清除搜索。按 `q` 或 `Ctrl-C` 退出查看。Plain 模式使用
-`Ctrl-C` 退出查看。这些操作都不会停止服务。
+交互式 start 和 restart 默认打开 Dashboard；`--tail` 使用 Plain 模式。Dashboard
+支持日志自动换行、滚动和 `/` 搜索。按 `q` 或 `Ctrl-C` 退出查看，不会停止服务。
 
 ## 配置与插件
 
@@ -361,8 +400,7 @@ man conven
 ```
 
 安装版本附带的手册是该版本最权威的参考。源码手册位于
-[`docs/conven.1`](docs/conven.1)，stdout/stderr 代表性格式见
-[`docs/COMMAND-OUTPUT-EXAMPLES.md`](docs/COMMAND-OUTPUT-EXAMPLES.md)，发布步骤见
+[`docs/conven.1`](docs/conven.1)，发布步骤见
 [`RELEASING-ZH.md`](RELEASING-ZH.md)，版本变更见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 在项目根目录运行仓库检查：

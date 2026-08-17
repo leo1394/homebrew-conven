@@ -34,6 +34,12 @@ func TestStoreRoundTrip(t *testing.T) {
 			Command: []string{"user-svc"},
 			Ports:   map[string]int{"http": 8080, "metrics": 9090},
 		}},
+		HotReload: &ServiceProcess{
+			Name:    hotReloadProcessName,
+			PID:     456,
+			PGID:    456,
+			Command: []string{"conven", "__hot-reload"},
+		},
 	}
 	if err := store.Save(session); err != nil {
 		t.Fatal(err)
@@ -67,6 +73,9 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if loaded.Services[0].Ports["http"] != 8080 || loaded.Services[0].Ports["metrics"] != 9090 {
 		t.Fatalf("unexpected loaded service ports: %#v", loaded.Services[0].Ports)
+	}
+	if loaded.HotReload == nil || loaded.HotReload.PID != 456 || loaded.HotReload.Name != hotReloadProcessName {
+		t.Fatalf("unexpected loaded hot reload process: %#v", loaded.HotReload)
 	}
 }
 

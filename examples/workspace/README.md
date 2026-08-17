@@ -9,11 +9,9 @@ Conven repository: [leo1394/homebrew-conven](https://github.com/leo1394/homebrew
 ## Initialized files
 
 - `.conven/conven.yaml` is the active Conven workspace manifest.
-- `services.properties` is the generator service catalog. Add one service per
-  line using one of the record formats documented in that file. Service ports
-  must be unique.
-- `disabled-services.properties` lists RPC bindings that the generator must
-  disable in local runtime configuration. Add one binding per line.
+- `.conven/catalog.yaml` is the generator service catalog. Each service uses a
+  `repository`, an `rpcBinding`, or both, plus `kind` and a unique local `port`.
+  `disabledRpcBindings` lists bindings that remain remote.
 - `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` is a complete AI-readable
   contract for implementing or updating a workspace policy generator plugin.
 - `README.md` is this workspace-local quick start for the generated files and
@@ -22,7 +20,8 @@ Conven repository: [leo1394/homebrew-conven](https://github.com/leo1394/homebrew
 `conven init` never overwrites these files. The first init performs the same
 direct-child repository scan used by `conven services --registry`; it does not
 need to run that command a second time. Review and edit the generator inputs
-before generating a policy.
+before generating a policy. Use `conven catalog --edit` for validated edits and
+`conven catalog --validate` for a read-only check.
 
 ## Create and install the generator
 
@@ -95,6 +94,7 @@ the example placeholders with values shown by `conven services --list`:
 
 ```bash
 conven services --list
+conven status
 conven doctor --env <env>
 conven services --start --env <env> --dry-run <service...>
 conven services --start --env <env> <service...>
@@ -108,10 +108,9 @@ direct child service repository. It updates discovered facts in
 `.conven/conven.yaml` without overwriting manual service configuration unless
 pruning is explicitly requested.
 
-The registry command never edits `services.properties` or
-`disabled-services.properties`. Conven cannot safely infer unique local ports
-or policy-level provider aliases from every repository. Keep the service
-catalog as a user- or AI-reviewed superset: add newly discovered repositories
-with verified ports, retain entries for repositories that are not currently
-checked out, and remove entries only by an explicit review. Even
-`services --registry --prune` changes only the manifest.
+The registry command never edits `.conven/catalog.yaml`. Conven cannot safely
+infer unique local ports or policy-level provider aliases from every
+repository. Keep the catalog as a user- or AI-reviewed superset: add newly
+discovered repositories with verified ports, retain repository or RPC-binding
+entries that are not currently checked out, and remove entries only by an
+explicit review. Even `services --registry --prune` changes only the manifest.

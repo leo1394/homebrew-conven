@@ -49,24 +49,28 @@ type dashboardLine struct {
 }
 
 type dashboardService struct {
-	Name  string
-	Ports map[string]int
+	Name      string
+	Ports     map[string]int
+	StartedAt time.Time
 }
 
 type dashboardInfo struct {
-	Version     string
-	Workspace   string
-	Environment string
-	Address     string
-	Interface   string
-	Cluster     string
-	Services    []dashboardService
-	Color       bool
+	Version             string
+	Workspace           string
+	Environment         string
+	Address             string
+	Interface           string
+	Cluster             string
+	Services            []dashboardService
+	DisabledRPCBindings []string
+	StartedAt           time.Time
+	Color               bool
 }
 
 type TailOptions struct {
-	Names   []string
-	Version string
+	Names               []string
+	Version             string
+	DisabledRPCBindings []string
 }
 
 type dashboardHistory struct {
@@ -164,15 +168,18 @@ func TailLogs(ctx context.Context, workspace *WorkspaceData, session *Session, o
 		return errors.New("dashboard requires an interactive terminal at least 20x4; use conven services --logs --tail for plain log streaming")
 	}
 	address, interfaceName := discoverLocalIPv4()
+	services := dashboardServices(workspace, session, options.Names)
 	info := dashboardInfo{
-		Version:     strings.TrimSpace(options.Version),
-		Workspace:   workspace.Manifest.Workspace.Name,
-		Environment: session.Environment,
-		Address:     address,
-		Interface:   interfaceName,
-		Cluster:     dashboardSessionCluster(session),
-		Services:    dashboardServices(workspace, session, options.Names),
-		Color:       dashboardColorEnabled(),
+		Version:             strings.TrimSpace(options.Version),
+		Workspace:           workspace.Manifest.Workspace.Name,
+		Environment:         session.Environment,
+		Address:             address,
+		Interface:           interfaceName,
+		Cluster:             dashboardSessionCluster(session),
+		Services:            services,
+		DisabledRPCBindings: append([]string(nil), options.DisabledRPCBindings...),
+		StartedAt:           dashboardServicesStartedAt(services),
+		Color:               dashboardColorEnabled(),
 	}
 	if info.Version == "" {
 		info.Version = "dev"
@@ -1031,6 +1038,7 @@ func dashboardBannerWithHint(info dashboardInfo, width int, height int, hint str
 	workspaceLines := dashboardWorkspaceLines(info, width)
 	showTitleRule := true
 	showCluster := true
+	showDisabled := true
 	showServices := true
 	fixedRows := func() int {
 		rows := 2 + len(workspaceLines)
@@ -1038,6 +1046,9 @@ func dashboardBannerWithHint(info dashboardInfo, width int, height int, hint str
 			rows++
 		}
 		if showCluster {
+			rows++
+		}
+		if showDisabled {
 			rows++
 		}
 		if showServices {
@@ -1051,6 +1062,9 @@ func dashboardBannerWithHint(info dashboardInfo, width int, height int, hint str
 	if fixedRows() > maximumBannerRows {
 		showCluster = false
 	}
+	if fixedRows() > maximumBannerRows {
+		showDisabled = false
+	}
 	if fixedRows() > maximumBannerRows && len(workspaceLines) > 1 {
 		workspaceLines = []dashboardLine{dashboardCompactWorkspaceLine(info)}
 	}
@@ -1061,13 +1075,16 @@ func dashboardBannerWithHint(info dashboardInfo, width int, height int, hint str
 		showTitleRule = false
 	}
 
-	lines := []dashboardLine{dashboardTitleLine(info.Version)}
+	lines := []dashboardLine{dashboardTitleLine(info, width)}
 	if showTitleRule {
 		lines = append(lines, dashboardHorizontalRuleLine(width))
 	}
 	lines = append(lines, workspaceLines...)
 	if showCluster {
 		lines = append(lines, dashboardFieldLine("CLUSTER", info.Cluster, dashboardGreen))
+	}
+	if showDisabled {
+		lines = append(lines, dashboardDisabledLine(info.DisabledRPCBindings))
 	}
 	if showServices {
 		lines = append(lines, dashboardServicesTitleLine(len(info.Services)))
@@ -1087,17 +1104,34 @@ func dashboardBannerLines(info dashboardInfo, width int, height int) []string {
 	return lines
 }
 
-func dashboardTitleLine(version string) dashboardLine {
-	return dashboardLine{Segments: []dashboardSegment{
+func dashboardTitleLine(info dashboardInfo, width int) dashboardLine {
+	segments := []dashboardSegment{
 		{Text: "  "},
 		{Text: "CONVEN", Style: dashboardBoldCyan},
 		{Text: "  "},
-		{Text: version, Style: dashboardGreen},
-	}}
+		{Text: info.Version, Style: dashboardGreen},
+	}
+	if info.StartedAt.IsZero() {
+		return dashboardLine{Segments: segments}
+	}
+	started := info.StartedAt.Format("2006-01-02 15:04:05")
+	leftWidth := dashboardDisplayWidth("  CONVEN  " + info.Version)
+	rightWidth := dashboardDisplayWidth("STARTED  " + started)
+	padding := width - leftWidth - rightWidth
+	if padding < 2 {
+		return dashboardLine{Segments: segments}
+	}
+	segments = append(segments,
+		dashboardSegment{Text: strings.Repeat(" ", padding)},
+		dashboardSegment{Text: "STARTED", Style: dashboardWhite},
+		dashboardSegment{Text: "  "},
+		dashboardSegment{Text: started, Style: dashboardYellow},
+	)
+	return dashboardLine{Segments: segments}
 }
 
 func dashboardHorizontalRuleLine(width int) dashboardLine {
-	ruleWidth := width - 2
+	ruleWidth := width
 	if ruleWidth < 1 {
 		ruleWidth = 1
 	}
@@ -1184,6 +1218,13 @@ func dashboardServicesTitleLine(count int) dashboardLine {
 		dashboardSegment{Text: " local", Style: dashboardDim},
 	)
 	return dashboardLine{Segments: segments}
+}
+
+func dashboardDisabledLine(bindings []string) dashboardLine {
+	if len(bindings) == 0 {
+		return dashboardFieldLine("DISABLED", "none", dashboardDim)
+	}
+	return dashboardFieldLine("DISABLED", strings.Join(bindings, ", "), dashboardYellow)
 }
 
 func dashboardServiceLines(services []dashboardService, width int, rows int) []dashboardLine {
@@ -1581,7 +1622,7 @@ func dashboardServices(workspace *WorkspaceData, session *Session, names []strin
 		if ports == nil {
 			ports = workspace.Manifest.Services[name].Ports
 		}
-		services = append(services, dashboardService{Name: name, Ports: ports})
+		services = append(services, dashboardService{Name: name, Ports: ports, StartedAt: process.StartedAt})
 	}
 	if len(names) == 0 {
 		for _, process := range session.Services {
@@ -1592,10 +1633,23 @@ func dashboardServices(workspace *WorkspaceData, session *Session, names []strin
 			if ports == nil {
 				ports = workspace.Manifest.Services[process.Name].Ports
 			}
-			services = append(services, dashboardService{Name: process.Name, Ports: ports})
+			services = append(services, dashboardService{Name: process.Name, Ports: ports, StartedAt: process.StartedAt})
 		}
 	}
 	return services
+}
+
+func dashboardServicesStartedAt(services []dashboardService) time.Time {
+	var started time.Time
+	for _, service := range services {
+		if service.StartedAt.IsZero() {
+			continue
+		}
+		if started.IsZero() || service.StartedAt.Before(started) {
+			started = service.StartedAt
+		}
+	}
+	return started
 }
 
 func discoverLocalIPv4() (string, string) {

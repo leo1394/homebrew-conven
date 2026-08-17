@@ -75,8 +75,12 @@ standard macOS runner. Bottle publication uses GitHub Releases, not GHCR.
 
 `ci.yml` remains the fast Go and stable/HEAD regression workflow.
 `tests.yml` is the Homebrew packaging workflow. Both run on a Formula PR by
-design; only `tests.yml` produces artifacts consumable by `brew pr-pull`, and
-its push run performs syntax checks without publishing bottles.
+design; `tests.yml` also runs when its workflow or Homebrew pin changes. Only
+`tests.yml` produces artifacts consumable by `brew pr-pull`, and its push run
+performs syntax checks without publishing bottles. `tests.yml` and
+`publish.yml` run the commit recorded in `.github/homebrew-brew.commit` with
+updates disabled. The Linux test image is also pinned by digest so a release
+cannot silently pick up a new developer command or runner image.
 
 Do not merge or close the generated Bottle PR while `publish.sh` is running.
 The script publishes the artifacts first and Homebrew completes the Formula
@@ -158,7 +162,7 @@ Update these locations:
 | `cmd/conven/main.go` | Set the `version` and `versionDate` variables |
 | `VERSION.txt` | Write only `X.Y.Z` and a trailing newline |
 | `CHANGELOG.md` | Add the release date and user-visible changes |
-| `Formula/conven.rb` test | Expect the exact two-line version output for the HEAD build |
+| `Formula/conven.rb` test | Expect the exact two-line version metadata suffix for the HEAD build |
 | `README.md` / `README-ZH.md` | Update only when installation or behavior changed |
 | `RELEASING.md` / `RELEASING-ZH.md` | Keep both languages aligned when the release workflow changes |
 
@@ -205,8 +209,7 @@ go build -o /tmp/conven-release ./cmd/conven
 test -f examples/application.yaml
 test ! -e examples/loom.yaml
 test ! -e examples/conven.yaml
-test -f examples/workspace/services.properties
-test -f examples/workspace/disabled-services.properties
+test -f examples/workspace/catalog.yaml
 test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
 test -f examples/workspace/README.md
@@ -222,8 +225,8 @@ git status --short
 ```
 
 The built binary must print the intended version, release date, and canonical
-project URL. `conven --version`, `conven -v`, and `conven version` must produce
-the same exact two-line output, for example:
+project URL. `conven --version`, `conven -v`, and `conven version` may prefix
+branding, but must end with the same exact two-line metadata, for example:
 
 ```text
 conven version X.Y.Z (YYYY-MM-DD)
@@ -234,10 +237,10 @@ https://github.com/leo1394/homebrew-conven
 
 For a release that changes workspace onboarding or plugins, smoke-test the
 built binary in an isolated workspace. The first `init` must create the
-manifest plus all four workspace guidance files, and a repeated `init` must
+manifest plus all three workspace guidance files, and a repeated `init` must
 preserve every existing byte.
 `services --registry` may update `.conven/conven.yaml`, but must not modify the
-properties catalogs. Omitting the source from `policy --import` must select the
+catalog. Omitting the source from `policy --import` must select the
 workspace-root YAML candidates interactively; automated checks must pass the
 source explicitly:
 
@@ -255,9 +258,10 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   tee "$CONVEN_SMOKE_INIT_OUTPUT"
 grep -Fq '==> Initialized Conven workspace' "$CONVEN_SMOKE_INIT_OUTPUT"
 grep -Fq '  - Manifest: ' "$CONVEN_SMOKE_INIT_OUTPUT"
+/tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" catalog --validate
+/tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" status
 for CONVEN_SMOKE_ASSET in \
-  services.properties \
-  disabled-services.properties \
+  .conven/catalog.yaml \
   CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
   README.md
 do
@@ -277,8 +281,7 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
 grep -Fq 'language: zh-CN' \
   "$CONVEN_SMOKE_CHINESE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
 CONVEN_ASSET_SHA_BEFORE="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
-  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
 CONVEN_SMOKE_REINIT_OUTPUT="$CONVEN_SMOKE_ROOT/reinit-output.txt"
@@ -286,28 +289,24 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init | \
   tee "$CONVEN_SMOKE_REINIT_OUTPUT"
 for CONVEN_SMOKE_ASSET in \
-  services.properties \
-  disabled-services.properties \
+  .conven/catalog.yaml \
   CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
   README.md
 do
   grep -Fq "  - $CONVEN_SMOKE_ASSET Skipped" "$CONVEN_SMOKE_REINIT_OUTPUT"
 done
 CONVEN_ASSET_SHA_AFTER="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
-  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
 test "$CONVEN_ASSET_SHA_BEFORE" = "$CONVEN_ASSET_SHA_AFTER"
 
 CONVEN_CATALOG_SHA_BEFORE="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
-  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties")"
+  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml")"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" services --registry
 CONVEN_CATALOG_SHA_AFTER="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
-  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties")"
+  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml")"
 test "$CONVEN_CATALOG_SHA_BEFORE" = "$CONVEN_CATALOG_SHA_AFTER"
 
 cp "$CONVEN_SMOKE_WORKSPACE/.conven/conven.yaml" \
@@ -353,7 +352,6 @@ release:
 ```bash
 git add cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb
 git add README.md README-ZH.md RELEASING.md RELEASING-ZH.md
-git add docs/conven.1 docs/COMMAND-OUTPUT-EXAMPLES.md
 git add examples/workspace/README.md
 git add examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 git add examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
@@ -402,10 +400,11 @@ sequence:
 5. Opens a Formula pull request and records its number and exact head SHA.
 6. Waits for every required `brew test-bot` job. The workflow builds and uploads
    platform-specific `*.bottle.*` artifacts only for the pull request.
-7. Dispatches `.github/workflows/publish.yml` with the PR number and recorded
-   head SHA. `brew pr-pull` rejects a changed PR head, publishes the bottles to
-   a `conven-X.Y.Z` GitHub Release, applies the generated `bottle do` metadata,
-   and pushes `master`.
+7. Dispatches `.github/workflows/publish.yml` with the PR identity, expected
+   base and `master` SHAs, Release name, and publication cycle/attempt. The
+   workflow rechecks the immutable tuple immediately before `brew pr-pull`,
+   publishes the bottles to a `conven-X.Y.Z` GitHub Release, applies the
+   generated `bottle do` metadata, and pushes `master`.
 8. Waits for the publish workflow, fast-forwards local `master`, and verifies
    the release assets and Formula bottle metadata.
 
@@ -455,9 +454,20 @@ gh run list --workflow publish.yml --limit 10
   by hand. A source or Formula defect requires a new patch release because the
   source tag is immutable.
 - If test-bot is green but publication failed, rerun `--apply --bottle`; it
-  dispatches or resumes `publish.yml` against the current verified PR head. If
-  the failed run already uploaded part of the `conven-X.Y.Z` Release, remove
-  that incomplete Release before retrying; GitHub rejects duplicate assets.
+  dispatches or resumes `publish.yml` against the current verified PR head.
+  The command prints the failed job/step and a sanitized error tail. Only the
+  exact recognized GitHub Release JSON EOF failure may trigger one automatic
+  attempt 2, and only while the PR, base, `master`, source tag, and empty or
+  absent Release remain unchanged. It also prints the complete
+  `gh run view RUN_ID --repo leo1394/homebrew-conven --log-failed` command.
+  Merged-PR recovery never performs this automatic retry. Publication cycle
+  state is persisted in workflow inputs, so an interrupted command resumes the
+  same cycle. If attempt 2 fails, only a new explicit invocation starts the
+  next cycle; no third automatic attempt is dispatched.
+- If the Release contains any asset, automatic retry and automatic deletion
+  are refused. Do not merge the Bottle PR or immediately rerun publication.
+  Inspect the listed assets, Release tag, Formula PR, and `master`, reconcile
+  the partial state manually, and only then rerun `--apply --bottle`.
 - If publication succeeded but the local checkout is stale, fast-forward
   `master` from `origin/master` and rerun verification. Do not republish assets
   or move the source tag.
@@ -466,6 +476,19 @@ gh run list --workflow publish.yml --limit 10
   or remove that incomplete Release, then rerun `--apply --bottle`; successful
   verification will fast-forward the local `master` without moving the source
   tag.
+
+### Updating the pinned Homebrew environment
+
+Upgrade Homebrew separately from a product release. Select a reviewed Homebrew
+commit and a Linux `ghcr.io/homebrew/brew` digest that contains it, then update
+`.github/homebrew-brew.commit` and the image digest in
+`.github/workflows/tests.yml` in one infrastructure-only pull request. Do not
+use a branch or mutable image tag.
+
+Run `--prepare --bottle` and require all three `brew test-bot` jobs plus the
+workflow checks to pass. Confirm in each job that the asserted Homebrew HEAD is
+the new commit. Merge that infrastructure change before preparing a Conven
+version; never change the pin while a Bottle PR or publication cycle is active.
 
 ### Source-build Formula finalization and failure recovery
 

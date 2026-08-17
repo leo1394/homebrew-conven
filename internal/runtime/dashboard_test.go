@@ -21,6 +21,8 @@ func TestRenderDashboardFrameKeepsBannerAndLatestLogs(t *testing.T) {
 		Address:     "192.168.1.42",
 		Interface:   "en0",
 		Cluster:     "dev-cluster-config",
+		DisabledRPCBindings: []string{"legacyRpc", "searchRpc"},
+		StartedAt:   time.Date(2026, time.August, 17, 9, 8, 7, 0, time.Local),
 		Color:       true,
 		Services: []dashboardService{
 			{Name: "user-svc", Ports: map[string]int{"metrics": 19090, "http": 18080}},
@@ -34,12 +36,14 @@ func TestRenderDashboardFrameKeepsBannerAndLatestLogs(t *testing.T) {
 		"[order-svc] four",
 		"[user-svc] five",
 	}
-	frame := renderDashboardFrame(info, 80, 12, history)
+	frame := renderDashboardFrame(info, 80, 13, history)
 	plain := plainDashboardFrame(frame)
 	for _, expected := range []string{
 		"  CONVEN  0.2.4",
+		"STARTED  2026-08-17 09:08:07",
 		"  WORKSPACE  local-stack     ENV  dev     LAN  192.168.1.42 (en0)",
 		"  CLUSTER    dev-cluster-config",
+		"  DISABLED   legacyRpc, searchRpc",
 		"  SERVICES   2 local",
 		"    user-svc",
 		"HTTP  18080  ·  METRICS  19090",
@@ -59,14 +63,14 @@ func TestRenderDashboardFrameKeepsBannerAndLatestLogs(t *testing.T) {
 	if strings.Contains(plain, "LOGS") {
 		t.Fatalf("dashboard detach divider retained the LOGS label: %q", plain)
 	}
-	if lines := strings.Count(frame, "\r\n") + 1; lines != 12 {
-		t.Fatalf("dashboard frame has %d rows, want 12", lines)
+	if lines := strings.Count(frame, "\r\n") + 1; lines != 13 {
+		t.Fatalf("dashboard frame has %d rows, want 13", lines)
 	}
 	if dashboardHasBackgroundStyle(frame) {
 		t.Fatalf("dashboard frame uses reverse or background styling: %q", frame)
 	}
 	borderLines := 0
-	banner := dashboardBannerLines(info, 80, 12)
+	banner := dashboardBannerLines(info, 80, 13)
 	for _, line := range banner {
 		if strings.Contains(line, "─") {
 			borderLines++
@@ -90,6 +94,7 @@ func TestDashboardBannerUsesWhiteLabelsGreenCountAndCenteredYellowHint(t *testin
 		Address:     "10.0.0.8",
 		Interface:   "en0",
 		Cluster:     "test-cluster",
+		DisabledRPCBindings: []string{"legacyRpc"},
 		Color:       true,
 		Services: []dashboardService{
 			{Name: "api", Ports: map[string]int{"http": 18080}},
@@ -106,20 +111,23 @@ func TestDashboardBannerUsesWhiteLabelsGreenCountAndCenteredYellowHint(t *testin
 		rendered = append(rendered, renderDashboardLine(line, width, true))
 	}
 	joined := strings.Join(rendered, "\n")
-	if !strings.Contains(joined, dashboardWhite+strings.Repeat("─", width-2)+dashboardReset) {
+	if !strings.Contains(joined, dashboardWhite+strings.Repeat("─", width)+dashboardReset) {
 		t.Fatalf("dashboard top rule is not white: %q", joined)
 	}
 	topRule := strings.TrimRight(plainDashboardText(rendered[1]), " ")
-	if topRule != strings.Repeat("─", width-2) {
+	if topRule != strings.Repeat("─", width) {
 		t.Fatalf("dashboard top rule is not left-aligned: %q", topRule)
 	}
-	for _, label := range []string{"WORKSPACE", "ENV", "LAN", "CLUSTER", "SERVICES", "RPC", "HTTP"} {
+	for _, label := range []string{"WORKSPACE", "ENV", "LAN", "CLUSTER", "DISABLED", "SERVICES", "RPC", "HTTP"} {
 		if !strings.Contains(joined, dashboardWhite+label+dashboardReset) {
 			t.Fatalf("dashboard label %q is not white: %q", label, joined)
 		}
 	}
 	if !strings.Contains(joined, dashboardGreen+"4"+dashboardReset+dashboardDim+" local"+dashboardReset) {
 		t.Fatalf("dashboard local service count is not green: %q", joined)
+	}
+	if !strings.Contains(joined, dashboardYellow+"legacyRpc"+dashboardReset) {
+		t.Fatalf("dashboard disabled RPC binding is not yellow: %q", joined)
 	}
 	if strings.Contains(joined, dashboardGreen+"4 local") {
 		t.Fatalf("dashboard highlighted the full service count instead of only the number: %q", joined)
@@ -146,6 +154,29 @@ func TestDashboardBannerUsesWhiteLabelsGreenCountAndCenteredYellowHint(t *testin
 	}
 }
 
+func TestDashboardTitleShowsEarliestSelectedServiceStartAtFarRight(t *testing.T) {
+	later := time.Date(2026, time.August, 17, 11, 30, 0, 0, time.Local)
+	earlier := later.Add(-45 * time.Minute)
+	services := []dashboardService{
+		{Name: "api", StartedAt: later},
+		{Name: "rpc", StartedAt: earlier},
+		{Name: "worker"},
+	}
+	started := dashboardServicesStartedAt(services)
+	if !started.Equal(earlier) {
+		t.Fatalf("dashboard start time = %s, want %s", started, earlier)
+	}
+	const width = 80
+	title := renderDashboardLine(dashboardTitleLine(dashboardInfo{Version: "0.2.12", StartedAt: started}, width), width, false)
+	plain := strings.TrimSuffix(title, dashboardReset)
+	if dashboardDisplayWidth(plain) != width {
+		t.Fatalf("dashboard title width = %d, want %d: %q", dashboardDisplayWidth(plain), width, plain)
+	}
+	if !strings.HasSuffix(plain, "STARTED  2026-08-17 10:45:00") {
+		t.Fatalf("dashboard title does not right-align start time: %q", plain)
+	}
+}
+
 func TestDashboardBannerCollapsesServicesAndLeavesLogSpace(t *testing.T) {
 	info := dashboardInfo{
 		Version:     "0.2.4",
@@ -159,14 +190,14 @@ func TestDashboardBannerCollapsesServicesAndLeavesLogSpace(t *testing.T) {
 			{Name: "payment"},
 		},
 	}
-	banner := dashboardBannerLines(info, 40, 13)
-	if len(banner) != 10 {
-		t.Fatalf("banner rows = %d, want 10: %#v", len(banner), banner)
+	banner := dashboardBannerLines(info, 40, 14)
+	if len(banner) != 11 {
+		t.Fatalf("banner rows = %d, want 11: %#v", len(banner), banner)
 	}
 	if !strings.Contains(strings.Join(banner, "\n"), "+2 more services") {
 		t.Fatalf("collapsed banner does not report hidden services: %#v", banner)
 	}
-	frame := renderDashboardFrame(info, 40, 13, []string{"latest"})
+	frame := renderDashboardFrame(info, 40, 14, []string{"latest"})
 	if !strings.Contains(frame, "latest") {
 		t.Fatalf("small dashboard left no log viewport: %q", frame)
 	}

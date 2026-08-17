@@ -6,6 +6,9 @@ on:
       - master
   pull_request:
     paths:
+      - .github/homebrew-brew.commit
+      - .github/workflows/publish.yml
+      - .github/workflows/tests.yml
       - Formula/**
 
 permissions: {}
@@ -23,10 +26,10 @@ jobs:
         include:
           - os: ubuntu-latest
             container:
-              image: ghcr.io/homebrew/brew:main
+              image: ghcr.io/homebrew/brew@sha256:c826e71785c100d24779724e3b92fde9955421f2bcd1e99aa0246b5a7176b1ec
               options: --privileged
     runs-on: ${{ matrix.os }}
-    container: ${{ fromJSON(toJSON(matrix.container)) }} # zizmor: ignore[unpinned-images]
+    container: ${{ fromJSON(toJSON(matrix.container)) }}
     permissions:
       actions: read
       checks: read
@@ -39,21 +42,60 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Pin Homebrew
+        id: homebrew-pin
+        run: |
+          tap_path=$(brew --repo "$GITHUB_REPOSITORY")
+          pin_file="$tap_path/.github/homebrew-brew.commit"
+          [[ -f "$pin_file" ]]
+          brew_commit=$(tr -d '[:space:]' < "$pin_file")
+          [[ "$brew_commit" =~ ^[0-9a-f]{40}$ ]]
+          brew_repository=$(brew --repo)
+          git -C "$brew_repository" fetch --quiet --depth=1 origin "$brew_commit"
+          git -C "$brew_repository" checkout --quiet --force -B main "$brew_commit"
+          git -C "$brew_repository" update-ref refs/remotes/origin/main "$brew_commit"
+          [[ "$(git -C "$brew_repository" rev-parse HEAD)" == "$brew_commit" ]]
+          [[ "$(git -C "$brew_repository" rev-parse refs/remotes/origin/main)" == "$brew_commit" ]]
+          gems_hash=$(shasum -a 256 \
+            "$brew_repository/Library/Homebrew/Gemfile.lock" | awk '{print $1}')
+          echo "commit=$brew_commit" >> "$GITHUB_OUTPUT"
+          echo "gems-hash=$gems_hash" >> "$GITHUB_OUTPUT"
+          echo 'HOMEBREW_NO_AUTO_UPDATE=1' >> "$GITHUB_ENV"
+
       - name: Cache Homebrew Bundler RubyGems
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.set-up-homebrew.outputs.gems-path }}
-          key: ${{ matrix.os }}-rubygems-${{ steps.set-up-homebrew.outputs.gems-hash }}
-          restore-keys: ${{ matrix.os }}-rubygems-
+          key: ${{ matrix.os }}-rubygems-${{ steps.homebrew-pin.outputs.commit }}-${{ steps.homebrew-pin.outputs.gems-hash }}
 
-      - run: brew test-bot --only-cleanup-before
+      - name: Clean up before test-bot
+        env:
+          EXPECTED_HOMEBREW_SHA: ${{ steps.homebrew-pin.outputs.commit }}
+        run: |
+          [[ "$(git -C "$(brew --repo)" rev-parse HEAD)" == "$EXPECTED_HOMEBREW_SHA" ]]
+          brew test-bot --only-cleanup-before
 
-      - run: brew test-bot --only-setup
+      - name: Set up test-bot
+        env:
+          EXPECTED_HOMEBREW_SHA: ${{ steps.homebrew-pin.outputs.commit }}
+        run: |
+          [[ "$(git -C "$(brew --repo)" rev-parse HEAD)" == "$EXPECTED_HOMEBREW_SHA" ]]
+          brew test-bot --only-setup
 
-      - run: brew test-bot --only-tap-syntax
+      - name: Test tap syntax
+        env:
+          EXPECTED_HOMEBREW_SHA: ${{ steps.homebrew-pin.outputs.commit }}
+        run: |
+          [[ "$(git -C "$(brew --repo)" rev-parse HEAD)" == "$EXPECTED_HOMEBREW_SHA" ]]
+          brew test-bot --only-tap-syntax
 
-      - run: brew test-bot --only-formulae --keep-old
+      - name: Test formulae
         if: github.event_name == 'pull_request'
+        env:
+          EXPECTED_HOMEBREW_SHA: ${{ steps.homebrew-pin.outputs.commit }}
+        run: |
+          [[ "$(git -C "$(brew --repo)" rev-parse HEAD)" == "$EXPECTED_HOMEBREW_SHA" ]]
+          brew test-bot --only-formulae --keep-old leo1394/conven/conven
 
       - name: Upload bottles as artifact
         if: always() && github.event_name == 'pull_request'

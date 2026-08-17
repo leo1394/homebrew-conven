@@ -5,3 +5,5 @@
 /conven
 *.log
 coverage.out
+COMMAND-OUTPUT-EXAMPLES.md
+.idea/

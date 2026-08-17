@@ -28,7 +28,12 @@ func TestVersion(t *testing.T) {
 			if code := app.Run(arguments); code != 0 {
 				t.Fatalf("exit code = %d", code)
 			}
-			const want = "conven version 0.2.8 (2026-08-12)\nhttps://github.com/leo1394/homebrew-conven\n"
+			const want = `       ccc       /====O
+O===O cc   =====O====O
+       ccc       \====O
+conven version 0.2.8 (2026-08-12)
+https://github.com/leo1394/homebrew-conven
+`
 			if output.String() != want {
 				t.Fatalf("output = %q, want %q", output.String(), want)
 			}
@@ -171,7 +176,7 @@ func TestWorkingDirectoryOptionValidatesSyntaxAndPath(t *testing.T) {
 }
 
 func TestLegacyServiceCommandsWereRemoved(t *testing.T) {
-	for _, command := range []string{"convening", "discover", "start", "restart", "status", "stop", "logs", "list"} {
+	for _, command := range []string{"convening", "discover", "start", "restart", "stop", "logs", "list"} {
 		t.Run(command, func(t *testing.T) {
 			var output bytes.Buffer
 			var errorOutput bytes.Buffer
@@ -284,10 +289,12 @@ These are common Conven commands:
 set up and configure a workspace
    init       Initialize a Conven workspace
    config     View or change Conven settings
+   catalog    Edit or validate the workspace service catalog
    policy     Edit, import, or reset the workspace manifest
    plugins    Install, list, remove, or run plugins
 
 run and inspect local services
+   status     Show the complete workspace and runtime status
    services   List, start, restart, stop, and inspect services
    doctor     Validate workspace and connection configuration
 
@@ -302,7 +309,7 @@ Run 'conven help <command>' or 'conven <command> --help' for detailed help.
 }
 
 func TestHelpCommandShowsDetailedCommandHelp(t *testing.T) {
-	for _, command := range []string{"init", "config", "policy", "plugins", "services", "doctor"} {
+	for _, command := range []string{"init", "config", "catalog", "policy", "plugins", "status", "services", "doctor"} {
 		t.Run(command, func(t *testing.T) {
 			var directOutput bytes.Buffer
 			var directError bytes.Buffer
@@ -324,6 +331,108 @@ func TestHelpCommandShowsDetailedCommandHelp(t *testing.T) {
 				t.Fatalf("direct stderr = %q, help stderr = %q", directError.String(), helpError.String())
 			}
 		})
+	}
+}
+
+func TestCatalogValidateAndEdit(t *testing.T) {
+	workspace := environmentShortcutWorkspace(t)
+	catalogPath := filepath.Join(workspace, ".conven", "catalog.yaml")
+	catalog := `version: 1
+services:
+  - repository: api
+    kind: http
+    port: 18080
+  - rpcBinding: catalogRpc
+    kind: rpc
+    port: 18081
+disabledRpcBindings:
+  - legacyRpc
+`
+	if err := os.WriteFile(catalogPath, []byte(catalog), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, CatalogEditor: func(_ context.Context, path string) error {
+		if path == catalogPath || !strings.Contains(filepath.Base(path), "catalog-edit-") {
+			t.Fatalf("catalog editor path = %q", path)
+		}
+		return os.WriteFile(path, []byte(strings.ReplaceAll(catalog, "legacyRpc", "disabledRpc")), 0600)
+	}}
+	if code := app.Run([]string{"catalog", "--validate"}); code != 0 {
+		t.Fatalf("validate exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
+	}
+	for _, expected := range []string{"Conven catalog is valid", "Services: 2", "Disabled RPC bindings: 1", catalogPath} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("validate output is missing %q: %q", expected, output.String())
+		}
+	}
+	output.Reset()
+	errorOutput.Reset()
+	if code := app.Run([]string{"catalog", "--edit"}); code != 0 {
+		t.Fatalf("edit exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
+	}
+	if !strings.Contains(output.String(), "Updated Conven catalog") {
+		t.Fatalf("edit output = %q", output.String())
+	}
+	data, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "disabledRpc") || strings.Contains(string(data), "legacyRpc") {
+		t.Fatalf("edited catalog = %q", data)
+	}
+}
+
+func TestWorkspaceStatusCombinesWorkspaceCatalogAndRuntimeState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := environmentShortcutWorkspace(t)
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	manifest := `version: 1
+workspace:
+  name: status-workspace
+services:
+  api:
+    path: api
+    kind: http
+    ports:
+      metrics: 19090
+      http: 18080
+    runner:
+      run: [sleep, "600"]
+`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	catalogPath := filepath.Join(workspace, ".conven", "catalog.yaml")
+	if err := os.WriteFile(catalogPath, []byte("version: 1\nservices: []\ndisabledRpcBindings: [zRpc, aRpc]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	app := App{Output: &output, Error: &output, Cwd: workspace}
+	if code := app.Run([]string{"status"}); code != 0 {
+		t.Fatalf("status exit code = %d: %s", code, output.String())
+	}
+	for _, expected := range []string{
+		"Workspace",
+		"Name: status-workspace",
+		"Root: " + workspace,
+		"Manifest: " + manifestPath,
+		"Catalog: " + catalogPath,
+		"Available services",
+		"api: type=http, ports=http=18080,metrics=19090, path=api",
+		"Disabled RPC bindings",
+		"aRpc",
+		"zRpc",
+		"Conven status",
+		"No Conven session found.",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("status output is missing %q: %q", expected, output.String())
+		}
+	}
+	if strings.Index(output.String(), "aRpc") > strings.Index(output.String(), "zRpc") {
+		t.Fatalf("disabled bindings are not sorted: %q", output.String())
 	}
 }
 
@@ -1587,6 +1696,9 @@ services:
 	if err := os.WriteFile(filepath.Join(workspace, ".conven", "conven.yaml"), []byte(manifest), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(workspace, ".conven", "catalog.yaml"), []byte("version: 1\nservices: []\ndisabledRpcBindings: []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	logPath := filepath.Join(t.TempDir(), "api.log")
 	if err := os.WriteFile(logPath, []byte("ready\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -1718,6 +1830,9 @@ services:
       run: [sleep, "600"]
 `
 	if err := os.WriteFile(filepath.Join(workspace, ".conven", "conven.yaml"), []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".conven", "catalog.yaml"), []byte("version: 1\nservices: []\ndisabledRpcBindings: []\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(t.TempDir(), "api.log")
@@ -2340,7 +2455,7 @@ func TestCompletions(t *testing.T) {
 			if !strings.Contains(completion, workingDirectoryMarker) {
 				t.Fatalf("completion for %s is missing -C", shell)
 			}
-			for _, command := range []string{"init", "services", "config", "policy", "plugins", "doctor"} {
+			for _, command := range []string{"init", "services", "config", "catalog", "policy", "plugins", "status", "doctor"} {
 				if !strings.Contains(completion, command) {
 					t.Fatalf("completion for %s is missing %s", shell, command)
 				}
@@ -2384,8 +2499,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		`compgen -W "init services config policy plugins doctor help version"`,
-		`compgen -W "-C init services config policy plugins doctor help version"`,
+		`compgen -W "init services config catalog policy plugins status doctor help version"`,
+		`compgen -W "-C init services config catalog policy plugins status doctor help version"`,
 		`compgen -d -- "$cur"`,
 		`if [ "$subcommand" = "help" ]`,
 		`if [ "$subcommand" = "services" ]`,
@@ -2408,6 +2523,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--edit|--reset)`,
 		`--import)`,
 		`options="--edit --help"`,
+		`if [ "$subcommand" = "catalog" ]`,
+		`options="--edit --validate --help"`,
 		`if [ "$subcommand" = "plugins" ]`,
 		`[ "${COMP_WORDS[action_index + 1]}" = "--global" ]`,
 		`options="--global --output --disable-bindings"`,
@@ -2435,10 +2552,12 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`'-C:run as if conven was started in a different directory'`,
 		`_directories`,
 		`case $words[2] in`,
-		`'1:command:(init services config policy plugins doctor help version)'`,
+		`'1:command:(init services config catalog policy plugins status doctor help version)'`,
 		`'services:manage workspace services'`,
+		`'catalog:edit or validate the workspace service catalog'`,
 		`'policy:edit, import, or rebuild the workspace policy manifest'`,
 		`'plugins:install, list, remove, or run Conven plugins'`,
+		`'status:show the complete workspace and runtime status'`,
 		`case $action in`,
 		`--list|--status|--cleanup)`,
 		`--registry)`,
@@ -2458,6 +2577,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--prune[remove missing direct-child repository services]`,
 		`--reset[destructively reset the manifest to scanned facts]`,
 		`--import[import a local YAML file as the entire manifest]`,
+		`--validate[validate the workspace service catalog]`,
 		`'1::yaml file:_files'`,
 		`--install[install a Python plugin]`,
 		`--remove[remove an installed plugin]`,
@@ -2474,7 +2594,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 			t.Fatalf("zsh completion is missing %q", expected)
 		}
 	}
-	for _, removed := range []string{"'discover:", "'start:", "'restart:", "'status:", "'stop:", "'logs:", "'list:"} {
+	for _, removed := range []string{"'discover:", "'start:", "'restart:", "'stop:", "'logs:", "'list:"} {
 		if strings.Contains(zsh, removed) {
 			t.Fatalf("zsh completion still exposes legacy top-level command %q", removed)
 		}
@@ -2494,6 +2614,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`function __conven_services_action`,
 		`function __conven_services_without_action`,
 		`function __conven_policy_without_action`,
+		`function __conven_catalog_without_action`,
 		`function __conven_policy_action`,
 		`function __conven_policy_action_without_edit`,
 		`function __conven_policy_import_without_source`,
@@ -2504,8 +2625,10 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`function __conven_plugins_global_run`,
 		`function __conven_plugins_run_arguments`,
 		`__conven_without_command' -a services`,
+		`__conven_without_command' -a catalog`,
 		`__conven_without_command' -a policy`,
 		`__conven_without_command' -a plugins`,
+		`__conven_without_command' -a status`,
 		`__conven_services_without_action' -l list`,
 		`__conven_services_without_action' -l registry`,
 		`__conven_services_without_action' -l stop-all`,
@@ -2527,6 +2650,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_using_subcommand policy; and __conven_policy_without_action' -l edit`,
 		`__conven_using_subcommand policy; and __conven_policy_without_action' -l import`,
 		`__conven_using_subcommand policy; and __conven_policy_without_action' -l reset`,
+		`__conven_using_subcommand catalog; and __conven_catalog_without_action' -l edit`,
+		`__conven_using_subcommand catalog; and __conven_catalog_without_action' -l validate`,
 		`__conven_policy_action_without_edit --import' -l edit`,
 		`__conven_policy_import_without_source' -F`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l install`,
@@ -2545,7 +2670,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 			t.Fatalf("fish completion is missing %q", expected)
 		}
 	}
-	for _, removed := range []string{"-a discover ", "-a start ", "-a restart ", "-a status ", "-a stop ", "-a logs ", "-a list "} {
+	for _, removed := range []string{"-a discover ", "-a start ", "-a restart ", "-a stop ", "-a logs ", "-a list "} {
 		if strings.Contains(fish, removed) {
 			t.Fatalf("fish completion still exposes legacy top-level command marker %q", removed)
 		}
@@ -2783,6 +2908,9 @@ services:
 	if err := os.WriteFile(filepath.Join(workspace, ".conven", "conven.yaml"), []byte(manifest), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(workspace, ".conven", "catalog.yaml"), []byte("version: 1\nservices: []\ndisabledRpcBindings: []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	return workspace
 }
 
@@ -2807,8 +2935,7 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	}
 	wantInitFiles := "==> Initialized Conven workspace\n" +
 		"  - Manifest: " + path + "\n" +
-		"  - services.properties\n" +
-		"  - disabled-services.properties\n" +
+		"  - .conven/catalog.yaml\n" +
 		"  - CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md\n" +
 		"  - README.md\n" +
 		"==> Initial service registry scan complete\n"
@@ -2853,8 +2980,7 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	}
 	wantReinitFiles := "==> Reused Conven workspace\n" +
 		"  - Manifest: " + path + "\n" +
-		"  - services.properties Skipped\n" +
-		"  - disabled-services.properties Skipped\n" +
+		"  - .conven/catalog.yaml Skipped\n" +
 		"  - CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md Skipped\n" +
 		"  - README.md Skipped\n" +
 		"  - Existing manifest was not overwritten.\n"
@@ -2885,7 +3011,7 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 		t.Fatalf("reinitialize stderr = %q", errorOutput.String())
 	}
 
-	missingWorkspaceFile := filepath.Join(workspace, "disabled-services.properties")
+	missingWorkspaceFile := filepath.Join(workspace, ".conven", "catalog.yaml")
 	if err := os.Remove(missingWorkspaceFile); err != nil {
 		t.Fatal(err)
 	}
@@ -2896,8 +3022,7 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	}
 	wantRepairFiles := "==> Reused Conven workspace\n" +
 		"  - Manifest: " + path + "\n" +
-		"  - services.properties Skipped\n" +
-		"  - disabled-services.properties\n" +
+		"  - .conven/catalog.yaml\n" +
 		"  - CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md Skipped\n" +
 		"  - README.md Skipped\n" +
 		"  - Existing manifest was not overwritten.\n"
@@ -2905,7 +3030,7 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 		t.Fatalf("repair init stdout = %q", output.String())
 	}
 	if _, err := os.Stat(missingWorkspaceFile); err != nil {
-		t.Fatalf("repair init did not recreate disabled-services.properties: %v", err)
+		t.Fatalf("repair init did not recreate .conven/catalog.yaml: %v", err)
 	}
 	if errorOutput.Len() != 0 {
 		t.Fatalf("repair init stderr = %q", errorOutput.String())
@@ -2924,12 +3049,9 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 	if !strings.Contains(output.String(), "==> Initial service registry scan complete\n  - Discovered services: alpha-service") {
 		t.Fatalf("init output = %q", output.String())
 	}
-	servicesPath := filepath.Join(workspace, "services.properties")
-	disabledPath := filepath.Join(workspace, "disabled-services.properties")
-	if err := os.WriteFile(servicesPath, []byte("catalog stays unchanged\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(disabledPath, []byte("binding stays unchanged\n"), 0644); err != nil {
+	catalogPath := filepath.Join(workspace, ".conven", "catalog.yaml")
+	catalog := "version: 1\nservices: []\ndisabledRpcBindings: [bindingStaysUnchanged]\n"
+	if err := os.WriteFile(catalogPath, []byte(catalog), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2956,8 +3078,7 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 	if !strings.Contains(string(data), "alpha-service:") || !strings.Contains(string(data), "beta-service:") {
 		t.Fatalf("manifest = %s", data)
 	}
-	assertFileContents(t, servicesPath, "catalog stays unchanged\n")
-	assertFileContents(t, disabledPath, "binding stays unchanged\n")
+	assertFileContents(t, catalogPath, catalog)
 }
 
 func TestPolicyEditUsesInjectedEditorAndPublishesValidatedManifest(t *testing.T) {
@@ -3589,12 +3710,9 @@ func TestRegistryPruneRemovesMissingDirectChildService(t *testing.T) {
 	if code := app.Run([]string{"init"}); code != 0 {
 		t.Fatalf("init exit code = %d: %s", code, output.String())
 	}
-	servicesPath := filepath.Join(workspace, "services.properties")
-	disabledPath := filepath.Join(workspace, "disabled-services.properties")
-	if err := os.WriteFile(servicesPath, []byte("catalog survives prune\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(disabledPath, []byte("binding survives prune\n"), 0644); err != nil {
+	catalogPath := filepath.Join(workspace, ".conven", "catalog.yaml")
+	catalog := "version: 1\nservices: []\ndisabledRpcBindings: [bindingSurvivesPrune]\n"
+	if err := os.WriteFile(catalogPath, []byte(catalog), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(filepath.Join(workspace, "alpha-service")); err != nil {
@@ -3614,8 +3732,7 @@ func TestRegistryPruneRemovesMissingDirectChildService(t *testing.T) {
 	if strings.Contains(string(data), "alpha-service:") || !strings.Contains(string(data), "beta-service:") {
 		t.Fatalf("manifest after registry --prune = %s", data)
 	}
-	assertFileContents(t, servicesPath, "catalog survives prune\n")
-	assertFileContents(t, disabledPath, "binding survives prune\n")
+	assertFileContents(t, catalogPath, catalog)
 }
 
 func TestRegistryRejectsArgumentsAndUnknownFlags(t *testing.T) {

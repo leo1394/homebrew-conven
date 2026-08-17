@@ -10,11 +10,8 @@ type WorkspaceFile struct {
 //go:embed application.yaml
 var ApplicationYAML []byte
 
-//go:embed workspace/services.properties
-var ServicesProperties []byte
-
-//go:embed workspace/disabled-services.properties
-var DisabledServicesProperties []byte
+//go:embed workspace/catalog.yaml
+var CatalogYAML []byte
 
 //go:embed workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 var WorkspacePolicyGeneratorAISpec []byte
@@ -31,8 +28,7 @@ func WorkspaceFiles() []WorkspaceFile {
 
 func WorkspaceFilesForPolicySpecification(specification []byte) []WorkspaceFile {
 	return []WorkspaceFile{
-		{Name: "services.properties", Data: ServicesProperties},
-		{Name: "disabled-services.properties", Data: DisabledServicesProperties},
+		{Name: ".conven/catalog.yaml", Data: CatalogYAML},
 		{Name: "CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md", Data: specification},
 		{Name: "README.md", Data: WorkspaceREADME},
 	}

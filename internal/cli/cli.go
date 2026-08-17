@@ -23,9 +23,11 @@ type App struct {
 	Error                     io.Writer
 	Context                   context.Context
 	Cwd                       string
+	Executable                string
 	Version                   string
 	VersionDate               string
 	PolicyEditor              func(context.Context, string) error
+	CatalogEditor             func(context.Context, string) error
 	StartReplacementConfirmer func(context.Context, []string) (bool, error)
 	SingleSelector            func(context.Context, *os.File, io.Writer, selector.Prompt, []selector.Candidate) (selector.Candidate, bool, error)
 }
@@ -73,6 +75,8 @@ func (app App) Run(arguments []string) int {
 		return app.runInit(arguments[1:])
 	case "config":
 		return app.runConfig(arguments[1:])
+	case "catalog":
+		return app.runCatalog(arguments[1:])
 	case "policy":
 		return app.runPolicy(arguments[1:])
 	case "plugins":
@@ -81,6 +85,10 @@ func (app App) Run(arguments []string) int {
 		return app.runServices(arguments[1:])
 	case "doctor":
 		return app.runDoctor(arguments[1:])
+	case "status":
+		return app.runWorkspaceStatus(arguments[1:])
+	case "__hot-reload":
+		return app.runHotReloadWatcher(arguments[1:])
 	case "__completion":
 		return app.runCompletion(arguments[1:])
 	default:
@@ -136,6 +144,8 @@ func (app App) runHelp(arguments []string) int {
 		return app.runInit([]string{"--help"})
 	case "config":
 		return app.runConfig([]string{"--help"})
+	case "catalog":
+		return app.runCatalog([]string{"--help"})
 	case "policy":
 		return app.runPolicy([]string{"--help"})
 	case "plugins":
@@ -144,6 +154,8 @@ func (app App) runHelp(arguments []string) int {
 		return app.runServices([]string{"--help"})
 	case "doctor":
 		return app.runDoctor([]string{"--help"})
+	case "status":
+		return app.runWorkspaceStatus([]string{"--help"})
 	default:
 		app.printUnknownCommand(arguments[0])
 		return 2
@@ -241,13 +253,22 @@ func (app App) runStart(arguments []string) int {
 		}
 		services = selected
 	}
+	dashboardAvailable := !*dryRun && !*tail && convenruntime.DashboardAvailable(app.Input, app.Output)
+	var dashboardOptions convenruntime.TailOptions
+	if dashboardAvailable {
+		dashboardOptions, err = dashboardTailOptions(workspace, nil, app.Version)
+		if err != nil {
+			return app.fail(err)
+		}
+	}
 	startOptions := convenruntime.StartOptions{
-		Common:     options,
-		Services:   services,
-		DryRun:     *dryRun,
-		SkipBuild:  *skipBuild,
-		SkipVerify: *skipVerify,
-		Output:     app.Output,
+		Common:              options,
+		Services:            services,
+		DryRun:              *dryRun,
+		SkipBuild:           *skipBuild,
+		SkipVerify:          *skipVerify,
+		HotReloadExecutable: app.Executable,
+		Output:              app.Output,
 	}
 	session, err := convenruntime.Start(app.Context, workspace, startOptions)
 	var running *convenruntime.RunningServicesError
@@ -274,8 +295,8 @@ func (app App) runStart(arguments []string) int {
 		}
 		return 0
 	}
-	if convenruntime.DashboardAvailable(app.Input, app.Output) {
-		if err := convenruntime.TailLogs(app.Context, workspace, session, convenruntime.TailOptions{Version: app.Version}, app.Input, app.Output); err != nil {
+	if dashboardAvailable {
+		if err := convenruntime.TailLogs(app.Context, workspace, session, dashboardOptions, app.Input, app.Output); err != nil {
 			return app.fail(err)
 		}
 	}
@@ -364,7 +385,11 @@ func (app App) runLogs(arguments []string) int {
 		return 0
 	}
 	if mode == logDisplayDashboard {
-		if err := convenruntime.TailLogs(app.Context, workspace, session, convenruntime.TailOptions{Names: flags.Args(), Version: app.Version}, app.Input, app.Output); err != nil {
+		options, err := dashboardTailOptions(workspace, flags.Args(), app.Version)
+		if err != nil {
+			return app.fail(err)
+		}
+		if err := convenruntime.TailLogs(app.Context, workspace, session, options, app.Input, app.Output); err != nil {
 			return app.fail(err)
 		}
 		return 0
@@ -429,7 +454,11 @@ func (app App) runDashboard(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
-	if err := convenruntime.TailLogs(app.Context, workspace, session, convenruntime.TailOptions{Names: flags.Args(), Version: app.Version}, app.Input, app.Output); err != nil {
+	options, err := dashboardTailOptions(workspace, flags.Args(), app.Version)
+	if err != nil {
+		return app.fail(err)
+	}
+	if err := convenruntime.TailLogs(app.Context, workspace, session, options, app.Input, app.Output); err != nil {
 		return app.fail(err)
 	}
 	return 0
@@ -764,6 +793,14 @@ func (app App) withDefaults() App {
 			return launchPolicyEditor(ctx, input, output, errorOutput, path)
 		}
 	}
+	if app.CatalogEditor == nil {
+		input := app.Input
+		output := app.Output
+		errorOutput := app.Error
+		app.CatalogEditor = func(ctx context.Context, path string) error {
+			return launchCatalogEditor(ctx, input, output, errorOutput, path)
+		}
+	}
 	if app.StartReplacementConfirmer == nil {
 		input := app.Input
 		errorOutput := app.Error
@@ -791,10 +828,12 @@ These are common Conven commands:
 set up and configure a workspace
    init       Initialize a Conven workspace
    config     View or change Conven settings
+   catalog    Edit or validate the workspace service catalog
    policy     Edit, import, or reset the workspace manifest
    plugins    Install, list, remove, or run plugins
 
 run and inspect local services
+   status     Show the complete workspace and runtime status
    services   List, start, restart, stop, and inspect services
    doctor     Validate workspace and connection configuration
 
@@ -803,6 +842,9 @@ Run 'conven help <command>' or 'conven <command> --help' for detailed help.
 }
 
 func (app App) printVersion() {
+	fmt.Fprintf(app.Output, "       %s       %s\n", "ccc", "/====O")
+	fmt.Fprintf(app.Output, "%s %s   %s%s\n", "O===O","cc", "=====O", "====O")
+	fmt.Fprintf(app.Output, "       %s       %s\n", "ccc", "\\====O")
 	fmt.Fprintf(app.Output, "conven version %s (%s)\n%s\n", app.Version, app.VersionDate, projectHomepage)
 }
 
@@ -818,6 +860,7 @@ func (app App) printUnknownCommand(command string) {
 	style := terminal.New(app.Error)
 	fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: %s is not a conven command. See 'conven --help'.", quoteCommand(command))))
 	suggestions := similarCommands(command, []string{
+		"catalog",
 		"config",
 		"doctor",
 		"help",
@@ -825,6 +868,7 @@ func (app App) printUnknownCommand(command string) {
 		"plugins",
 		"policy",
 		"services",
+		"status",
 		"version",
 	})
 	if len(suggestions) == 0 {
@@ -929,6 +973,9 @@ Without service names, --start opens an interactive selector and asks for
 confirmation; --restart restarts only changed services in the current session.
 After a successful interactive --start or --restart, the dashboard opens by
 default; pass --tail to stream plain-text logs instead.
+Successful starts and restarts keep watching service source. A failed rebuild
+is logged without stopping the last-known-good process; a successful rebuild
+automatically replaces it.
 If --start finds a verified running session, it validates the replacement plan
 before offering Stop then start or Cancel (default). Non-interactive conflicts
 leave the current session unchanged.

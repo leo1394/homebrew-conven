@@ -116,7 +116,7 @@ func TestInitWorkspaceCreatesAndPreservesWorkspaceFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	missing := "disabled-services.properties"
+	missing := ".conven/catalog.yaml"
 	if err := os.Remove(filepath.Join(workspace, missing)); err != nil {
 		t.Fatal(err)
 	}
@@ -147,38 +147,16 @@ func TestInitWorkspaceCreatesAndPreservesWorkspaceFiles(t *testing.T) {
 }
 
 func TestInitWorkspaceFilesContainDocumentedCatalogHeaders(t *testing.T) {
-	servicesHeader := `# Conven Apollo/Consul policy generator service catalog.
-#
-# Blank lines and full-line comments beginning with # are ignored.
-# The generator requires at least one valid record and does not provide a
-# built-in service catalog. If this file has no records, generation stops and
-# reports the repositories discovered in the workspace.
-#
-# Supported records:
-#   repository,kind,port
-#   binding:<rpc-binding>,rpc,port
-#   repository,<rpc-binding>,rpc,port
-#
-# kind must be http or rpc. Ports must be unique integers from 1 to 65535.
-# A repository entry is used only when that repository exists in the workspace.
-# A binding-only entry is resolved from consumer Consul keys to one local RPC
-# provider repository; unresolved entries are ignored.
-`
-	disabledHeader := `# RPC bindings disabled by the Conven Apollo/Consul policy generator.
-#
-# Put one RPC binding on each line. Blank lines and full-line comments
-# beginning with # are ignored. A binding absent from the generated services is
-# ignored with a warning.
-#
-# Passing --disable-bindings replaces this file for that invocation.
-# Disabled bindings also take precedence over inferred local dependencies.
-
-`
-	if string(examples.ServicesProperties) != servicesHeader {
-		t.Fatalf("embedded services.properties = %q", examples.ServicesProperties)
-	}
-	if string(examples.DisabledServicesProperties) != disabledHeader {
-		t.Fatalf("embedded disabled-services.properties = %q", examples.DisabledServicesProperties)
+	for _, expected := range []string{
+		"version: 1",
+		"services: []",
+		"repository: catalog-api",
+		"rpcBinding: catalogRpc",
+		"disabledRpcBindings: []",
+	} {
+		if !strings.Contains(string(examples.CatalogYAML), expected) {
+			t.Fatalf("embedded catalog.yaml is missing %q", expected)
+		}
 	}
 	for _, expected := range []string{
 		"spec: conven-workspace-policy-generator",
@@ -186,6 +164,9 @@ func TestInitWorkspaceFilesContainDocumentedCatalogHeaders(t *testing.T) {
 		"repository: \"https://github.com/leo1394/homebrew-conven\"",
 		"# Conven 工作区 Policy 生成器：AI 实现规范",
 		"go-zero-apollo-consul-v1",
+		".conven/catalog.yaml",
+		"rpcBinding",
+		"disabledRpcBindings",
 		"conven plugins --run [NAME]",
 		"--output [FILE]",
 		"--disable-bindings",
@@ -200,6 +181,9 @@ func TestInitWorkspaceFilesContainDocumentedCatalogHeaders(t *testing.T) {
 		"repository: \"https://github.com/leo1394/homebrew-conven\"",
 		"# Conven Workspace Policy Generator: AI Implementation Specification",
 		"go-zero-apollo-consul-v1",
+		".conven/catalog.yaml",
+		"rpcBinding",
+		"disabledRpcBindings",
 		"conven plugins --run [NAME]",
 		"--output [FILE]",
 		"--disable-bindings",
@@ -294,14 +278,15 @@ func TestInitWorkspaceRejectsUnsafeWorkspaceFiles(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workspace := t.TempDir()
-			unsafePath := filepath.Join(workspace, "services.properties")
+			boundary := filepath.Join(workspace, ".conven")
+			if err := os.Mkdir(boundary, 0700); err != nil {
+				t.Fatal(err)
+			}
+			unsafePath := filepath.Join(boundary, "catalog.yaml")
 			target := test.prepare(t, unsafePath)
 			_, _, err := InitWorkspace(workspace, []byte("version: 1\n"))
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want %q", err, test.want)
-			}
-			if _, statErr := os.Stat(filepath.Join(workspace, ".conven")); !os.IsNotExist(statErr) {
-				t.Fatalf("unsafe workspace file validation created .conven: %v", statErr)
 			}
 			if target != "" {
 				data, readErr := os.ReadFile(target)

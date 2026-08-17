@@ -49,11 +49,10 @@ AI 实现需要区分两个产物：
 | 类型 | 名称 | 必需 | 规范 |
 | --- | --- | --- | --- |
 | 进程输入 | `--workspace PATH` | 是 | Conven 注入的 canonical workspace |
-| 文件输入 | `services.properties` | 是 | 服务 identity、kind 和 local port 的显式目录；必须至少包含一条有效记录 |
-| 文件输入 | `disabled-services.properties` | 否 | 每行一个需要关闭的 RPC binding |
+| 文件输入 | `.conven/catalog.yaml` | 是 | repository/RPC identity、kind、local port 和 disabled binding 的显式目录 |
 | 文件输入 | `conven-generator.json` | 是 | profile、环境和连接的显式非敏感输入 |
 | 只读输入 | 直接子仓库 | 是 | 源码、构建入口、application 和 environment bootstrap |
-| CLI 覆盖 | `--disable-bindings` | 否 | 完整替换 disabled 文件内容 |
+| CLI 覆盖 | `--disable-bindings` | 否 | 本次运行完整替换 `catalog.yaml` 的 `disabledRpcBindings` |
 | 主输出 | Conven manifest v1 YAML | 是 | UTF-8、单文档、严格字段、完整 candidate |
 | 诊断输出 | stderr | 按需 | warning、unresolved、fatal；不得混入 `--stdout` YAML |
 | AI 实现产物 | 可执行 Python 3 plugin | 是 | 可安装且接受本表所列进程输入 |
@@ -220,7 +219,7 @@ conven -C <workspace> plugins --run NAME [plugin-args...]
 
 - 显式禁用一个或多个 RPC binding；
 - 可以重复出现，结果去重并稳定排序；
-- 一旦显式提供，完整替代 `disabled-services.properties`，不是追加；
+- 一旦显式提供，完整替代 `catalog.yaml` 的 `disabledRpcBindings`，不是追加；
 - 不得存在任何代码内置的“永远禁用 binding”。
 
 ## 5. 输入模型与证据优先级
@@ -228,7 +227,7 @@ conven -C <workspace> plugins --run NAME [plugin-args...]
 输入由以下来源组成，优先级从高到低：
 
 1. 显式 CLI 参数；
-2. workspace 根目录的人工声明文件；
+2. 人工声明的 workspace 文件，包括 `.conven/catalog.yaml` 和 `conven-generator.json`；
 3. workspace 当前文件内容中的构建、入口和运行配置，包括尚未提交的本地修改；
 4. 可以由多个独立代码证据一致证明的推导结果。
 
@@ -247,64 +246,58 @@ conven -C <workspace> plugins --run NAME [plugin-args...]
 - 对规范明确允许忽略的条目输出 warning/unresolved 摘要；
 - 不得为了生成“看起来完整”的 YAML 而编造值。
 
-## 6. `services.properties` 输入规范
+## 6. `.conven/catalog.yaml` 输入规范
 
 ### 6.1 位置和用途
 
 固定位置：
 
 ```text
-<workspace>/services.properties
+<workspace>/.conven/catalog.yaml
 ```
 
-该文件是服务目录和本地端口的显式规范来源。文件缺失、为空或只有注释时，生成器
-必须失败，并输出记录模板及已发现的候选仓库。实现不得包含内置服务目录，也不得
-发明端口或根据目录名隐式选中仓库。
+该文件是服务 identity、kind、本地端口和禁用 RPC binding 的显式规范来源。文件缺失
+或无效时，生成器必须失败，并输出 schema 及已发现的候选仓库。实现不得包含内置
+服务目录，也不得发明端口或根据目录名隐式选中仓库。
 
-创建服务目录时，AI 可以根据源码和配置证据写入能够唯一证明的记录；端口没有唯一
-证据时必须请求输入。插件执行时只消费已经确认的文件，不重新猜测目录内容。
+创建服务目录时，AI 可以根据源码和配置证据编辑该文件；端口没有唯一证据时必须
+请求输入。支持的 Conven 工作流是先执行 `conven catalog --edit`，再执行
+`conven catalog --validate`。插件执行时只消费已经确认的文件，不重新猜测目录内容。
 
-### 6.2 文本规则
+### 6.2 YAML schema
 
-- UTF-8 文本；
-- 每个非注释行是一条逗号分隔记录；
-- 字段去除首尾空白；
-- 忽略空行；
-- 忽略去除首尾空白后以 `#` 开头的整行注释；
-- 不支持行尾注释；
-- 不支持 CSV 引号、转义或逗号嵌套。
+文件必须是 UTF-8、只包含一个 YAML document、拒绝未知字段，并采用以下结构。示例
+只表示语法，不代表默认服务：
 
-### 6.3 记录格式
-
-支持且只支持以下三种格式：
-
-```text
-repository,kind,port
-binding:<rpc-binding>,rpc,port
-repository,<rpc-binding>,rpc,port
+```yaml
+version: 1
+services:
+  - repository: catalog-api
+    kind: http
+    port: 18080
+  - rpcBinding: catalogRpc
+    kind: rpc
+    port: 18081
+  - repository: inventory-rpc
+    rpcBinding: inventoryRpc
+    kind: rpc
+    port: 18082
+disabledRpcBindings:
+  - searchRpc
 ```
 
-示例仅表示语法，不代表默认服务：
+`version` 必须为 `1`。`services` 是有序 sequence。每个 service 必须声明
+`repository`、`rpcBinding` 或同时声明两者，不得隐式合成 identity。`kind` 和 `port`
+必填。`disabledRpcBindings` 是可选的 RPC binding 名称 sequence。
 
-```properties
-# repository-backed HTTP service
-catalog-api,http,18080
-
-# repository-backed RPC service
-catalog-rpc,rpc,18081
-
-# only the Go binding is known; infer its provider repository
-binding:catalogRpc,rpc,18082
-
-# repository and consumer binding are both known
-inventory-rpc,inventoryRpc,rpc,18083
-```
+### 6.3 字段约束
 
 字段约束：
 
 - `repository`：匹配 `[A-Za-z0-9][A-Za-z0-9._-]*`；
 - `kind`：`go-zero-apollo-consul-v1` profile 只允许 `http` 或 `rpc`；
-- `rpc-binding`：首字符为 ASCII 字母或 `_`，其余为 ASCII 字母、数字、`_`、`-`；
+- `rpcBinding`：首字符为 ASCII 字母或 `_`，其余为 ASCII 字母、数字、`_`、`-`；
+- 声明 `rpcBinding` 的 service 必须使用 `kind: rpc`；
 - `port`：十进制整数，范围 `1..65535`。
 
 完整目录在过滤 workspace 仓库前必须验证：
@@ -314,7 +307,7 @@ inventory-rpc,inventoryRpc,rpc,18083
 - port 全局不重复；
 - 格式、kind 和字符集合法。
 
-声明顺序是稳定输出顺序。注释和空行不参与排序。
+声明顺序是稳定输出顺序。
 
 ### 6.4 workspace 子集规则
 
@@ -324,29 +317,15 @@ inventory-rpc,inventoryRpc,rpc,18083
 - workspace 中存在但未在目录声明的仓库：默认忽略；
 - 最终没有任何可生成服务：报错。
 
-## 7. `disabled-services.properties` 输入规范
+## 7. 禁用 RPC binding 规则
 
-固定位置：
-
-```text
-<workspace>/disabled-services.properties
-```
-
-格式：每个非注释行只有一个 RPC binding。
-
-```properties
-# Keep this client disabled in local runtime config.
-searchRpc
-auditRpc
-```
-
-文本和 binding 字符约束与 `services.properties` 相同。
+catalog 的 `disabledRpcBindings` sequence 是持久化的禁用集合。每项使用与
+`services[].rpcBinding` 相同的字符约束，并且不得重复。字段缺失或 sequence 为空表示
+禁用集合为空。`--disable-bindings` 只在单次生成时于内存中替换该 sequence，不编辑 catalog。
 
 处理规则：
 
-- 文件缺失、为空或只有注释：禁用集合为空；
-- 重复记录去重；
-- 文件 binding 未在最终服务代码中声明：warning 后忽略；
+- catalog binding 未在最终服务代码中声明：warning 后忽略；
 - CLI binding 未在最终服务代码中声明：报错；
 - 命中的 binding 对每个声明它的本地服务生成 service-level config patch；
 - 禁用 binding 必须优先于本地依赖推导；
@@ -569,7 +548,8 @@ Connection 精确来自 `conven-generator.json`，仅允许 `none` 或 `ktctl`�
 6. 匹配多个 provider：报歧义错误；
 7. 唯一 provider：按完整 repository adapter 严格扫描；
 8. 新增 provider 后重新处理其他 unresolved binding，允许链式发现；
-9. 如果 binding 推导到一个已经显式配置的 repository：报错，并要求合并为四字段记录。
+9. 如果 binding 推导到一个已经显式配置的 repository：报错，并要求合并为同时声明
+   `repository` 和 `rpcBinding` 的单个 entry。
 
 对 `repository,<binding>,rpc,port`：
 
@@ -830,7 +810,7 @@ ${dependency.port}
 
 ### 15.1 稳定顺序
 
-- services 按 `services.properties` 声明顺序；
+- services 按 `.conven/catalog.yaml` 声明顺序；
 - 推导服务按触发其 binding 条目的顺序；
 - disabled bindings 按名称排序；
 - dependency 目标按最终 service 顺序；
@@ -862,7 +842,7 @@ ${dependency.port}
 必须失败的情况包括：
 
 - workspace 无效；
-- properties 格式非法；
+- catalog YAML 或 schema 非法；
 - 重复 repository、binding 或 port；
 - 显式存在的 repository 结构不完整；
 - catalog kind 与源码 kind 不一致；
@@ -877,8 +857,8 @@ ${dependency.port}
 - catalog repository 没有 checkout；
 - binding-only 缺少 consumer key 证据；
 - binding-only 有唯一 key但本地没有 provider；
-- disabled file 中的 binding 未在最终 active services 中声明；
-- 四字段 binding 缺少 consumer 证据，因而 alias 未验证。
+- `disabledRpcBindings` 中的 binding 未在最终 active services 中声明；
+- dual-identity entry 缺少 consumer 证据，因而 RPC alias 未验证。
 
 以上 warning 必须包含来源文件和行号；不得静默忽略，也不得输出 secret value。
 
@@ -979,7 +959,7 @@ conven services --start --env ENVIRONMENT --dry-run SERVICE...
 
 ### 17.4 必须覆盖的回归场景
 
-- properties 缺失、空文件、只有注释；
+- catalog 缺失、YAML 无效、多 document、未知字段、services 为空；
 - generator JSON 缺失、未知字段、非法 profile、非法 connection driver；
 - 环境名中的 `.`、`..`、路径分隔符、空白或非 ASCII 安全字符；
 - JSON 连接字符串中的 YAML 特殊值、控制字符和禁止的 `${...}`；
@@ -989,10 +969,10 @@ conven services --start --env ENVIRONMENT --dry-run SERVICE...
 - 未声明的 workspace repository；
 - binding-only 正向推导；
 - 无 key、无 provider、多 key、多 provider；
-- 四字段 binding 匹配、不匹配、无证据；
+- dual-identity entry 匹配、不匹配、无证据；
 - HTTP 根 `discovType: consul` 必须拒绝；
-- disabled file 缺失、为空、unknown、重复；
-- CLI disabled 完整覆盖文件；
+- `disabledRpcBindings` 为空、非法或重复；
+- CLI disabled 在内存中完整覆盖 catalog sequence；
 - disabled binding 指向 active provider 时仍不建立 local dependency；
 - `--stdout`、`--check`、新文件、交互覆盖和非交互拒绝覆盖；
 - 输出 YAML 单文档、无未知字段、可被 Conven import；
@@ -1032,7 +1012,7 @@ Python 3 可执行 .py 插件；它必须接受 Conven 注入的 --workspace PAT
 默认值、fixture 和示例不得内置组织名、真实业务服务名、私有地址、环境名、namespace
 或端口表；candidate 中出现的工作区专用值必须来自显式输入或可定位的代码证据。
 
-读取 services.properties、disabled-services.properties 和 conven-generator.json，
+读取 .conven/catalog.yaml 和 conven-generator.json，
 并严格遵守本规范的语法、子集、binding-only、禁用、环境和依赖推导规则。所有无法
 从代码或显式输入证明的端口、业务依赖、环境连接和远程地址都不得猜测；请报错或
 列为 unresolved。

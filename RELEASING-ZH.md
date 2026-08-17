@@ -59,8 +59,11 @@ rebuild 为 `0`，同时更新临时 block。该流程不会移动或重建源�
 发布到 GitHub Releases，不使用 GHCR。
 
 `ci.yml` 保留为 Go 及 stable/HEAD 的快速回归 workflow；`tests.yml` 负责 Homebrew
-打包。Formula PR 会有意同时运行二者；只有 `tests.yml` 生成可供 `brew pr-pull`
-使用的 artifact，它在 push 事件中只做语法检查，不发布 bottle。
+打包。Formula PR 会有意同时运行二者；修改 `tests.yml` 自身或 Homebrew pin 时也会
+运行 `tests.yml`。只有该 workflow 生成可供 `brew pr-pull` 使用的 artifact，它在 push
+事件中只做语法检查，不发布 bottle。`tests.yml` 与 `publish.yml` 都会使用
+`.github/homebrew-brew.commit` 记录的 commit，并禁止自动更新；Linux 测试镜像也固定
+到 digest，避免发布过程中静默引入新的 developer command 或 runner 镜像。
 
 `publish.sh` 运行期间不要手动合并或关闭生成的 Bottle PR。脚本会先发布 artifacts，
 再由 Homebrew 完成 Formula 更新。如果 test-bot 已成功、但 PR 在发布前被合并，重新
@@ -132,7 +135,7 @@ git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG"
 | `cmd/conven/main.go` | 设置 `version` 和 `versionDate` 变量 |
 | `VERSION.txt` | 仅保留 `X.Y.Z` 和末尾换行 |
 | `CHANGELOG.md` | 添加发布日期及用户可见变化 |
-| `Formula/conven.rb` test | HEAD 构建应断言准确的两行版本输出 |
+| `Formula/conven.rb` test | HEAD 构建应断言准确的两行版本元数据后缀 |
 | `README.md` / `README-ZH.md` | 仅在安装方式或行为变化时更新 |
 | `RELEASING.md` / `RELEASING-ZH.md` | 发布流程变化时保持中英文同步 |
 
@@ -174,8 +177,7 @@ go build -o /tmp/conven-release ./cmd/conven
 test -f examples/application.yaml
 test ! -e examples/loom.yaml
 test ! -e examples/conven.yaml
-test -f examples/workspace/services.properties
-test -f examples/workspace/disabled-services.properties
+test -f examples/workspace/catalog.yaml
 test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
 test -f examples/workspace/README.md
@@ -191,7 +193,8 @@ git status --short
 ```
 
 构建出的程序必须输出目标版本、发布日期和规范项目 URL。`conven --version`、
-`conven -v` 与 `conven version` 必须输出完全相同的两行内容，例如：
+`conven -v` 与 `conven version` 可以带品牌前缀，但末尾必须是完全相同的两行
+版本元数据，例如：
 
 ```text
 conven version X.Y.Z (YYYY-MM-DD)
@@ -201,9 +204,9 @@ https://github.com/leo1394/homebrew-conven
 ### Workspace 接入与插件验收
 
 如果本次发布修改了 workspace 接入或插件行为，必须使用构建出的二进制在隔离
-workspace 中执行 smoke test。首次 `init` 必须生成 manifest 和四个 workspace
+workspace 中执行 smoke test。首次 `init` 必须生成 manifest 和三个 workspace
 指导文件；再次执行 `init` 必须逐字节保留全部已有文件。`services --registry` 可以更新
-`.conven/conven.yaml`，但不得修改 properties catalog。`policy --import` 省略来源文件
+`.conven/conven.yaml`，但不得修改 catalog。`policy --import` 省略来源文件
 时必须交互选择 workspace 根目录的 YAML 候选；自动检查必须显式传入来源文件：
 
 ```bash
@@ -220,9 +223,10 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   tee "$CONVEN_SMOKE_INIT_OUTPUT"
 grep -Fq '==> Initialized Conven workspace' "$CONVEN_SMOKE_INIT_OUTPUT"
 grep -Fq '  - Manifest: ' "$CONVEN_SMOKE_INIT_OUTPUT"
+/tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" catalog --validate
+/tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" status
 for CONVEN_SMOKE_ASSET in \
-  services.properties \
-  disabled-services.properties \
+  .conven/catalog.yaml \
   CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
   README.md
 do
@@ -242,8 +246,7 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
 grep -Fq 'language: zh-CN' \
   "$CONVEN_SMOKE_CHINESE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
 CONVEN_ASSET_SHA_BEFORE="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
-  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
 CONVEN_SMOKE_REINIT_OUTPUT="$CONVEN_SMOKE_ROOT/reinit-output.txt"
@@ -251,28 +254,24 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init | \
   tee "$CONVEN_SMOKE_REINIT_OUTPUT"
 for CONVEN_SMOKE_ASSET in \
-  services.properties \
-  disabled-services.properties \
+  .conven/catalog.yaml \
   CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
   README.md
 do
   grep -Fq "  - $CONVEN_SMOKE_ASSET Skipped" "$CONVEN_SMOKE_REINIT_OUTPUT"
 done
 CONVEN_ASSET_SHA_AFTER="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
-  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties" \
+  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
 test "$CONVEN_ASSET_SHA_BEFORE" = "$CONVEN_ASSET_SHA_AFTER"
 
 CONVEN_CATALOG_SHA_BEFORE="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
-  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties")"
+  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml")"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" services --registry
 CONVEN_CATALOG_SHA_AFTER="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/services.properties" \
-  "$CONVEN_SMOKE_WORKSPACE/disabled-services.properties")"
+  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml")"
 test "$CONVEN_CATALOG_SHA_BEFORE" = "$CONVEN_CATALOG_SHA_AFTER"
 
 cp "$CONVEN_SMOKE_WORKSPACE/.conven/conven.yaml" \
@@ -309,7 +308,6 @@ go test -count=1 ./internal/cli ./internal/plugins \
 ```bash
 git add cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb
 git add README.md README-ZH.md RELEASING.md RELEASING-ZH.md
-git add docs/conven.1 docs/COMMAND-OUTPUT-EXAMPLES.md
 git add examples/workspace/README.md
 git add examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 git add examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
@@ -354,10 +352,10 @@ tag。
 5. 创建 Formula PR，并记录 PR 编号及准确的 head SHA。
 6. 等待全部 `brew test-bot` job。该 workflow 只在 PR 上构建并上传各平台的
    `*.bottle.*` artifact。
-7. 使用 PR 编号和已记录的 head SHA 调度 `.github/workflows/publish.yml`。
-   `brew pr-pull` 会拒绝已经变化的 PR head，把 bottle 发布到
-   `conven-X.Y.Z` GitHub Release，应用生成的 `bottle do` 元数据，并推送
-   `master`。
+7. 使用 PR 标识、预期 base 与 `master` SHA、Release 名称和发布 cycle/attempt 调度
+   `.github/workflows/publish.yml`。该 workflow 会在执行 `brew pr-pull` 前再次校验
+   不可变元组，把 bottle 发布到 `conven-X.Y.Z` GitHub Release，应用生成的
+   `bottle do` 元数据，并推送 `master`。
 8. 等待 publish workflow 完成，快进本地 `master`，并验证 Release asset 和
    Formula bottle 元数据。
 
@@ -403,13 +401,32 @@ gh run list --workflow publish.yml --limit 10
   `--apply --bottle`。Formula 分支由脚本确定性生成，不应手工修改；如果源码或
   Formula 本身有缺陷，由于源码 tag 不可变，必须发布新的 patch 版本。
 - test-bot 已通过但发布失败时，重新执行 `--apply --bottle`；它会针对当前已验证的
-  PR head 调度或续接 `publish.yml`。如果失败的 run 已上传部分
-  `conven-X.Y.Z` Release，重试前先删除该不完整 Release；GitHub 会拒绝重名 asset。
+  PR head 调度或续接 `publish.yml`。命令会打印失败的 job/step 和经过脱敏的末尾错误。
+  只有准确匹配的 GitHub Release JSON EOF 瞬时错误才允许自动执行一次 attempt 2，且
+  PR、base、`master`、源码 tag 与空或不存在的 Release 必须全部保持不变。命令还会
+  输出完整的 `gh run view RUN_ID --repo leo1394/homebrew-conven --log-failed` 指令；已合并
+  PR 的恢复流程绝不执行该自动重试。发布 cycle 状态持久化在 workflow inputs 中，因此
+  进程中断后会续接同一 cycle；attempt 2 失败后，只有用户再次显式运行命令才会创建下一
+  cycle，不会自动调度第三次尝试。
+- Release 只要包含任何 asset，就会拒绝自动重试和自动删除。不要合并 Bottle PR，也
+  不要立即重新发布；先人工核对列出的 asset、Release tag、Formula PR 与 `master`，
+  处理完部分状态后才能重新执行 `--apply --bottle`。
 - 发布已经成功但本地 checkout 落后时，从 `origin/master` 快进 `master` 后重新
   验证。不要重复发布 asset，也不要移动源码 tag。
 - 如果 `origin/master` 已包含 bottle metadata，但 GitHub Release 不完整或无效，
   脚本不会移动本地 checkout。修复或删除该不完整 Release 后重新执行
   `--apply --bottle`；验证通过后会安全快进本地 `master`，且不会移动源码 tag。
+
+### 更新固定的 Homebrew 环境
+
+Homebrew 升级必须与产品发布分开进行。选择经过审阅的 Homebrew commit，以及包含该
+commit 的 Linux `ghcr.io/homebrew/brew` 镜像 digest，在一个只包含基础设施变更的 PR
+中同时更新 `.github/homebrew-brew.commit` 和 `.github/workflows/tests.yml` 的镜像
+digest；不得使用分支或可变镜像 tag。
+
+执行 `--prepare --bottle`，并要求三个 `brew test-bot` job 及 workflow 检查全部通过；
+在每个 job 中确认所断言的 Homebrew HEAD 都等于新 commit。先合并该基础设施变更，再
+准备 Conven 版本；Bottle PR 或 publication cycle 活跃期间不得修改 pin。
 
 ### 源码构建 Formula 完成及故障恢复
 

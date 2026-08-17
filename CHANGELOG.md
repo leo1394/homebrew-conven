@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.13 - 2026-08-17
+
+- Add a compact, color-aware Conven ASCII mark to version output, with plain
+  ASCII fallback for non-interactive and color-disabled terminals.
+- Add automatic source watching for services started or restarted by Conven.
+  Changed services rebuild after a short debounce; compiler output is copied to
+  the service log, a failed build leaves the last-known-good process running,
+  and only a successful build enters the controlled process handoff.
+- Replace the root-level service property files with the strict declarative
+  `.conven/catalog.yaml` format and add validated `conven catalog --edit` and
+  `conven catalog --validate` workflows.
+- Add `conven status` as a combined workspace, service catalog, disabled RPC
+  binding, and runtime-session overview.
+- Show disabled RPC bindings in the Dashboard and right-align the earliest
+  displayed service start time in its title.
+
 ## 0.2.12 - 2026-08-13
 
 - Add a reusable single-selection terminal picker for ambiguous plugin and
