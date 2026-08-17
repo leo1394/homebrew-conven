@@ -611,7 +611,8 @@ func TestFailConnectionAttemptStopsStartedOwnedProcessGroup(t *testing.T) {
 	pidPath := filepath.Join(directory, "connection.pid")
 	logPath := filepath.Join(directory, "connection.log")
 	ktctl := filepath.Join(directory, "ktctl")
-	if err := os.WriteFile(ktctl, []byte("#!/bin/sh\necho $$ > \"$CONVEN_TEST_CONNECTION_PID\"\necho 'ERR Exit: Post /api/v1/namespaces/default/pods: EOF'\ntrap '' INT TERM\nwhile :; do sleep 1; done\n"), 0700); err != nil {
+	diagnostic := "ERR Exit: Post /api/v1/namespaces/default/pods: EOF"
+	if err := os.WriteFile(ktctl, []byte("#!/bin/sh\necho $$ > \"$CONVEN_TEST_CONNECTION_PID\"\necho '"+diagnostic+"'\ntrap '' INT TERM\nwhile :; do sleep 1; done\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CONVEN_TEST_CONNECTION_PID", pidPath)
@@ -624,14 +625,20 @@ func TestFailConnectionAttemptStopsStartedOwnedProcessGroup(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if _, err := os.Stat(pidPath); err == nil {
+		_, pidErr := os.Stat(pidPath)
+		if pidErr != nil && !os.IsNotExist(pidErr) {
+			t.Fatal(pidErr)
+		}
+		log, logErr := os.ReadFile(logPath)
+		if logErr != nil && !os.IsNotExist(logErr) {
+			t.Fatal(logErr)
+		}
+		if pidErr == nil && strings.Contains(string(log), diagnostic) {
 			break
-		} else if !os.IsNotExist(err) {
-			t.Fatal(err)
 		}
 		if time.Now().After(deadline) {
 			_ = stopConnection(process, true)
-			t.Fatal("connection process did not record its pid")
+			t.Fatal("connection process did not record its pid and diagnostic")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -654,7 +661,7 @@ func TestFailConnectionAttemptStopsStartedOwnedProcessGroup(t *testing.T) {
 	if ProcessGroupAlive(pid) {
 		t.Fatalf("connection process group %d is still active", pid)
 	}
-	for _, expected := range []string{"ERR Exit: Post /api/v1/namespaces/default/pods: EOF", logPath} {
+	for _, expected := range []string{diagnostic, logPath} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("connection diagnostics %q do not contain %q", output.String(), expected)
 		}

@@ -307,11 +307,17 @@ jobs:
           brew_commit=$(tr -d '[:space:]' < "$pin_file")
           [[ "$brew_commit" =~ ^[0-9a-f]{40}$ ]]
           brew_repository=$(brew --repo)
-          git -C "$brew_repository" fetch --quiet --depth=1 origin "$brew_commit"
+          if [[ "$(git -C "$brew_repository" rev-parse --is-shallow-repository)" == "true" ]]; then
+            git -C "$brew_repository" fetch --quiet --unshallow --tags origin
+          else
+            git -C "$brew_repository" fetch --quiet --tags origin
+          fi
+          git -C "$brew_repository" fetch --quiet origin "$brew_commit"
           git -C "$brew_repository" checkout --quiet --force -B main "$brew_commit"
           git -C "$brew_repository" update-ref refs/remotes/origin/main "$brew_commit"
           [[ "$(git -C "$brew_repository" rev-parse HEAD)" == "$brew_commit" ]]
           [[ "$(git -C "$brew_repository" rev-parse refs/remotes/origin/main)" == "$brew_commit" ]]
+          git -C "$brew_repository" describe --tags --abbrev=0 "$brew_commit" >/dev/null
           echo "commit=$brew_commit" >> "$GITHUB_OUTPUT"
           echo 'HOMEBREW_NO_AUTO_UPDATE=1' >> "$GITHUB_ENV"
 
