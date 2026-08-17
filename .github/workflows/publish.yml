@@ -360,7 +360,7 @@ jobs:
           fi
 
           tap_path=$(brew --repo "$GITHUB_REPOSITORY")
-          git -C "$tap_path" fetch --quiet --depth=1 origin "$HEAD_SHA"
+          git -C "$tap_path" fetch --quiet origin "$HEAD_SHA"
           git -C "$tap_path" cat-file -e "$HEAD_SHA^{commit}"
           formula_contents=$(git -C "$tap_path" show "$HEAD_SHA:Formula/conven.rb")
           grep -Fqx \
