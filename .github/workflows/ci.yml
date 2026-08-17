@@ -63,7 +63,10 @@ jobs:
           expected_version="$(<VERSION.txt)"
           expected_version_date="$(sed -nE 's/^var versionDate = "([0-9]{4}-[0-9]{2}-[0-9]{2})"$/\1/p' cmd/conven/main.go)"
           test -n "$expected_version_date"
-          test "$("$conven_bin" --version)" = "$(printf 'conven version %s (%s)\n%s' "$expected_version" "$expected_version_date" 'https://github.com/leo1394/homebrew-conven')"
+          version_output="$("$conven_bin" --version)"
+          printf '%s\n' "$version_output"
+          version_metadata="$(tail -n 2 <<< "$version_output")"
+          test "$version_metadata" = "$(printf 'conven version %s (%s)\n%s' "$expected_version" "$expected_version_date" 'https://github.com/leo1394/homebrew-conven')"
           c_workspace="$RUNNER_TEMP/conven-c-workspace"
           mkdir -p "$c_workspace"
           "$conven_bin" -C "$c_workspace" init
