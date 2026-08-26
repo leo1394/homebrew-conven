@@ -6,6 +6,20 @@ aggregates local logs.
 
 Conven repository: [leo1394/homebrew-conven](https://github.com/leo1394/homebrew-conven)
 
+## No-cluster local start
+
+When this workspace was created with `conven init --local`, it contains a
+Manifest v2 `local` environment with no cluster connection. Declare the
+addresses required by local services as environment endpoints, then:
+
+```bash
+conven doctor --env local
+conven services --start --env local <service>
+conven status
+```
+
+Conven checks endpoints referenced by the selected services before startup.
+
 ## Initialized files
 
 - `.conven/conven.yaml` is the active Conven workspace manifest.

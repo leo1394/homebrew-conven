@@ -128,6 +128,10 @@ func ScanServices(workspace string) ([]DiscoveredService, []string, error) {
 }
 
 func RenderDiscoveredManifest(workspace string, services []DiscoveredService) ([]byte, error) {
+	return renderDiscoveredManifest(workspace, services, 2)
+}
+
+func renderDiscoveredManifest(workspace string, services []DiscoveredService, version int) ([]byte, error) {
 	workspace, err := resolveCwd(workspace)
 	if err != nil {
 		return nil, err
@@ -152,7 +156,7 @@ func RenderDiscoveredManifest(workspace string, services []DiscoveredService) ([
 	encoder := yaml.NewEncoder(&data)
 	encoder.SetIndent(2)
 	err = encoder.Encode(discoveredManifest{
-		Version: 1,
+		Version: version,
 		Workspace: discoveredManifestWorkspace{
 			Name: filepath.Base(workspace),
 		},

@@ -7,9 +7,8 @@
 
 ![Conven——解决本地开发与集群环境隔离的痛点](assets/conven-banner-zh.png)
 
-Conven 是一个专注于本地开发的微服务编排工具。它选择一组服务在本地运行，
-将选中的依赖路由到 `127.0.0.1`，未选中的依赖继续使用远程服务发现，并把生成
-的配置保存在服务源码仓库之外。
+Conven 是一个专注于本地开发的微服务编排工具。它选择一组服务在本地运行，并通过
+配置的 Endpoint 或开发集群访问其余依赖。生成配置始终保存在服务源码仓库之外。
 
 - **启动最少服务：** 只运行当前改动涉及的服务。
 - **保留真实拓扑：** 本地服务可以继续访问远程 RPC、数据库、Kafka、配置中心
@@ -31,6 +30,8 @@ flowchart LR
     P --> R[".conven/runtime/current"]
     R --> A["本地 API"]
     R --> B["本地 RPC"]
+    E["已配置的本地 Endpoint"] --> A
+    E --> B
     A -->|"127.0.0.1"| B
     A -->|"ktctl + 远程服务发现"| D["开发环境依赖"]
     B -->|"ktctl + 远程服务发现"| D
@@ -70,11 +71,11 @@ Conven 内置的 materializer 只将生成的 YAML 写入
 ## 安装
 
 ```bash
-brew install leo1394/conven/conven
+brew tap leo1394/conven
+brew install conven
 ```
 
-完整名称会在需要时自动安装 tap，并且只信任 `conven` Formula。首次安装后，升级可以
-直接使用短名称：
+首次安装先添加 tap，再安装 `conven` Formula。之后升级可以直接使用短名称：
 
 ```bash
 brew update
@@ -87,6 +88,61 @@ Conven 支持 macOS 和 Linux。只有环境使用 `ktctl` connection driver 时
 
 ## 快速上手
 
+### 从 0 开发：没有集群和远程依赖
+
+先创建 `local` 环境并查看当前可用的 Service：
+
+```bash
+cd /path/to/workspace
+
+conven init --local
+conven services --list
+```
+
+明确启动多个本地服务时直接列出名称；需要递归加入
+本地 Service 依赖时使用显式选项 `--with-dependencies`：
+
+```bash
+conven services --start portal-api-service
+conven services --start portal-api-service --with-dependencies
+```
+
+默认只启动显式选中的 Service。将本地 Service 所需的连接地址声明为环境 Endpoint，
+再映射给使用它的 Service：
+
+```yaml
+environments:
+  local:
+    connection:
+      driver: none
+    endpoints:
+      postgres:
+        protocol: tcp
+        address: 127.0.0.1:5432
+
+services:
+  portal-api-service:
+    path: services/portal-api-service
+    runner:
+      run: [go, run, ./cmd/portal-api-service]
+    dependencies:
+      postgres:
+        env:
+          DATABASE_URL: postgres://dev:dev@${dependency.address}/app
+```
+
+Conven 会在启动 Service 前检查其引用的 Endpoint。只有一个环境时无需反复传
+`--env local`：
+
+```bash
+conven doctor --env local
+conven services --start portal-api-service
+conven status
+```
+
+完整步骤见
+[纯本地新手手册](docs/getting-started-local-zh.md)。
+
 ### 使用已有 Conven 配置的项目
 
 如果项目已经提交 `.conven/conven.yaml`：
@@ -94,9 +150,13 @@ Conven 支持 macOS 和 Linux。只有环境使用 `ktctl` connection driver 时
 ```bash
 cd /path/to/workspace
 
-conven doctor --dev
-conven services --start --dev user-svc order-svc
+conven doctor --test
+conven services --start --test portal-api-service partner-service visit-plan-mgr-service
 ```
+
+0.3 可直接读取现有 Manifest v1 workspace，无需迁移，并保持 0.2.x 的 `dev` 默认环境、
+本地依赖和远程依赖行为。Manifest v2 在此基础上增加无集群环境、环境文件、显式
+Endpoint 和依赖解析规则。
 
 请将示例服务名替换为 `conven services --list` 输出的名称。在交互式终端中也可以
 省略服务名，通过选择器选择。启动完成后，Conven 默认打开 Dashboard。按 `q`
@@ -122,8 +182,8 @@ conven services --list
 conven policy --edit
 
 conven doctor --dev
-conven services --start --dev --dry-run user-svc order-svc
-conven services --start --dev user-svc order-svc
+conven services --start --dev --dry-run portal-api-service partner-service
+conven services --start --dev portal-api-service partner-service
 ```
 
 `init` 会完成首次一级子仓库 registry 扫描，并初始化以下文件：
@@ -131,7 +191,7 @@ conven services --start --dev user-svc order-svc
 | 文件 | 用途 |
 | --- | --- |
 | `.conven/conven.yaml` | 定义环境、服务、Policy 和运行行为的规范 workspace manifest。 |
-| `.conven/catalog.yaml` | 声明 repository/RPC binding identity、服务类型、唯一 local port 和禁用 RPC binding 的生成器目录。 |
+| `.conven/catalog.yaml` | 声明 repository/RPC binding identity、服务类型、唯一 local port 和 disabled bindings 的生成器目录。 |
 | `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` | 用于实现 workspace Policy 生成器插件的 AI 可读规范。 |
 | `README.md` | 介绍生成文件和 Conven 工作流的 workspace 本地快速上手文档。 |
 
@@ -161,15 +221,15 @@ Conven 当前不内置任何项目专用插件。`policy --import` 会验证并�
 ## 一次启动如何完成
 
 1. 查找最近的 `.conven/conven.yaml`，并解析选中的环境。
-2. 选择服务，按依赖顺序生成启动分组。
-3. 验证本地/远程路由、隔离契约、命令和路径。
-4. 在 `.conven/runtime/current` 下生成运行时配置。
-5. 复用或建立环境连接，然后执行 prepare、build、start 和 health check。
-6. 记录进程身份并聚合服务日志，供后续 status、restart 和 stop 使用。
+2. 选择服务，解析每条 dependency edge，并按依赖顺序生成启动分组。
+3. 验证本地 Service、Endpoint、remote、disabled 路由以及隔离契约、命令和路径。
+4. 检查被引用的外部 Endpoint 是否就绪。
+5. 复用或建立环境连接，在 `.conven/runtime/current` 生成运行时配置。
+6. 执行 prepare、build、start 和 health check，再记录状态和聚合日志。
 
 ### 配置物化顺序
 
-第 4 步按两条相互关联的链路完成。以下 `runtime/current/application.yaml` 是单个服务
+第 5 步按两条相互关联的链路完成。以下 `runtime/current/application.yaml` 是单个服务
 运行时配置副本的简写；实际文件位于
 `.conven/runtime/current/configs/<service>/application.yaml`。Apollo 整体替换只作用于
 这份受保护的运行时副本，不会覆盖仓库文件。
@@ -200,6 +260,29 @@ Apollo application.yml
 `services.portal-api-service.config.patches` 是服务级 manifest patch 的具体示例。
 本地隔离 guard 强制并校验最终监听和注册行为，Consul preflight 则检查最终运行时配置
 中仍然启用的远程依赖。
+
+### 服务运行时配置契约
+
+> **重要：** typed service 必须接受 Adapter 声明的运行时配置参数，并实际从该路径
+> 加载配置。仅接收、声明或忽略参数不符合 Conven 接入契约。参数缺失、路径无效或
+> 配置解析失败时，服务必须以非零状态退出，不得回退读取源码目录中的默认配置。
+
+Conven 不要求所有语言使用同一个硬编码参数。业务源码应保持工具无关，只识别框架或
+项目自己的配置参数；Manifest/Policy 负责把 `${configDir}` 适配成对应 argv：
+
+| 语言/框架 | 推荐运行时参数 |
+| --- | --- |
+| Go/go-zero | `-f <runtime-config-directory>` |
+| Java/Spring Boot | `--spring.config.location=file:<runtime-config-directory>/` |
+| Python | `--config <runtime-config-file>` 或 `--config-dir <runtime-config-directory>` |
+| Node.js | `--config <runtime-config-file>` 或 `--config-dir <runtime-config-directory>` |
+| Dart | `--config <runtime-config-file>` 或 `--config-dir <runtime-config-directory>` |
+| Rust | `--config <runtime-config-file>` 或 `--config-dir <runtime-config-directory>` |
+
+正确实现必须完成“解析参数 → 使用该路径加载配置”；解析后仍加载源码配置同样无效。
+`CONVEN_CONFIG_DIR` 是 Conven 提供给 runner hook 和编排过程的运行时元数据，不应成为
+业务服务源码的推荐接入 API。完整实现、错误示例和 canary 端口行为验证见
+[服务运行时配置契约](docs/service-runtime-config-contract-zh.md)。
 
 `services --start --dry-run` 在静态编排完成后结束。它不会访问 Apollo、建立连接、
 生成运行时配置、构建代码、启动进程或修改 runtime 目录。
@@ -235,7 +318,7 @@ Apollo application.yml
 最小的 runner-only workspace 如下：
 
 ```yaml
-version: 1
+version: 2
 
 workspace:
   name: demo
@@ -246,10 +329,10 @@ environments:
       driver: none
 
 services:
-  api:
-    path: services/api
+  portal-api-service:
+    path: services/portal-api-service
     runner:
-      run: [go, run, ./cmd/api]
+      run: [go, run, ./cmd/portal-api-service]
     ports:
       http: 18080
     health:
@@ -308,7 +391,7 @@ Conven 提供两种用途明确的日志查看模式：
 | Dashboard | 实时概览 | 固定 workspace banner、长日志自动换行、应用内滚动和 `/` 搜索，最多保留 10,000 条原始日志 |
 | Plain | 使用终端原生搜索或导出 | 使用正常终端 scrollback、`Command+F`、管道和重定向，follow 前最多回放 10,000 行 |
 
-Dashboard 将 workspace、local services、禁用的 RPC bindings、启动时间和实时日志
+Dashboard 将 workspace、local services、disabled bindings、启动时间和实时日志
 集中在一个视图。
 
 ```bash

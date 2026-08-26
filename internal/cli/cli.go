@@ -207,6 +207,7 @@ func (app App) runStart(arguments []string) int {
 	common := bindCommonFlags(flags, true)
 	dryRun := flags.Bool("dry-run", false, "show the resolved plan without changing state")
 	tail := flags.Bool("tail", false, "stream plain-text logs after startup")
+	withDependencies := flags.Bool("with-dependencies", false, "include transitive local service dependencies")
 	skipBuild := flags.Bool("skip-build", false, "skip build; artifacts under current runtime cannot be reused after a fresh start")
 	skipVerify := flags.Bool("skip-verify", false, "skip service health checks")
 	flags.Usage = func() {
@@ -252,6 +253,12 @@ func (app App) runStart(arguments []string) int {
 			return 0
 		}
 		services = selected
+	}
+	if *withDependencies {
+		services, err = convenruntime.ExpandLocalServiceDependencies(workspace.Manifest, services)
+		if err != nil {
+			return app.fail(err)
+		}
 	}
 	dashboardAvailable := !*dryRun && !*tail && convenruntime.DashboardAvailable(app.Input, app.Output)
 	var dashboardOptions convenruntime.TailOptions
@@ -525,7 +532,7 @@ func (app App) runCompletion(arguments []string) int {
 func bindCommonFlags(flags *flag.FlagSet, includeEnvironment bool) *commonFlags {
 	common := &commonFlags{}
 	if includeEnvironment {
-		flags.StringVar(&common.environment, "env", "dev", "environment profile name")
+		flags.StringVar(&common.environment, "env", "", "environment profile name (defaults to dev or the sole profile)")
 		flags.BoolVar(&common.dev, "dev", false, "use the dev environment profile (equivalent to --env dev)")
 		flags.BoolVar(&common.test, "test", false, "use the test environment profile (equivalent to --env test)")
 		flags.StringVar(&common.kubeconfig, "kubeconfig", "", "kubeconfig path override")

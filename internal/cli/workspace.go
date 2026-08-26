@@ -16,13 +16,21 @@ import (
 func (app App) runInit(arguments []string) int {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
+	local := flags.Bool("local", false, "initialize a no-cluster local development environment")
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
 	}
 	if len(flags.Args()) != 0 {
 		return app.fail(errors.New("init does not accept arguments"))
 	}
-	result, err := config.InitWorkspaceDetailsWithPolicySpecification(app.Cwd, examples.ApplicationYAML, workspacePolicySpecification())
+	var result config.InitResult
+	var err error
+	if *local {
+		application := []byte("version: 2\nworkspace:\n  name: local-services\nenvironments: {}\nservices: {}\n")
+		result, err = config.InitLocalWorkspaceDetailsWithPolicySpecification(app.Cwd, application, workspacePolicySpecification())
+	} else {
+		result, err = config.InitWorkspaceDetailsWithPolicySpecification(app.Cwd, examples.ApplicationYAML, workspacePolicySpecification())
+	}
 	if err != nil {
 		return app.fail(err)
 	}
@@ -47,7 +55,11 @@ func (app App) runInit(arguments []string) int {
 			fmt.Fprintln(app.Output, style.Detail("Discovered services: none"))
 		}
 		if result.UsedExample {
-			details := []string{"Manifest source: embedded example"}
+			manifestSource := "embedded example"
+			if *local {
+				manifestSource = "local-first template"
+			}
+			details := []string{"Manifest source: " + manifestSource}
 			if len(result.Skipped) > 0 {
 				details = append(details, "Skipped repositories: "+strings.Join(result.Skipped, ", "))
 			}
@@ -65,6 +77,19 @@ func (app App) runInit(arguments []string) int {
 	}
 	if err := plugins.InstallBuiltins(); err != nil {
 		return app.fail(fmt.Errorf("install built-in plugins: %w", err))
+	}
+	if *local && result.Created {
+		fmt.Fprintln(app.Output, style.Stage("Next steps"))
+		step := 1
+		if len(result.Discovered) == 0 {
+			fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("%d. Create a service, then declare its path and runner in .conven/conven.yaml.", step)))
+			step++
+		}
+		fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("%d. List services: conven services --list", step)))
+		step++
+		fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("%d. Start databases and brokers with project tooling, then configure their local endpoint addresses.", step)))
+		step++
+		fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("%d. Start a service: conven services --start <service>", step)))
 	}
 	return 0
 }

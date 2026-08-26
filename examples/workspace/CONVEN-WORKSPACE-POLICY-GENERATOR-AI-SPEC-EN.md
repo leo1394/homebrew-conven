@@ -4,7 +4,7 @@ specVersion: 1
 status: normative-current
 language: en
 pluginRuntime: python3
-outputFormat: conven-manifest-v1-yaml
+outputFormat: conven-manifest-v2-yaml
 pluginInvocation: "conven plugins --run [NAME] [plugin-args...]"
 pluginScopes: "workspace-first, optional global"
 repository: "https://github.com/leo1394/homebrew-conven"
@@ -21,7 +21,7 @@ organization-independent Conven workspace Policy generator**. The generator targ
 1. scan the current workspace and its direct child repositories in read-only mode;
 2. identify local services, start commands, ports, RPC bindings, and local dependencies from
    verifiable code and configuration evidence;
-3. generate a complete `version: 1` candidate manifest that Conven can parse strictly;
+3. generate a complete `version: 2` candidate manifest that Conven can parse strictly;
 4. generate or maintain a Python 3 plugin executable through the Conven plugin runner;
 5. fail explicitly or report unresolved items when evidence is insufficient instead of guessing
    business configuration.
@@ -60,7 +60,7 @@ specification.
 | File input | `conven-generator.json` | Yes | Explicit non-sensitive profile, environment, and connection inputs |
 | Read-only input | Direct child repositories | Yes | Source code, build entry point, application configuration, and environment bootstrap |
 | CLI override | `--disable-bindings` | No | Completely replaces `catalog.yaml`'s `disabledRpcBindings` for this run |
-| Primary output | Conven manifest v1 YAML | Yes | UTF-8, one document, strict fields, complete candidate |
+| Primary output | Conven manifest v2 YAML | Yes | UTF-8, one document, strict fields, complete candidate |
 | Diagnostic output | stderr | As needed | Warnings, unresolved items, and fatal errors; MUST NOT be mixed into `--stdout` YAML |
 | AI implementation artifact | Executable Python 3 plugin | Yes | Installable and accepts the process inputs listed in this table |
 
@@ -627,12 +627,15 @@ Dependency output:
 ```yaml
 dependencies:
   <provider-service>:
+    localService: <provider-service>
     binding: <consumer-binding>
     port: rpc
 ```
 
-The dependency target MUST be a service present in the candidate manifest, and `port` MUST refer to
-a declared port name on the target service.
+`localService` MUST be a service present in the candidate manifest, and `port` MUST refer to a
+declared port name on that service. Every generated environment MUST also emit an explicit
+`mode: remote` resolution for the owner/alias; selecting the provider service locally overrides it
+with local resolution.
 
 ## 13. Conven Manifest Output Specification
 
@@ -645,7 +648,7 @@ The output MUST:
 - end with a newline;
 - contain only `version`, `workspace`, `environments`, `policies`, and `services` at the top level;
 - contain no unknown fields;
-- use exactly integer `1` for `version`;
+- use exactly integer `2` for `version`;
 - have a non-empty `workspace.name`;
 - contain at least one service;
 - use no YAML merge keys, implicit business defaults, or multi-document separators;
@@ -662,7 +665,7 @@ use the fixed enumerations defined in this document.
 Logical structure:
 
 ```yaml
-version: 1
+version: 2
 
 workspace:
   name: <workspace-name>
@@ -793,7 +796,7 @@ Requirements:
 
 ### 13.5 Template Variables
 
-Conven manifest v1 supports only the following variables:
+Conven manifest v2 supports only the following variables:
 
 ```text
 ${workspace}
@@ -834,7 +837,7 @@ following static invariants offline:
 - a typed go-zero process appends exactly one `-f <absolute-runtime-config-dir>`;
 - runtime bootstrap is exactly `config-local.yaml`, and final `PROFILE_ACTIVE` is exactly `local`;
 - a local dependency has either a policy local route or explicit localEnv;
-- an unselected dependency preserves remote configuration;
+- an unselected dependency preserves remote configuration through an explicit environment `mode: remote` resolution;
 - no dependency points to a service outside the manifest;
 - no self-dependency is generated.
 
@@ -1074,7 +1077,7 @@ evidence for every conclusion. Implement an executable Python 3 .py plugin. It m
 --workspace PATH injected by Conven and support --stdout, --check, --output [FILE], and
 --disable-bindings.
 
-The plugin must output a complete, deterministic, single-document Conven version: 1 candidate
+The plugin must output a complete, deterministic, single-document Conven version: 2 candidate
 manifest with strict fields. It must not modify source code or .conven/conven.yaml, access the
 network, or output credentials. Generator code, defaults, fixtures, and examples must not embed
 organization names, real business service names, private addresses, environment names, namespaces,

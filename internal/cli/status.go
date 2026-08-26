@@ -39,6 +39,11 @@ func (app App) runWorkspaceStatus(arguments []string) int {
 	fmt.Fprintln(app.Output, style.Detail("Root: "+workspace.Root))
 	fmt.Fprintln(app.Output, style.Detail("Manifest: "+workspace.ConfigPath))
 	fmt.Fprintln(app.Output, style.Detail("Catalog: "+catalogPath))
+	for _, key := range []string{"ktctl.kubeconfig", "ktctl.path"} {
+		if value := strings.TrimSpace(workspace.Settings[key]); value != "" {
+			fmt.Fprintln(app.Output, style.Detail(key+"="+value))
+		}
+	}
 
 	fmt.Fprintln(app.Output, style.Stage("Available services"))
 	serviceNames := config.ServiceNames(workspace.Manifest)
@@ -53,10 +58,11 @@ func (app App) runWorkspaceStatus(arguments []string) int {
 		}
 		fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("%s: type=%s, ports=%s, path=%s", style.Identifier(name), kind, statusPorts(service.Ports), service.Path)))
 	}
+	printConfiguredEndpoints(workspace, app.Output)
 
 	disabled := append([]string(nil), catalog.DisabledRPCBindings...)
 	sort.Strings(disabled)
-	fmt.Fprintln(app.Output, style.Stage("Disabled RPC bindings"))
+	fmt.Fprintln(app.Output, style.Stage("Disabled bindings"))
 	if len(disabled) == 0 {
 		fmt.Fprintln(app.Output, style.Detail("none"))
 	} else {
@@ -84,6 +90,41 @@ func statusPorts(ports map[string]int) string {
 		values = append(values, fmt.Sprintf("%s=%d", name, ports[name]))
 	}
 	return strings.Join(values, ",")
+}
+
+func printConfiguredEndpoints(workspace *convenruntime.WorkspaceData, output interface{ Write([]byte) (int, error) }) {
+	style := terminal.New(output)
+	fmt.Fprintln(output, style.Stage("Configured endpoints"))
+	environmentNames := make([]string, 0, len(workspace.Manifest.Environments))
+	for name := range workspace.Manifest.Environments {
+		environmentNames = append(environmentNames, name)
+	}
+	sort.Strings(environmentNames)
+	count := 0
+	for _, environmentName := range environmentNames {
+		environment := workspace.Manifest.Environments[environmentName]
+		endpointNames := make([]string, 0, len(environment.Endpoints))
+		for name := range environment.Endpoints {
+			endpointNames = append(endpointNames, name)
+		}
+		sort.Strings(endpointNames)
+		for _, name := range endpointNames {
+			endpoint := environment.Endpoints[name]
+			protocol := endpoint.Protocol
+			if protocol == "" {
+				protocol = "tcp"
+			}
+			readiness := endpoint.Readiness.Type
+			if readiness == "" {
+				readiness = "tcp"
+			}
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("%s.%s: protocol=%s, address=%s, readiness=%s", style.Identifier(environmentName), style.Identifier(name), protocol, endpoint.Address, readiness)))
+			count++
+		}
+	}
+	if count == 0 {
+		fmt.Fprintln(output, style.Detail("none"))
+	}
 }
 
 func dashboardTailOptions(workspace *convenruntime.WorkspaceData, names []string, version string) (convenruntime.TailOptions, error) {

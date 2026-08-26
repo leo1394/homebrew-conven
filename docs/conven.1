@@ -1,4 +1,4 @@
-.TH CONVEN 1 "August 17, 2026" "Conven" "User Commands"
+.TH CONVEN 1 "August 20, 2026" "Conven 0.3.0" "User Commands"
 .SH NAME
 conven \- run a focused set of local microservices with remote dependencies
 .SH SYNOPSIS
@@ -52,6 +52,11 @@ and
 .IR README.md
 without overwriting existing files.
 An existing manifest is not overwritten.
+Use
+.BR "init \-\-local"
+to create a Manifest v2 no-cluster environment. Conven adds no infrastructure,
+secret files, or Docker requirement. Start databases and brokers with project
+tooling, then declare their reachable addresses as environment endpoints.
 .TP
 .BR config " [" \-\-global "] [" \-\-list | \-\-unset "] [" key "] [" value "]"
 Read, write, list, or remove Conven settings.
@@ -143,8 +148,10 @@ below.
 .TP
 .B status
 Show the complete workspace overview: workspace and manifest paths, declared
-services with types and ports, disabled RPC bindings from the catalog, and the
-saved runtime session state, including the hot-reload watcher.
+services with types and ports, effective configured
+.BR ktctl.path / ktctl.kubeconfig
+values, configured environment endpoints, disabled bindings from the catalog,
+and the saved runtime session state, including the hot-reload watcher.
 .TP
 .B doctor
 Validate the resolved workspace, selected environment, connection settings,
@@ -190,7 +197,7 @@ information, and relevant shared connection state.
 .B "\-\-dashboard [service...]"
 Open the full-screen Dashboard for the current session and optional service
 selection.
-The banner lists disabled RPC bindings and places the earliest start time of
+The banner lists disabled bindings and places the earliest start time of
 the displayed services at the far right of the title.
 The equivalent alias is
 .BR "services \-\-logs \-\-dashboard [service...]" .
@@ -239,6 +246,11 @@ one selects the effective mode.
 .B "\-\-start [options] [service...]"
 Start a fresh local service session.
 Without service names, open the interactive selector and require confirmation.
+By default only named or selected business services are started. Use
+.B \-\-with\-dependencies
+to include their transitive local service dependencies. Databases, brokers,
+and other infrastructure are external to Conven and are never started by this
+option.
 If a verified session is already running, an interactive start first validates
 the replacement plan, then offers
 .B "Stop then start"
@@ -254,8 +266,9 @@ managed
 lease is reused without interrupting the connection.
 After safety and static validation, Conven rebuilds
 .IR runtime/current ,
-establishes the configured connection, materializes configuration, prepares and
-builds services, starts them in dependency order, and performs health checks.
+checks referenced endpoints, establishes the configured connection,
+materializes configuration, prepares and builds services, starts them in
+dependency order, and performs health checks.
 After a successful start, Conven opens the Dashboard automatically when attached
 to a usable interactive terminal.
 Without such a terminal, start returns and leaves the services running unless
@@ -323,8 +336,11 @@ for the authoritative option list.
 .TP
 .BI \-\-env " name"
 Select a manifest environment profile.
-The default is
-.BR dev .
+When omitted, Conven selects
+.B dev
+when present, otherwise the sole profile, otherwise
+.B local
+when present. Ambiguous profiles require an explicit value.
 Available to start and doctor.
 .TP
 .B \-\-dev
@@ -367,6 +383,11 @@ Resolve and validate a start plan without creating or modifying runtime state,
 requesting remote configuration, establishing a connection, building, or
 starting processes.
 .TP
+.B \-\-with\-dependencies
+Expand the start selection with transitive local service dependencies and start
+the resulting dependency-ordered group. Available only to
+.BR "services \-\-start" .
+.TP
 .B \-\-skip\-build
 Skip service builds.
 A fresh start cannot reuse default artifacts inside
@@ -378,6 +399,9 @@ Skip service health checks.
 .SH CONFIGURATION AND POLICY
 The canonical workspace manifest is
 .IR <workspace>/.conven/conven.yaml .
+Manifest version 1 retains the 0.2.x environment and local/remote service
+dependency behavior. Manifest version 2 adds environment files, endpoints,
+and explicit environment resolutions without managing infrastructure.
 There is no separate policy file.
 Policy profiles in the manifest describe framework, configuration source,
 service discovery, materialization, routing, and local-isolation rules.
@@ -422,7 +446,7 @@ and a unique local
 .IR port .
 The
 .I disabledRpcBindings
-list keeps selected RPC dependencies remote.
+list keeps selected bindings remote.
 .TP
 .I <workspace>/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 AI-readable policy-generator implementation and validation contract created
@@ -444,7 +468,8 @@ directory.
 Backups created before manifest import or reset publication.
 .TP
 .I <workspace>/.conven/runtime
-Private workspace runtime root containing the lock and session state.
+Private workspace runtime root containing the lock, service session state, and
+connection log.
 .TP
 .I <workspace>/.conven/runtime/current
 Current artifacts, materialized configurations, and service logs.
@@ -502,8 +527,35 @@ using variables including
 .BR CONVEN_ARTIFACT ,
 and
 .BR CONVEN_SELECTED_SERVICES .
+These variables support orchestration and runner hooks. Typed application source
+should consume the framework-native argument declared by its trusted adapter;
+.B CONVEN_CONFIG_DIR
+is not the required application integration API.
 Plugins receive the canonical workspace through
 .BR CONVEN_WORKSPACE .
+.SH SERVICE RUNTIME CONFIGURATION
+A typed service must accept the runtime-configuration argument declared by its
+adapter and actually load configuration from that exact path. Merely receiving,
+declaring, or ignoring the argument does not satisfy the Conven contract.
+A missing path, invalid path, or configuration parse failure must terminate the
+service with a non-zero status. The service must not silently fall back to a
+repository-default configuration.
+.PP
+Conven does not require every language to use the same flag. The current trusted
+go-zero and Consul adapter requires exactly one
+.B \-f
+argument whose value is the verified absolute runtime configuration directory.
+Other adapters should use their framework-native argument, for example Spring
+Boot's
+.BR \-\-spring.config.location .
+The manifest or policy expands
+.B ${configDir}
+into that argument; business source need not reference Conven-specific names.
+.PP
+Static command validation proves that the adapter argument points to the guarded
+runtime directory. Runtime health and adapter contract tests must additionally
+prove that the service consumed it, including a listener canary that differs
+from the repository default.
 .SH SAFETY
 For typed services, the verified adapter contract prevents selected services
 from being advertised through the configured remote service registry and

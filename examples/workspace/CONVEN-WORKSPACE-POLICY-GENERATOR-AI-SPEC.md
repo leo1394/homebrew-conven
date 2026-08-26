@@ -4,7 +4,7 @@ specVersion: 1
 status: normative-current
 language: zh-CN
 pluginRuntime: python3
-outputFormat: conven-manifest-v1-yaml
+outputFormat: conven-manifest-v2-yaml
 pluginInvocation: "conven plugins --run [NAME] [plugin-args...]"
 pluginScopes: "workspace-first, optional global"
 repository: "https://github.com/leo1394/homebrew-conven"
@@ -19,7 +19,7 @@ repository: "https://github.com/leo1394/homebrew-conven"
 
 1. 只读扫描当前工作区及其直接子仓库；
 2. 根据可验证的代码和配置证据识别本地服务、启动命令、端口、RPC binding 与本地依赖；
-3. 生成一个可由 Conven 严格解析的完整 `version: 1` candidate manifest；
+3. 生成一个可由 Conven 严格解析的完整 `version: 2` candidate manifest；
 4. 生成或维护一个可通过 Conven plugin runner 执行的 Python 3 插件；
 5. 在证据不足时明确失败或报告 unresolved 项，而不是猜测业务配置。
 
@@ -53,7 +53,7 @@ AI 实现需要区分两个产物：
 | 文件输入 | `conven-generator.json` | 是 | profile、环境和连接的显式非敏感输入 |
 | 只读输入 | 直接子仓库 | 是 | 源码、构建入口、application 和 environment bootstrap |
 | CLI 覆盖 | `--disable-bindings` | 否 | 本次运行完整替换 `catalog.yaml` 的 `disabledRpcBindings` |
-| 主输出 | Conven manifest v1 YAML | 是 | UTF-8、单文档、严格字段、完整 candidate |
+| 主输出 | Conven manifest v2 YAML | 是 | UTF-8、单文档、严格字段、完整 candidate |
 | 诊断输出 | stderr | 按需 | warning、unresolved、fatal；不得混入 `--stdout` YAML |
 | AI 实现产物 | 可执行 Python 3 plugin | 是 | 可安装且接受本表所列进程输入 |
 
@@ -579,12 +579,15 @@ Connection 精确来自 `conven-generator.json`，仅允许 `none` 或 `ktctl`�
 ```yaml
 dependencies:
   <provider-service>:
+    localService: <provider-service>
     binding: <consumer-binding>
     port: rpc
 ```
 
-依赖目标必须是 candidate manifest 内存在的 service，且 `port` 必须引用目标 service
-已声明的 port 名。
+`localService` 必须是 candidate manifest 内存在的 service，且 `port` 必须引用目标
+service 已声明的 port 名。每个生成的 environment 还必须为该 owner/alias 生成显式
+`mode: remote` resolution；当 provider service 同时被本地选择时，Conven 自动以 local
+resolution 覆盖它。
 
 ## 13. Conven manifest 输出规范
 
@@ -597,7 +600,7 @@ dependencies:
 - 以换行结尾；
 - 顶层只包含 `version`、`workspace`、`environments`、`policies`、`services`；
 - 不包含未知字段；
-- `version` 精确为整数 `1`；
+- `version` 精确为整数 `2`；
 - `workspace.name` 非空；
 - 至少包含一个 service；
 - 不使用 YAML merge key、隐式业务默认或多文档分隔；
@@ -613,7 +616,7 @@ service、policy 和环境名必须匹配 ASCII
 逻辑结构：
 
 ```yaml
-version: 1
+version: 2
 
 workspace:
   name: <workspace-name>
@@ -741,7 +744,7 @@ services:
 
 ### 13.5 模板变量
 
-只使用 Conven manifest v1 支持的变量：
+只使用 Conven manifest v2 支持的变量：
 
 ```text
 ${workspace}
@@ -781,7 +784,7 @@ ${dependency.port}
 - typed go-zero process 只附加一个 `-f <absolute-runtime-config-dir>`；
 - runtime bootstrap 精确为 `config-local.yaml`，最终 `PROFILE_ACTIVE` 精确为 `local`；
 - local dependency 有 policy local route 或显式 localEnv；
-- 未选中的 dependency 保留远程配置；
+- 未选中的 dependency 通过 environment 中显式的 `mode: remote` resolution 保留远程配置；
 - 不生成指向 manifest 外 service 的 dependency；
 - 不生成 self dependency。
 
@@ -1007,7 +1010,7 @@ AI 不得：
 Python 3 可执行 .py 插件；它必须接受 Conven 注入的 --workspace PATH，并支持
 --stdout、--check、--output [FILE]、--disable-bindings。
 
-插件需要输出完整、确定、单文档、严格字段的 Conven version: 1 candidate manifest。
+插件需要输出完整、确定、单文档、严格字段的 Conven version: 2 candidate manifest。
 不得修改源码或 .conven/conven.yaml，不得访问网络，不得输出凭据。生成器代码、
 默认值、fixture 和示例不得内置组织名、真实业务服务名、私有地址、环境名、namespace
 或端口表；candidate 中出现的工作区专用值必须来自显式输入或可定位的代码证据。

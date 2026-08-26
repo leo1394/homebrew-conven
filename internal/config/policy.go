@@ -323,7 +323,14 @@ func ResetWorkspacePolicyFromScan(cwd string) (PolicyResetResult, error) {
 	if len(discovered) == 0 {
 		return result, fmt.Errorf("scan found no supported direct-child repositories; policy reset did not publish a manifest")
 	}
-	candidate, err := RenderDiscoveredManifest(workspace, discovered)
+	version := 2
+	if !missing {
+		manifest, loadErr := decodeManifest(source, path)
+		if loadErr == nil {
+			version = manifest.Version
+		}
+	}
+	candidate, err := renderDiscoveredManifest(workspace, discovered, version)
 	if err != nil {
 		return result, err
 	}

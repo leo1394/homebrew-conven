@@ -133,7 +133,7 @@ func TestDiscoverWorkspaceAddsByPathAndPreservesManualConfiguration(t *testing.T
 	writeGoServiceRepository(t, workspace, "new-service", false, "example.com/new-service", "main")
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, `# keep top comment
-version: 1
+version: 2
 workspace:
   name: test
 services:
@@ -256,7 +256,7 @@ services:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Services["custom-api"].Kind != "rpc" || manifest.Services["custom-api"].Discovery.Analyzer != "manual" {
+	if manifest.Version != 1 || manifest.Services["custom-api"].Kind != "rpc" || manifest.Services["custom-api"].Discovery.Analyzer != "manual" {
 		t.Fatalf("manual facts changed: %#v", manifest.Services["custom-api"])
 	}
 	if repositoryAfter := analyzerRepositorySnapshot(t, repository); !reflect.DeepEqual(repositoryAfter, repositoryBefore) {
@@ -270,7 +270,7 @@ services:
 func TestDiscoverWorkspaceRejectsPruneWithRemainingDependency(t *testing.T) {
 	workspace := t.TempDir()
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
-	writeDiscoveryFile(t, manifestPath, `version: 1
+	writeDiscoveryFile(t, manifestPath, `version: 2
 workspace:
   name: test
 services:
@@ -280,6 +280,7 @@ services:
       run: [consumer]
     dependencies:
       old-service:
+        localService: old-service
         remoteEnv:
           OLD_SERVICE: remote
   old-service:
@@ -293,7 +294,7 @@ services:
 	}
 
 	_, err = DiscoverWorkspace(manifestPath, workspace, true)
-	if err == nil || !strings.Contains(err.Error(), "references an unknown service") {
+	if err == nil || !strings.Contains(err.Error(), "localService references unknown service") {
 		t.Fatalf("error = %v", err)
 	}
 	after, readErr := os.ReadFile(manifestPath)
@@ -310,7 +311,7 @@ func TestDiscoverWorkspacePrunePreservesExistingUnsupportedRepository(t *testing
 	mustMkdirAll(t, filepath.Join(workspace, "java-service", ".git"))
 	mustMkdirAll(t, filepath.Join(workspace, "java-service", "src"))
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
-	writeDiscoveryFile(t, manifestPath, `version: 1
+	writeDiscoveryFile(t, manifestPath, `version: 2
 workspace:
   name: test
 services:
@@ -344,7 +345,7 @@ func TestDiscoverWorkspaceRejectsNamePathConflictsWithoutWriting(t *testing.T) {
 	workspace := t.TempDir()
 	writeGoServiceRepository(t, workspace, "alpha-service", false, "example.com/alpha-service", "main")
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
-	writeDiscoveryFile(t, manifestPath, `version: 1
+	writeDiscoveryFile(t, manifestPath, `version: 2
 workspace:
   name: test
 services:
@@ -378,7 +379,7 @@ services:
 func TestDiscoverWorkspaceRejectsPruneThatLeavesDanglingYAMLAlias(t *testing.T) {
 	workspace := t.TempDir()
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
-	writeDiscoveryFile(t, manifestPath, `version: 1
+	writeDiscoveryFile(t, manifestPath, `version: 2
 workspace:
   name: test
 services:
@@ -411,7 +412,7 @@ services:
 func TestDiscoverWorkspaceRejectsSymbolicLinkManifest(t *testing.T) {
 	workspace := t.TempDir()
 	target := filepath.Join(workspace, "manifest-target.yaml")
-	writeDiscoveryFile(t, target, `version: 1
+	writeDiscoveryFile(t, target, `version: 2
 workspace:
   name: test
 services:
@@ -442,7 +443,7 @@ services:
 func TestSaveManifestDocumentRejectsConcurrentEdit(t *testing.T) {
 	workspace := t.TempDir()
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
-	writeDiscoveryFile(t, manifestPath, `version: 1
+	writeDiscoveryFile(t, manifestPath, `version: 2
 workspace:
   name: test
 services:
@@ -484,7 +485,7 @@ services:
 func TestDiscoverWorkspaceRejectsPruneHiddenByYAMLMerge(t *testing.T) {
 	workspace := t.TempDir()
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
-	writeDiscoveryFile(t, manifestPath, `version: 1
+	writeDiscoveryFile(t, manifestPath, `version: 2
 workspace:
   name: test
 services:

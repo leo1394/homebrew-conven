@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0 - 2026-08-20
+
+- Add Manifest v2 with explicit local-service, endpoint, remote, disabled, and
+  error dependency resolution modes, environment files, and endpoint readiness.
+- Make `conven init --local` produce a minimal no-cluster workspace with no
+  Docker requirement. Databases, brokers, and object storage remain external
+  project infrastructure and are referenced through configured endpoints.
+- Include configured endpoints in `conven status`; Conven validates endpoints
+  used by selected services without owning their lifecycle.
+- Keep Manifest v1 workspaces on their 0.2.x environment and dependency-routing
+  behavior while adding Manifest v2 as a compatible extension.
+- Add `conven services --start SERVICE --with-dependencies` to
+  explicitly include transitive local services without changing default
+  selection or implying infrastructure lifecycle management.
+- Document the 0.3.0 local-first workflow, service runtime configuration
+  contract, implementation changes, and first-use path.
+
 ## 0.2.13 - 2026-08-17
 
 - Add a compact, color-aware Conven ASCII mark to version output, with plain

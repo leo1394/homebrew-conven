@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -97,19 +98,52 @@ func ValidateSelection(manifest *model.Manifest, selected []string) error {
 }
 
 func validateManifest(manifest *model.Manifest) error {
-	if manifest.Version != 1 {
-		return fmt.Errorf("version must be 1, got %d", manifest.Version)
+	switch manifest.Version {
+	case 1, 2:
+	default:
+		return fmt.Errorf("version must be 1 or 2, got %d", manifest.Version)
 	}
 	if strings.TrimSpace(manifest.Workspace.Name) == "" {
 		return fmt.Errorf("workspace.name is required")
 	}
-	if len(manifest.Services) == 0 {
+	if manifest.Version == 1 && len(manifest.Services) == 0 {
 		return fmt.Errorf("services must contain at least one service")
 	}
 
-	for _, environment := range sortedEnvironmentNames(manifest) {
-		if invalidName(environment) {
-			return fmt.Errorf("environment name %q must be non-empty and contain no whitespace", environment)
+	for _, environmentName := range sortedEnvironmentNames(manifest) {
+		if invalidName(environmentName) {
+			return fmt.Errorf("environment name %q must be non-empty and contain no whitespace", environmentName)
+		}
+		if manifest.Version == 2 {
+			environment := manifest.Environments[environmentName]
+			if environment.EnvFile != "" {
+				if err := validateWorkspaceRelativePath(environment.EnvFile, fmt.Sprintf("environments.%s.envFile", environmentName)); err != nil {
+					return err
+				}
+			}
+			endpointNames := make([]string, 0, len(environment.Endpoints))
+			for name := range environment.Endpoints {
+				endpointNames = append(endpointNames, name)
+			}
+			sort.Strings(endpointNames)
+			for _, name := range endpointNames {
+				endpoint := environment.Endpoints[name]
+				if !validServiceName(name) {
+					return fmt.Errorf("environments.%s.endpoints contains invalid endpoint name %q", environmentName, name)
+				}
+				if strings.TrimSpace(endpoint.Address) == "" {
+					return fmt.Errorf("environments.%s.endpoints.%s.address is required", environmentName, name)
+				}
+				if _, _, err := net.SplitHostPort(endpoint.Address); err != nil {
+					return fmt.Errorf("environments.%s.endpoints.%s.address must use host:port", environmentName, name)
+				}
+				if endpoint.Protocol != "" && endpoint.Protocol != "tcp" && endpoint.Protocol != "http" && endpoint.Protocol != "rpc" {
+					return fmt.Errorf("environments.%s.endpoints.%s.protocol must be tcp, http, or rpc", environmentName, name)
+				}
+				if err := validateHealth(endpoint.Readiness, fmt.Sprintf("environments.%s.endpoints.%s.readiness", environmentName, name)); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	for _, name := range sortedPolicyNames(manifest) {
@@ -125,7 +159,6 @@ func validateManifest(manifest *model.Manifest) error {
 			return fmt.Errorf("workspace.policy references unknown policy %q", manifest.Workspace.Policy)
 		}
 	}
-
 	for _, name := range ServiceNames(manifest) {
 		if !validServiceName(name) {
 			return fmt.Errorf("service name %q must start with a letter or digit and contain only letters, digits, '.', '_' or '-'", name)
@@ -197,27 +230,43 @@ func validateManifest(manifest *model.Manifest) error {
 			dependencies = append(dependencies, dependency)
 		}
 		sort.Strings(dependencies)
-		for _, dependency := range dependencies {
-			if dependency == name {
+		for _, dependencyName := range dependencies {
+			declaration := service.Dependencies[dependencyName]
+			localServiceName := dependencyName
+			if manifest.Version == 2 {
+				localServiceName = declaration.LocalService
+				if localServiceName == "" {
+					if _, found := manifest.Services[dependencyName]; found {
+						localServiceName = dependencyName
+					}
+				}
+			}
+			if localServiceName == name {
 				return fmt.Errorf("services.%s.dependencies must not reference itself", name)
 			}
-			dependencyService, ok := manifest.Services[dependency]
-			if !ok {
-				return fmt.Errorf("services.%s.dependencies.%s references an unknown service", name, dependency)
+			dependencyService, hasLocalService := manifest.Services[localServiceName]
+			if !hasLocalService {
+				if manifest.Version == 1 {
+					return fmt.Errorf("services.%s.dependencies.%s references an unknown service", name, dependencyName)
+				}
+				if localServiceName != "" {
+					return fmt.Errorf("services.%s.dependencies.%s.localService references unknown service %q", name, dependencyName, localServiceName)
+				}
 			}
-			declaration := service.Dependencies[dependency]
 			if (declaration.Binding == "") != (declaration.Port == "") {
-				return fmt.Errorf("services.%s.dependencies.%s.binding and port must be declared together", name, dependency)
+				return fmt.Errorf("services.%s.dependencies.%s.binding and port must be declared together", name, dependencyName)
 			}
 			if declaration.Binding != "" {
 				if invalidName(declaration.Binding) {
-					return fmt.Errorf("services.%s.dependencies.%s.binding must contain no whitespace", name, dependency)
+					return fmt.Errorf("services.%s.dependencies.%s.binding must contain no whitespace", name, dependencyName)
 				}
 				if invalidName(declaration.Port) {
-					return fmt.Errorf("services.%s.dependencies.%s.port must contain no whitespace", name, dependency)
+					return fmt.Errorf("services.%s.dependencies.%s.port must contain no whitespace", name, dependencyName)
 				}
-				if _, found := dependencyService.Ports[declaration.Port]; !found {
-					return fmt.Errorf("services.%s.dependencies.%s.port references unknown port %q", name, dependency, declaration.Port)
+				if hasLocalService {
+					if _, found := dependencyService.Ports[declaration.Port]; !found {
+						return fmt.Errorf("services.%s.dependencies.%s.port references unknown port %q", name, dependencyName, declaration.Port)
+					}
 				}
 			}
 		}
@@ -235,6 +284,14 @@ func validateManifest(manifest *model.Manifest) error {
 			}
 		}
 	}
+	if manifest.Version == 2 {
+		if err := validateEnvironmentResolutions(manifest); err != nil {
+			return err
+		}
+		if err := validateLocalPorts(manifest); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -246,6 +303,121 @@ func sortedPolicyNames(manifest *model.Manifest) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func validateWorkspaceRelativePath(value string, field string) error {
+	path := strings.TrimSpace(value)
+	if path == "" || filepath.IsAbs(path) {
+		return fmt.Errorf("%s must be a non-empty workspace-relative path", field)
+	}
+	clean := filepath.Clean(path)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s must stay within the workspace", field)
+	}
+	return nil
+}
+
+func validateHealth(health model.Health, field string) error {
+	if health.Type == "" {
+		return nil
+	}
+	switch health.Type {
+	case "tcp":
+		if strings.TrimSpace(health.Address) == "" {
+			return fmt.Errorf("%s.address is required for tcp readiness", field)
+		}
+	case "http":
+		if strings.TrimSpace(health.URL) == "" {
+			return fmt.Errorf("%s.url is required for http readiness", field)
+		}
+	case "command":
+		if err := validateCommand(health.Command, field+".command", true); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("%s.type must be tcp, http, or command", field)
+	}
+	if health.Timeout != "" {
+		duration, err := time.ParseDuration(health.Timeout)
+		if err != nil || duration <= 0 {
+			return fmt.Errorf("%s.timeout must be a positive duration", field)
+		}
+	}
+	return nil
+}
+
+func validateEnvironmentResolutions(manifest *model.Manifest) error {
+	for _, environmentName := range sortedEnvironmentNames(manifest) {
+		environment := manifest.Environments[environmentName]
+		owners := make([]string, 0, len(environment.Resolutions))
+		for owner := range environment.Resolutions {
+			owners = append(owners, owner)
+		}
+		sort.Strings(owners)
+		for _, owner := range owners {
+			service, found := manifest.Services[owner]
+			if !found {
+				return fmt.Errorf("environments.%s.resolutions references unknown service %q", environmentName, owner)
+			}
+			aliases := make([]string, 0, len(environment.Resolutions[owner]))
+			for alias := range environment.Resolutions[owner] {
+				aliases = append(aliases, alias)
+			}
+			sort.Strings(aliases)
+			for _, alias := range aliases {
+				resolution := environment.Resolutions[owner][alias]
+				declaration, found := service.Dependencies[alias]
+				if !found {
+					return fmt.Errorf("environments.%s.resolutions.%s references unknown dependency alias %q", environmentName, owner, alias)
+				}
+				field := fmt.Sprintf("environments.%s.resolutions.%s.%s", environmentName, owner, alias)
+				switch resolution.Mode {
+				case "endpoint":
+					if _, found := environment.Endpoints[resolution.Target]; !found {
+						return fmt.Errorf("%s.target references unknown endpoint %q", field, resolution.Target)
+					}
+				case "remote", "disabled", "error":
+					if resolution.Target != "" {
+						return fmt.Errorf("%s.target must be empty for mode %s", field, resolution.Mode)
+					}
+				default:
+					return fmt.Errorf("%s.mode must be endpoint, remote, disabled, or error", field)
+				}
+				required := declaration.Required == nil || *declaration.Required
+				if required && resolution.Mode == "disabled" {
+					return fmt.Errorf("%s cannot disable a required dependency", field)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateLocalPorts(manifest *model.Manifest) error {
+	for _, environmentName := range sortedEnvironmentNames(manifest) {
+		used := make(map[int]string)
+		claim := func(port int, owner string) error {
+			if previous, found := used[port]; found {
+				return fmt.Errorf("environment %s local port %d conflicts between %s and %s", environmentName, port, previous, owner)
+			}
+			used[port] = owner
+			return nil
+		}
+		for _, serviceName := range ServiceNames(manifest) {
+			service := manifest.Services[serviceName]
+			portNames := make([]string, 0, len(service.Ports))
+			for name := range service.Ports {
+				portNames = append(portNames, name)
+			}
+			sort.Strings(portNames)
+			for _, name := range portNames {
+				if err := claim(service.Ports[name], "service "+serviceName+"."+name); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func validatePolicy(name string, policy model.Policy) error {

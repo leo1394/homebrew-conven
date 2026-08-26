@@ -86,7 +86,7 @@ jobs:
           grep -Fq -- "'-C:run as if conven was started" "$completion_dir/_conven"
           grep -Fq -- "-s C" "$completion_dir/conven.fish"
           bash_top="$(grep -m 1 -F 'compgen -W "' "$completion_dir/conven.bash" | sed -E 's/.*compgen -W "([^"]+)".*/\1/')"
-          for command in init services config catalog policy plugins status doctor help version; do
+          for command in init services dependencies config catalog policy plugins status doctor help version; do
             case " $bash_top " in
               *" $command "*) ;;
               *) echo "missing bash top-level completion: $command" >&2; exit 1 ;;
@@ -108,6 +108,11 @@ jobs:
             fi
           done
           for action in list registry status logs dashboard start restart stop stop-all cleanup; do
+            grep -Fq -- "--$action" "$completion_dir/conven.bash"
+            grep -Fq -- "--$action" "$completion_dir/_conven"
+            grep -Fq -- "-l $action" "$completion_dir/conven.fish"
+          done
+          for action in list start status logs stop stop-all reset; do
             grep -Fq -- "--$action" "$completion_dir/conven.bash"
             grep -Fq -- "--$action" "$completion_dir/_conven"
             grep -Fq -- "-l $action" "$completion_dir/conven.fish"

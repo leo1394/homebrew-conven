@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leo1394/homebrew-conven/internal/config"
 	convenruntime "github.com/leo1394/homebrew-conven/internal/runtime"
 	"github.com/leo1394/homebrew-conven/internal/selector"
 )
@@ -362,7 +363,7 @@ disabledRpcBindings:
 	if code := app.Run([]string{"catalog", "--validate"}); code != 0 {
 		t.Fatalf("validate exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
 	}
-	for _, expected := range []string{"Conven catalog is valid", "Services: 2", "Disabled RPC bindings: 1", catalogPath} {
+	for _, expected := range []string{"Conven catalog is valid", "Services: 2", "Disabled bindings: 1", catalogPath} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("validate output is missing %q: %q", expected, output.String())
 		}
@@ -388,9 +389,17 @@ func TestWorkspaceStatusCombinesWorkspaceCatalogAndRuntimeState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := environmentShortcutWorkspace(t)
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
-	manifest := `version: 1
+	manifest := `version: 2
 workspace:
   name: status-workspace
+environments:
+  local:
+    connection:
+      driver: none
+    endpoints:
+      postgres:
+        protocol: tcp
+        address: 127.0.0.1:5432
 services:
   api:
     path: api
@@ -408,6 +417,12 @@ services:
 	if err := os.WriteFile(catalogPath, []byte("version: 1\nservices: []\ndisabledRpcBindings: [zRpc, aRpc]\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := config.SetSetting(workspace, "", false, "ktctl.kubeconfig", "/secure/dev-kubeconfig"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SetSetting(workspace, "", false, "ktctl.path", "/usr/local/bin/ktctl"); err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
 	app := App{Output: &output, Error: &output, Cwd: workspace}
 	if code := app.Run([]string{"status"}); code != 0 {
@@ -419,9 +434,13 @@ services:
 		"Root: " + workspace,
 		"Manifest: " + manifestPath,
 		"Catalog: " + catalogPath,
+		"ktctl.kubeconfig=/secure/dev-kubeconfig",
+		"ktctl.path=/usr/local/bin/ktctl",
 		"Available services",
 		"api: type=http, ports=http=18080,metrics=19090, path=api",
-		"Disabled RPC bindings",
+		"Configured endpoints",
+		"local.postgres: protocol=tcp, address=127.0.0.1:5432, readiness=tcp",
+		"Disabled bindings",
 		"aRpc",
 		"zRpc",
 		"Conven status",
@@ -433,6 +452,12 @@ services:
 	}
 	if strings.Index(output.String(), "aRpc") > strings.Index(output.String(), "zRpc") {
 		t.Fatalf("disabled bindings are not sorted: %q", output.String())
+	}
+	if strings.Index(output.String(), "Available services") > strings.Index(output.String(), "Configured endpoints") || strings.Index(output.String(), "Configured endpoints") > strings.Index(output.String(), "Disabled bindings") {
+		t.Fatalf("workspace inventories are not ordered: %q", output.String())
+	}
+	if strings.Index(output.String(), "Catalog: ") > strings.Index(output.String(), "ktctl.kubeconfig=") || strings.Index(output.String(), "ktctl.path=") > strings.Index(output.String(), "Available services") {
+		t.Fatalf("ktctl settings are not in the Workspace group: %q", output.String())
 	}
 }
 
@@ -1684,7 +1709,7 @@ func TestLogsTailNonTerminalOutputContainsOnlyPrefixedLogs(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workspace, "api"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 1
+	manifest := `version: 2
 workspace:
   name: non-terminal-tail
 services:
@@ -1820,7 +1845,7 @@ func TestLogsDashboardAliasAndLastModeRouting(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workspace, "api"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 1
+	manifest := `version: 2
 workspace:
   name: dashboard-alias
 services:
@@ -1898,12 +1923,14 @@ func TestEnvironmentShortcutsMatchEnvFlag(t *testing.T) {
 		want      string
 	}{
 		{name: "start dev", arguments: []string{"services", "--start", "--dry-run", "--dev", "api"}, want: "Environment: dev\n"},
+		{name: "start default", arguments: []string{"services", "--start", "--dry-run", "api"}, want: "Environment: dev\n"},
 		{name: "start test", arguments: []string{"services", "--start", "--dry-run", "--test", "api"}, want: "Environment: test\n"},
 		{name: "start env test", arguments: []string{"services", "--start", "--dry-run", "--env", "test", "api"}, want: "Environment: test\n"},
 		{name: "start matching test", arguments: []string{"services", "--start", "--dry-run", "--test", "--env", "test", "api"}, want: "Environment: test\n"},
 		{name: "start repeated matching test", arguments: []string{"services", "--start", "--dry-run", "--env", "test", "--test", "--env=test", "api"}, want: "Environment: test\n"},
 		{name: "start custom", arguments: []string{"services", "--start", "--dry-run", "--env", "stage", "api"}, want: "Environment: stage\n"},
 		{name: "doctor dev", arguments: []string{"doctor", "--dev"}, want: "Environment: dev\n"},
+		{name: "doctor default", arguments: []string{"doctor"}, want: "Environment: dev\n"},
 		{name: "doctor test", arguments: []string{"doctor", "--test"}, want: "Environment: test\n"},
 		{name: "doctor env test", arguments: []string{"doctor", "--env=test"}, want: "Environment: test\n"},
 	} {
@@ -2180,7 +2207,7 @@ func TestStartWithoutServicesRejectsNonTerminal(t *testing.T) {
 	if err := os.Mkdir(serviceDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 1
+	manifest := `version: 2
 workspace:
   name: test
 services:
@@ -2215,6 +2242,68 @@ services:
 	}
 	if !strings.Contains(output.String(), "interactive selection requires a terminal") {
 		t.Fatalf("unexpected output %q", output.String())
+	}
+}
+
+func TestStartWithDependenciesExpandsVersionOneServiceSelection(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".conven"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"api", "worker", "storage"} {
+		if err := os.Mkdir(filepath.Join(workspace, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := `version: 1
+workspace:
+  name: with-dependencies
+environments:
+  dev:
+    connection:
+      driver: none
+services:
+  api:
+    path: api
+    runner:
+      run: [api]
+    dependencies:
+      worker:
+        localEnv:
+          WORKER_ADDRESS: 127.0.0.1
+  worker:
+    path: worker
+    runner:
+      run: [worker]
+    dependencies:
+      storage:
+        localEnv:
+          STORAGE_ADDRESS: 127.0.0.1
+  storage:
+    path: storage
+    runner:
+      run: [storage]
+`
+	if err := os.WriteFile(filepath.Join(workspace, ".conven", "conven.yaml"), []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test"}
+	if code := app.Run([]string{"services", "--start", "--dry-run", "api"}); code != 0 {
+		t.Fatalf("default exit code = %d: %s", code, errorOutput.String())
+	}
+	if !strings.Contains(output.String(), "Local services: api\n") || strings.Contains(output.String(), "Local services: api, worker") {
+		t.Fatalf("default start plan expanded services: %q", output.String())
+	}
+	output.Reset()
+	errorOutput.Reset()
+	if code := app.Run([]string{"services", "--start", "--dry-run", "api", "--with-dependencies"}); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
+	}
+	if !strings.Contains(output.String(), "Local services: api, worker, storage") || !strings.Contains(output.String(), "Start groups: storage -> worker -> api") {
+		t.Fatalf("start plan = %q", output.String())
 	}
 }
 
@@ -2510,7 +2599,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--logs)`,
 		`options="--tail --dashboard --help"`,
 		`--start)`,
-		`options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --skip-build --skip-verify --help"`,
+		`options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --with-dependencies --skip-build --skip-verify --help"`,
 		`--restart)`,
 		`options="--tail --dashboard --skip-build --skip-verify --help"`,
 		`--stop)`,
@@ -2573,6 +2662,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--all[stop every service and release the workspace connection]`,
 		`--force[bypass identity checks and recover saved process groups]`,
 		`--tail[stream aggregated logs as plain text]`,
+		`--with-dependencies[also start transitive local service dependencies]`,
 		`--dashboard[open the interactive log dashboard]`,
 		`--prune[remove missing direct-child repository services]`,
 		`--reset[destructively reset the manifest to scanned facts]`,
@@ -2587,7 +2677,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`words=($words[1] $words[3,-1])`,
 		`'1:global plugin:'`,
 		`--output[generator output path; omit the value for application.yaml]`,
-		`--disable-bindings[replace disabled RPC bindings for this generator run]`,
+		`--disable-bindings[replace disabled bindings for this generator run]`,
 		`'1::plugin:'`,
 	} {
 		if !strings.Contains(zsh, expected) {
@@ -2638,6 +2728,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_services_action --start' -l test`,
 		`__conven_services_action --start' -l tail`,
 		`__conven_services_action --start' -l dry-run`,
+		`__conven_services_action --start' -l with-dependencies`,
 		`__conven_services_action --restart' -l tail`,
 		`__conven_services_action --restart' -l dashboard`,
 		`__conven_services_action --logs' -l tail`,
@@ -2889,7 +2980,7 @@ func environmentShortcutWorkspaceAt(t *testing.T, workspace string) string {
 	if err := os.Mkdir(filepath.Join(workspace, "api"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 1
+	manifest := `version: 2
 workspace:
   name: environment-shortcuts
 environments:
@@ -3087,7 +3178,7 @@ func TestPolicyEditUsesInjectedEditorAndPublishesValidatedManifest(t *testing.T)
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 1
+	original := `version: 2
 workspace:
   name: before
 services:
@@ -3139,7 +3230,7 @@ func TestPolicyResetReportsBackupAndLostRulesWarning(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 1
+	original := `version: 2
 workspace:
   name: manual
 services:
@@ -3217,7 +3308,7 @@ func TestPolicyImportReplacesManifestAndFeedsSubsequentServicesCommands(t *testi
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 1
+	original := `version: 2
 workspace:
   name: before-import
 services:
@@ -3230,7 +3321,7 @@ services:
 		t.Fatal(err)
 	}
 	importPath := filepath.Join(t.TempDir(), "generated policy.yaml")
-	imported := `version: 1
+	imported := `version: 2
 workspace:
   name: imported-workspace
 services:
@@ -3306,7 +3397,7 @@ func TestPolicyImportWithoutFilenameSelectsTheOnlyWorkspaceYAML(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 1
+	original := `version: 2
 workspace:
   name: before-import
 services:
@@ -3318,7 +3409,7 @@ services:
 	if err := os.WriteFile(manifestPath, []byte(original), 0600); err != nil {
 		t.Fatal(err)
 	}
-	imported := `version: 1
+	imported := `version: 2
 workspace:
   name: default-import
 services:
@@ -3384,7 +3475,7 @@ func TestPolicyImportWithoutFilenameRequiresWorkspaceYAML(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 1
+	original := `version: 2
 workspace:
   name: unchanged
 services:
@@ -3456,7 +3547,7 @@ func TestPolicyImportWithoutFilenameSelectsAmongMultipleWorkspaceYAMLFiles(t *te
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 1
+	original := `version: 2
 workspace:
   name: before
 services:
@@ -3511,7 +3602,7 @@ func TestPolicyImportWithoutFilenameCanCancelSelection(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 1
+	original := `version: 2
 workspace:
   name: unchanged
 services:
@@ -3588,7 +3679,7 @@ func TestPolicyImportEditAcceptsFlagBeforeOrAfterSource(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(manifestPath, []byte(`version: 1
+			if err := os.WriteFile(manifestPath, []byte(`version: 2
 workspace:
   name: before
 services:
@@ -3600,7 +3691,7 @@ services:
 				t.Fatal(err)
 			}
 			importPath := filepath.Join(t.TempDir(), "policy.yaml")
-			if err := os.WriteFile(importPath, []byte(`version: 1
+			if err := os.WriteFile(importPath, []byte(`version: 2
 workspace:
   name: imported
 services:
@@ -3760,7 +3851,7 @@ func TestRegistryReportsKeptMissingRepositoriesAsUnchanged(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspace, ".conven"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 1
+	manifest := `version: 2
 workspace:
   name: missing
 services:
@@ -3885,7 +3976,7 @@ func TestLocalConfigDoesNotTreatGlobalSettingsAsWorkspace(t *testing.T) {
 	if code := app.Run([]string{"config", "--global", "ktctl.path", "global-ktctl"}); code != 0 {
 		t.Fatalf("global set exit code = %d: %s", code, output.String())
 	}
-	if err := os.WriteFile(filepath.Join(home, ".conven", "conven.yaml"), []byte("version: 1\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".conven", "conven.yaml"), []byte("version: 2\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3928,7 +4019,7 @@ func TestLocalConfigThroughHomeAliasDoesNotChangeGlobalSettings(t *testing.T) {
 	if code := app.Run([]string{"config", "--global", "ktctl.path", "global-ktctl"}); code != 0 {
 		t.Fatalf("global set exit code = %d: %s", code, output.String())
 	}
-	if err := os.WriteFile(filepath.Join(home, ".conven", "conven.yaml"), []byte("version: 1\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".conven", "conven.yaml"), []byte("version: 2\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 

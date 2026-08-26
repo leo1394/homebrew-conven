@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 workspace:
   name: local-services
@@ -26,6 +26,15 @@ environments:
       readiness:
         - name: nacos
           address: nacos-headless.default:8848
+    resolutions:
+      user-svc:
+        order-svc:
+          mode: remote
+        payment-svc:
+          mode: remote
+      order-svc:
+        payment-svc:
+          mode: remote
 
 services:
   user-svc:

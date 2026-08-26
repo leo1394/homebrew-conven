@@ -11,7 +11,7 @@ import (
 	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
-const validManifestYAML = `version: 1
+const validManifestYAML = `version: 2
 workspace:
   name: sample
 environments:
@@ -41,7 +41,7 @@ services:
       tcp: 15432
 `
 
-const policyManifestYAML = `version: 1
+const policyManifestYAML = `version: 2
 workspace:
   name: sample
   policy: retail
@@ -116,8 +116,8 @@ func TestLoadValidManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if manifest.Version != 1 {
-		t.Fatalf("version = %d, want 1", manifest.Version)
+	if manifest.Version != 2 {
+		t.Fatalf("version = %d, want 2", manifest.Version)
 	}
 	if manifest.Workspace.Name != "sample" {
 		t.Fatalf("workspace name = %q, want sample", manifest.Workspace.Name)
@@ -127,6 +127,16 @@ func TestLoadValidManifest(t *testing.T) {
 	}
 	if manifest.Services["api"].Runner.RunWorkdir != "${runDir}/configs/api" {
 		t.Fatalf("runWorkdir = %q", manifest.Services["api"].Runner.RunWorkdir)
+	}
+}
+
+func TestLoadAcceptsVersionOneManifest(t *testing.T) {
+	manifest, err := Load(writeManifest(t, strings.Replace(validManifestYAML, "version: 2", "version: 1", 1)))
+	if err != nil {
+		t.Fatalf("Load version 1 manifest: %v", err)
+	}
+	if manifest.Version != 1 || !reflect.DeepEqual(ServiceNames(manifest), []string{"api", "db"}) {
+		t.Fatalf("legacy manifest = %#v", manifest)
 	}
 }
 
@@ -221,7 +231,7 @@ func TestLoadRejectsWorkspaceStateDir(t *testing.T) {
 }
 
 func TestLoadRejectsMultipleYAMLDocuments(t *testing.T) {
-	_, err := Load(writeManifest(t, validManifestYAML+"---\nversion: 1\n"))
+	_, err := Load(writeManifest(t, validManifestYAML+"---\nversion: 2\n"))
 	if err == nil || !strings.Contains(err.Error(), "multiple YAML documents") {
 		t.Fatalf("error = %v, want multiple document error", err)
 	}
@@ -234,23 +244,14 @@ func TestLoadValidatesManifest(t *testing.T) {
 		wantError string
 	}{
 		{
-			name:      "version",
-			yaml:      strings.Replace(validManifestYAML, "version: 1", "version: 2", 1),
-			wantError: "version must be 1",
+			name:      "future version",
+			yaml:      strings.Replace(validManifestYAML, "version: 2", "version: 3", 1),
+			wantError: "version must be 1 or 2",
 		},
 		{
 			name:      "workspace name",
 			yaml:      strings.Replace(validManifestYAML, "name: sample", "name: \"\"", 1),
 			wantError: "workspace.name is required",
-		},
-		{
-			name: "services",
-			yaml: `version: 1
-workspace:
-  name: sample
-services:
-`,
-			wantError: "services must contain at least one service",
 		},
 		{
 			name:      "service path",
@@ -279,8 +280,8 @@ services:
 		},
 		{
 			name:      "unknown dependency",
-			yaml:      strings.Replace(validManifestYAML, "      db:\n        localEnv:", "      missing:\n        localEnv:", 1),
-			wantError: "references an unknown service",
+			yaml:      strings.Replace(validManifestYAML, "      db:\n        localEnv:", "      missing:\n        localService: missing\n        localEnv:", 1),
+			wantError: "localService references unknown service",
 		},
 		{
 			name:      "self dependency",

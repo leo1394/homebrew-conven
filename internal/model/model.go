@@ -1,11 +1,11 @@
 package model
 
 type Manifest struct {
-	Version      int                    `yaml:"version"`
-	Workspace    Workspace              `yaml:"workspace"`
-	Environments map[string]Environment `yaml:"environments"`
-	Policies     map[string]Policy      `yaml:"policies"`
-	Services     map[string]Service     `yaml:"services"`
+	Version      int                             `yaml:"version"`
+	Workspace    Workspace                       `yaml:"workspace"`
+	Environments map[string]Environment          `yaml:"environments"`
+	Policies     map[string]Policy               `yaml:"policies"`
+	Services     map[string]Service              `yaml:"services"`
 }
 
 type Workspace struct {
@@ -90,9 +90,24 @@ type ConfigPatch struct {
 }
 
 type Environment struct {
-	Registry   string            `yaml:"registry"`
-	Env        map[string]string `yaml:"env"`
-	Connection Connection        `yaml:"connection"`
+	Registry    string                                         `yaml:"registry"`
+	EnvFile     string                                         `yaml:"envFile"`
+	Env         map[string]string                              `yaml:"env"`
+	Connection  Connection                                     `yaml:"connection"`
+	Endpoints   map[string]EnvironmentEndpoint                 `yaml:"endpoints"`
+	Resolutions map[string]map[string]DependencyResolution     `yaml:"resolutions"`
+}
+
+type EnvironmentEndpoint struct {
+	Protocol  string `yaml:"protocol"`
+	Address   string `yaml:"address"`
+	Readiness Health `yaml:"readiness"`
+}
+
+type DependencyResolution struct {
+	Mode   string            `yaml:"mode"`
+	Target string            `yaml:"target"`
+	Env    map[string]string `yaml:"env"`
 }
 
 type Connection struct {
@@ -154,8 +169,11 @@ type Health struct {
 }
 
 type Dependency struct {
-	Binding   string            `yaml:"binding"`
-	Port      string            `yaml:"port"`
-	LocalEnv  map[string]string `yaml:"localEnv"`
-	RemoteEnv map[string]string `yaml:"remoteEnv"`
+	LocalService string            `yaml:"localService"`
+	Binding      string            `yaml:"binding"`
+	Port         string            `yaml:"port"`
+	Env          map[string]string `yaml:"env"`
+	LocalEnv     map[string]string `yaml:"localEnv"`
+	RemoteEnv    map[string]string `yaml:"remoteEnv"`
+	Required     *bool             `yaml:"required"`
 }

@@ -27,10 +27,15 @@ func TestStartStartsOnlySelectedAndRoutesDependencies(t *testing.T) {
 		}
 	}
 	manifest := &model.Manifest{
-		Version:   1,
+		Version:   2,
 		Workspace: model.Workspace{Name: "integration"},
 		Environments: map[string]model.Environment{
-			"dev": {Registry: "nacos"},
+			"dev": {
+				Registry: "nacos",
+				Resolutions: map[string]map[string]model.DependencyResolution{
+					"user-svc": {"payment-svc": {Mode: "remote"}},
+				},
+			},
 		},
 		Services: map[string]model.Service{
 			"user-svc": {

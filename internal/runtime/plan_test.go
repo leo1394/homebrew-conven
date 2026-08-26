@@ -7,11 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/leo1394/homebrew-conven/internal/dependency"
 	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 func TestDependencyOrderStartsDependenciesFirst(t *testing.T) {
-	manifest := &model.Manifest{Services: map[string]model.Service{
+	manifest := &model.Manifest{Version: 2, Services: map[string]model.Service{
 		"api": {Dependencies: map[string]model.Dependency{"order": {}, "user": {}}},
 		"order": {Dependencies: map[string]model.Dependency{"user": {}}},
 		"user": {},
@@ -23,6 +24,140 @@ func TestDependencyOrderStartsDependenciesFirst(t *testing.T) {
 	expected := []string{"user", "order", "api"}
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("order = %#v, want %#v", actual, expected)
+	}
+}
+
+func TestExpandLocalServiceDependenciesIncludesTransitiveAliases(t *testing.T) {
+	manifest := &model.Manifest{Version: 2, Services: map[string]model.Service{
+		"api": {
+			Dependencies: map[string]model.Dependency{
+				"events": {LocalService: "worker"},
+				"users":  {LocalService: "user"},
+			},
+		},
+		"worker": {Dependencies: map[string]model.Dependency{"database": {LocalService: "storage"}}},
+		"user":   {Dependencies: map[string]model.Dependency{"api": {}}},
+		"storage": {},
+	}}
+
+	expanded, err := ExpandLocalServiceDependencies(manifest, []string{"api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(expanded, []string{"api", "user", "worker", "storage"}) {
+		t.Fatalf("expanded services = %#v", expanded)
+	}
+}
+
+func TestExpandLocalServiceDependenciesKeepsDefaultSelectionUnchanged(t *testing.T) {
+	manifest := &model.Manifest{Version: 1, Services: map[string]model.Service{
+		"api":    {Dependencies: map[string]model.Dependency{"worker": {}}},
+		"worker": {},
+	}}
+	selected := []string{"api"}
+
+	expanded, err := ExpandLocalServiceDependencies(manifest, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(selected, []string{"api"}) || !reflect.DeepEqual(expanded, []string{"api", "worker"}) {
+		t.Fatalf("selected = %#v, expanded = %#v", selected, expanded)
+	}
+}
+
+func TestExpandedVersionTwoAliasBuildsAsLocalRoute(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	for _, name := range []string{"api", "worker"} {
+		if err := os.Mkdir(filepath.Join(workspaceRoot, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := NewStore(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := &model.Manifest{
+		Version:      2,
+		Workspace:    model.Workspace{Name: "aliases"},
+		Environments: map[string]model.Environment{"local": {Connection: model.Connection{Driver: "none"}}},
+		Services: map[string]model.Service{
+			"api": {
+				Path:   "api",
+				Runner: model.Runner{Run: []string{"api"}},
+				Dependencies: map[string]model.Dependency{
+					"events": {LocalService: "worker", LocalEnv: map[string]string{"WORKER_ADDRESS": "${dependency.address}"}},
+				},
+			},
+			"worker": {Path: "worker", Runner: model.Runner{Run: []string{"worker"}}, Ports: map[string]int{"rpc": 18081}},
+		},
+	}
+	expanded, err := ExpandLocalServiceDependencies(manifest, []string{"api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := BuildPlan(&WorkspaceData{Root: workspaceRoot, Manifest: manifest, Store: store}, CommonOptions{}, expanded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(plan.Order, []string{"worker", "api"}) || plan.Resolutions["api"]["events"].Mode != "local" {
+		t.Fatalf("plan order = %#v, resolution = %#v", plan.Order, plan.Resolutions["api"]["events"])
+	}
+	if got := plannedEnvironment(plan.Services["api"].Environment)["WORKER_ADDRESS"]; got != "127.0.0.1:18081" {
+		t.Fatalf("WORKER_ADDRESS = %q", got)
+	}
+}
+
+func TestBuildPlanVersionOnePreservesLegacyDependencyRouting(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	for _, name := range []string{"api", "db"} {
+		if err := os.Mkdir(filepath.Join(workspaceRoot, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := NewStore(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := &model.Manifest{
+		Version:      1,
+		Workspace:    model.Workspace{Name: "legacy"},
+		Environments: map[string]model.Environment{"dev": {Connection: model.Connection{Driver: "none"}}},
+		Services: map[string]model.Service{
+			"api": {
+				Path:   "api",
+				Runner: model.Runner{Run: []string{"api"}},
+				Dependencies: map[string]model.Dependency{
+					"db": {
+						LocalEnv:  map[string]string{"DB_ADDRESS": "127.0.0.1:${services.db.ports.tcp}"},
+						RemoteEnv: map[string]string{"DB_ADDRESS": "db.dev:5432"},
+					},
+				},
+			},
+			"db": {Path: "db", Runner: model.Runner{Run: []string{"db"}}, Ports: map[string]int{"tcp": 15432}},
+		},
+	}
+	workspace := &WorkspaceData{Root: workspaceRoot, Manifest: manifest, Store: store}
+
+	remotePlan, err := BuildPlan(workspace, CommonOptions{}, []string{"api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remotePlan.EnvironmentName != "dev" || !reflect.DeepEqual(remotePlan.DeclaredRemote, []string{"db"}) {
+		t.Fatalf("remote plan = %#v", remotePlan)
+	}
+	if got := plannedEnvironment(remotePlan.Services["api"].Environment)["DB_ADDRESS"]; got != "db.dev:5432" {
+		t.Fatalf("remote DB_ADDRESS = %q", got)
+	}
+
+	localPlan, err := BuildPlan(workspace, CommonOptions{}, []string{"api", "db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(localPlan.DeclaredRemote) != 0 {
+		t.Fatalf("legacy local plan remote dependencies = %#v", localPlan.DeclaredRemote)
+	}
+	if got := plannedEnvironment(localPlan.Services["api"].Environment)["DB_ADDRESS"]; got != "127.0.0.1:15432" {
+		t.Fatalf("local DB_ADDRESS = %q", got)
 	}
 }
 
@@ -62,13 +197,15 @@ func TestDependencyStartGroupsKeepsCyclesTogether(t *testing.T) {
 	}
 }
 
-func TestRemoteDependenciesOnlyIncludesUnselected(t *testing.T) {
-	manifest := &model.Manifest{Services: map[string]model.Service{
-		"api": {Dependencies: map[string]model.Dependency{"order": {}, "payment": {}}},
-		"order": {},
-		"payment": {},
-	}}
-	actual := remoteDependencies(manifest, []string{"api", "order"})
+func TestRemoteResolutionNamesOnlyIncludesRemoteMode(t *testing.T) {
+	resolutions := map[string]map[string]dependency.Resolution{
+		"api": {
+			"payment": {Mode: "remote"},
+			"postgres": {Mode: "endpoint"},
+			"worker": {Mode: "local"},
+		},
+	}
+	actual := remoteResolutionNames(resolutions)
 	expected := []string{"payment"}
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("remote = %#v, want %#v", actual, expected)
@@ -146,6 +283,12 @@ func TestPlanServiceMaterializesSelectedDependencyWithoutLocalEnv(t *testing.T) 
 		t.Fatal(err)
 	}
 	manifest := &model.Manifest{
+		Version: 2,
+		Environments: map[string]model.Environment{
+			"dev": {Resolutions: map[string]map[string]model.DependencyResolution{
+				"api": {"db": {Mode: "remote"}},
+			}},
+		},
 		Policies: map[string]model.Policy{
 			"retail": {
 				Drivers: model.PolicyDrivers{
@@ -691,6 +834,36 @@ func dependencyEnvironmentPlan(t *testing.T, localValue string, remoteValue stri
 		EnvironmentName: "dev",
 		Selected:        []string{"api", "a-svc"},
 		RunDir:          t.TempDir(),
+		Resolutions: map[string]map[string]dependency.Resolution{
+			"api": {
+				"a-svc": {Owner: "api", Alias: "a-svc", Mode: "local", Target: "a-svc", Env: map[string]string{"DISCOVERY_ENABLED": localValue}},
+				"z-svc": {Owner: "api", Alias: "z-svc", Mode: "remote", Env: map[string]string{"DISCOVERY_ENABLED": remoteValue}},
+			},
+		},
+	}
+}
+
+func TestDefaultEnvironmentNamePrefersDevThenLocalOrSoleProfile(t *testing.T) {
+	tests := []struct {
+		name         string
+		environments map[string]model.Environment
+		want         string
+	}{
+		{name: "dev", environments: map[string]model.Environment{"local": {}, "dev": {}}, want: "dev"},
+		{name: "local", environments: map[string]model.Environment{"local": {}}, want: "local"},
+		{name: "sole custom", environments: map[string]model.Environment{"sandbox": {}}, want: "sandbox"},
+		{name: "local among custom", environments: map[string]model.Environment{"local": {}, "sandbox": {}}, want: "local"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := defaultEnvironmentName(&model.Manifest{Environments: test.environments})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("environment = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

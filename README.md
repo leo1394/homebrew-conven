@@ -7,10 +7,9 @@
 
 ![Conven — Run changed services locally and keep cluster dependencies connected](assets/conven-banner-en.png)
 
-Conven is a focused local microservice orchestrator. It selects a local service
-group, routes selected dependencies to `127.0.0.1`, preserves remote discovery
-for unselected dependencies, and keeps generated configuration outside service
-repositories.
+Conven is a focused local microservice orchestrator. It runs a selected service
+group locally and keeps the rest reachable through configured endpoints or a
+development cluster. Generated configuration stays outside service repositories.
 
 - **Start less:** run only the services involved in the current change.
 - **Keep the real topology:** mix local services with remote RPC, databases,
@@ -35,6 +34,8 @@ flowchart LR
     P --> R[".conven/runtime/current"]
     R --> A["local api"]
     R --> B["local rpc"]
+    E["configured local endpoints"] --> A
+    E --> B
     A -->|"127.0.0.1"| B
     A -->|"ktctl + remote discovery"| D["development dependencies"]
     B -->|"ktctl + remote discovery"| D
@@ -79,11 +80,12 @@ with the user's normal authority and may modify their working directory.
 ## Install
 
 ```bash
-brew install leo1394/conven/conven
+brew tap leo1394/conven
+brew install conven
 ```
 
-The fully qualified command installs the tap when needed and trusts only the
-`conven` Formula. After that, the short name works for upgrades:
+Add the tap once, then install the `conven` Formula. After that, the short name
+works for upgrades:
 
 ```bash
 brew update
@@ -97,6 +99,63 @@ building Conven from source requires Go 1.23 or later.
 
 ## Quick start
 
+### Start from zero without a cluster
+
+Create a local environment and inspect the available services:
+
+```bash
+cd /path/to/workspace
+
+conven init --local
+conven services --list
+```
+
+Pass service names directly to start local services. Use `--with-dependencies`
+to include transitive local service dependencies:
+
+```bash
+conven services --start portal-api-service
+conven services --start portal-api-service --with-dependencies
+```
+
+By default, only explicitly selected services start. Declare the addresses
+required by local services as environment endpoints and map them into each
+consumer:
+
+```yaml
+environments:
+  local:
+    connection:
+      driver: none
+    endpoints:
+      postgres:
+        protocol: tcp
+        address: 127.0.0.1:5432
+
+services:
+  portal-api-service:
+    path: services/portal-api-service
+    runner:
+      run: [go, run, ./cmd/portal-api-service]
+    dependencies:
+      postgres:
+        env:
+          DATABASE_URL: postgres://dev:dev@${dependency.address}/app
+```
+
+Conven checks referenced endpoints before starting a service. A sole environment
+is selected automatically:
+
+```bash
+conven doctor --env local
+conven services --start portal-api-service
+conven status
+```
+
+The Chinese
+[local-first beginner guide](docs/getting-started-local-zh.md) contains the
+complete walkthrough.
+
 ### Use an existing Conven workspace
 
 If the project already commits `.conven/conven.yaml`:
@@ -104,9 +163,14 @@ If the project already commits `.conven/conven.yaml`:
 ```bash
 cd /path/to/workspace
 
-conven doctor --dev
-conven services --start --dev user-svc order-svc
+conven doctor --test
+conven services --start --test portal-api-service partner-service visit-plan-mgr-service
 ```
+
+Version 0.3 accepts existing Manifest v1 workspaces without migration and keeps
+their 0.2.x `dev`, local dependency, and remote dependency behavior. Manifest
+v2 adds no-cluster environments, environment files, explicit endpoints, and
+dependency resolution rules.
 
 Replace the example names with values from `conven services --list`. In an
 interactive terminal you may omit the names and select services in the picker.
@@ -133,8 +197,8 @@ conven services --list
 conven policy --edit
 
 conven doctor --dev
-conven services --start --dev --dry-run user-svc order-svc
-conven services --start --dev user-svc order-svc
+conven services --start --dev --dry-run portal-api-service partner-service
+conven services --start --dev portal-api-service partner-service
 ```
 
 `init` performs the initial registry scan, conservatively identifying Git
@@ -144,7 +208,7 @@ files:
 | File | Purpose |
 | --- | --- |
 | `.conven/conven.yaml` | Canonical workspace manifest for environments, services, policies, and runtime behavior. |
-| `.conven/catalog.yaml` | Declarative generator catalog for repository and RPC-binding identities, service kinds, unique local ports, and disabled RPC bindings. |
+| `.conven/catalog.yaml` | Declarative generator catalog for repository and RPC-binding identities, service kinds, unique local ports, and disabled bindings. |
 | `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` | AI-readable specification for implementing the workspace policy generator plugin. |
 | `README.md` | Workspace-local quick start for the generated files and Conven workflow. |
 
@@ -178,17 +242,16 @@ validates and replaces the complete manifest; it is not a YAML merge.
 ## How a start works
 
 1. Resolve the nearest `.conven/conven.yaml` and selected environment.
-2. Select services and build dependency-ordered start groups.
-3. Validate local/remote routes, isolation contracts, commands, and paths.
-4. Materialize runtime configuration under `.conven/runtime/current`.
-5. Reuse or establish the environment connection, then run prepare, build,
-   start, and health checks.
-6. Record process identity and aggregate service logs for later status,
-   restart, and stop operations.
+2. Select services, resolve every dependency edge, and build start groups.
+3. Validate local-service, endpoint, remote, and disabled routes plus isolation
+   and paths.
+4. Check the readiness of referenced external endpoints.
+5. Reuse or establish the environment connection and materialize runtime config.
+6. Run prepare, build, start, and health checks, then save state and logs.
 
 ### Configuration materialization order
 
-Step 4 follows two related pipelines. Here, `runtime/current/application.yaml`
+Step 5 follows two related pipelines. Here, `runtime/current/application.yaml`
 is shorthand for a service-scoped runtime copy; the actual file lives at
 `.conven/runtime/current/configs/<service>/application.yaml`. The full Apollo
 replacement applies only to this guarded runtime copy and never overwrites the
@@ -224,6 +287,36 @@ a concrete example of a service-scoped manifest patch. The local-isolation
 guard enforces and verifies final listener and registration behavior, while
 Consul preflight checks the remote dependencies that remain enabled in the
 final runtime configuration.
+
+### Service runtime configuration contract
+
+> **Important:** A typed service must accept the runtime-configuration argument
+> declared by its adapter and actually load configuration from that path.
+> Merely receiving, declaring, or ignoring the argument does not satisfy the
+> Conven contract. A missing path, invalid path, or parse failure must terminate
+> the service with a non-zero status; the service must not fall back to a
+> repository-default configuration.
+
+Conven does not require every language to use one hard-coded flag. Application
+source stays tool-agnostic and recognizes its framework-native or project-native
+configuration option; the manifest or policy adapts `${configDir}` to argv:
+
+| Language/framework | Recommended runtime option |
+| --- | --- |
+| Go/go-zero | `-f <runtime-config-directory>` |
+| Java/Spring Boot | `--spring.config.location=file:<runtime-config-directory>/` |
+| Python | `--config <runtime-config-file>` or `--config-dir <runtime-config-directory>` |
+| Node.js | `--config <runtime-config-file>` or `--config-dir <runtime-config-directory>` |
+| Dart | `--config <runtime-config-file>` or `--config-dir <runtime-config-directory>` |
+| Rust | `--config <runtime-config-file>` or `--config-dir <runtime-config-directory>` |
+
+A correct implementation performs both steps: parse the argument, then load
+configuration from that path. Parsing it while continuing to load repository
+configuration is also invalid. `CONVEN_CONFIG_DIR` is orchestration metadata for
+runner hooks and the Conven process; it is not the recommended application-source
+integration API. See the [service runtime configuration contract](docs/service-runtime-config-contract.md)
+for complete implementations, invalid examples, and the canary-port behavioral
+test.
 
 `services --start --dry-run` stops after static planning. It does not contact
 Apollo, establish a connection, materialize configuration, build code, start a
@@ -261,7 +354,7 @@ It has four main parts:
 A minimal runner-only workspace looks like this:
 
 ```yaml
-version: 1
+version: 2
 
 workspace:
   name: demo
@@ -272,10 +365,10 @@ environments:
       driver: none
 
 services:
-  api:
-    path: services/api
+  portal-api-service:
+    path: services/portal-api-service
     runner:
-      run: [go, run, ./cmd/api]
+      run: [go, run, ./cmd/portal-api-service]
     ports:
       http: 18080
     health:
@@ -338,9 +431,8 @@ Conven offers two deliberately different viewers:
 | Dashboard | Live overview | Fixed workspace banner, wrapped long lines, app-owned scrolling and `/` search, up to 10,000 retained logical lines |
 | Plain | Terminal-native search/export | Normal scrollback, `Command+F`, pipes and redirects, up to 10,000 replayed lines before following |
 
-The Dashboard keeps workspace context, local services, disabled RPC bindings,
-start time, and live logs in one view.
-
+The Dashboard keeps workspace context, local services, disabled bindings, start
+time, and live logs in one view.
 
 ```bash
 # Full-screen viewer; the alias below is equivalent.
@@ -444,8 +536,8 @@ man conven
 
 The installed manual is the authoritative reference for that Conven version.
 The source manual is available at [`docs/conven.1`](docs/conven.1). Release
-steps are documented in [`RELEASING.md`](RELEASING.md), and version changes in
-[`CHANGELOG.md`](CHANGELOG.md).
+steps are documented in [`RELEASING.md`](RELEASING.md), and version changes are
+in [`CHANGELOG.md`](CHANGELOG.md).
 
 Run repository checks from the project root:
 

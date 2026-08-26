@@ -52,7 +52,7 @@ func Completion(shell string) (string, error) {
                 options="--tail --dashboard --help"
                 ;;
             --start)
-                options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --skip-build --skip-verify --help"
+                options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --with-dependencies --skip-build --skip-verify --help"
                 ;;
             --restart)
                 options="--tail --dashboard --skip-build --skip-verify --help"
@@ -170,7 +170,7 @@ func Completion(shell string) (string, error) {
     fi
     case "$subcommand" in
         init)
-            options="--help"
+            options="--local --help"
             ;;
         config)
             options="--global --list --unset --help"
@@ -278,6 +278,7 @@ _conven() {
                         '--namespace[Kubernetes namespace]:namespace:' \
                         '--tail[stream aggregated logs as plain text]' \
                         '--dry-run[show the startup plan]' \
+                        '--with-dependencies[also start transitive local service dependencies]' \
                         '--skip-build[skip build when artifacts are reusable]' \
                         '--skip-verify[skip health checks]' \
                         '--help[show command help]' \
@@ -326,6 +327,7 @@ _conven() {
             ;;
         init)
             _arguments \
+                '--local[initialize no-cluster local development]' \
                 '--help[show command help]'
             ;;
         config)
@@ -427,20 +429,20 @@ _conven() {
                         else
                             _arguments \
                                 '--output[generator output path; omit the value for application.yaml]::output file:_files' \
-                                '--disable-bindings[replace disabled RPC bindings for this generator run]:binding:' \
+                                '--disable-bindings[replace disabled bindings for this generator run]:binding:' \
                                 '1:global plugin:' \
                                 '*:plugin argument:'
                         fi
                     elif [[ $words[2] == --* ]]; then
                         _arguments \
                             '--output[generator output path; omit the value for application.yaml]::output file:_files' \
-                            '--disable-bindings[replace disabled RPC bindings for this generator run]:binding:' \
+                            '--disable-bindings[replace disabled bindings for this generator run]:binding:' \
                             '*:plugin argument:'
                     else
                         _arguments \
                             $plugin_scope \
                             '--output[generator output path; omit the value for application.yaml]::output file:_files' \
-                            '--disable-bindings[replace disabled RPC bindings for this generator run]:binding:' \
+                            '--disable-bindings[replace disabled bindings for this generator run]:binding:' \
                             '1::plugin:' \
                             '*:plugin argument:'
                     fi
@@ -458,7 +460,7 @@ _conven() {
                         else
                             _arguments \
                                 '--output[generator output path; omit the value for application.yaml]::output file:_files' \
-                                '--disable-bindings[replace disabled RPC bindings for this generator run]:binding:' \
+                                '--disable-bindings[replace disabled bindings for this generator run]:binding:' \
                                 '1:global plugin:' \
                                 '*:plugin argument:'
                         fi
@@ -654,6 +656,7 @@ complete -c conven -f -n '__conven_without_command' -a help -d 'Show conven usag
 complete -c conven -f -n '__conven_without_command' -a version -d 'Show conven version'
 complete -c conven -f -n '__conven_using_subcommand help; and __conven_help_without_command' -a 'init services config catalog policy plugins status doctor help version' -d 'Show detailed command help'
 complete -c conven -n '__conven_using_subcommand init services config catalog policy plugins status doctor' -s h -l help -d 'Show command help'
+complete -c conven -n '__conven_using_subcommand init' -l local -d 'Initialize no-cluster local development'
 complete -c conven -n '__conven_using_subcommand config' -l global -d 'Use the current user global config'
 complete -c conven -n '__conven_using_subcommand config' -l list -d 'List configuration values'
 complete -c conven -n '__conven_using_subcommand config' -l unset -d 'Remove one configuration value'
@@ -675,9 +678,9 @@ complete -c conven -n '__conven_plugins_scope_position --list' -l global -d 'Lis
 complete -c conven -n '__conven_plugins_scope_position --remove' -l global -d 'Remove from the user-global plugin directory'
 complete -c conven -n '__conven_plugins_scope_position --run' -l global -d 'Force the user-global plugin scope'
 complete -c conven -n '__conven_plugins_run_arguments' -l output -d 'Generator output path; omit its value for application.yaml'
-complete -c conven -n '__conven_plugins_run_arguments' -l disable-bindings -r -d 'Replace disabled RPC bindings for this generator run'
+complete -c conven -n '__conven_plugins_run_arguments' -l disable-bindings -r -d 'Replace disabled bindings for this generator run'
 complete -c conven -n '__conven_plugins_global_run' -l output -d 'Generator output path; omit its value for application.yaml'
-complete -c conven -n '__conven_plugins_global_run' -l disable-bindings -r -d 'Replace disabled RPC bindings for this generator run'
+complete -c conven -n '__conven_plugins_global_run' -l disable-bindings -r -d 'Replace disabled bindings for this generator run'
 complete -c conven -n '__conven_using_subcommand doctor' -l env -r -d 'Environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l dev -d 'Use the dev environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l test -d 'Use the test environment profile'
@@ -705,6 +708,7 @@ complete -c conven -n '__conven_services_action --start' -l context -r -d 'Kubec
 complete -c conven -n '__conven_services_action --start' -l namespace -r -d 'Kubernetes namespace'
 complete -c conven -n '__conven_services_action --start' -l tail -d 'Stream aggregated logs as plain text'
 complete -c conven -n '__conven_services_action --start' -l dry-run -d 'Show the startup plan'
+complete -c conven -n '__conven_services_action --start' -l with-dependencies -d 'Also start transitive local service dependencies'
 complete -c conven -n '__conven_services_action --start' -l skip-build -d 'Skip build when artifacts are reusable'
 complete -c conven -n '__conven_services_action --start' -l skip-verify -d 'Skip health checks'
 complete -c conven -n '__conven_services_action --restart' -l tail -d 'Stream aggregated logs as plain text'

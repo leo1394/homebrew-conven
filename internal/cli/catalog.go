@@ -83,7 +83,7 @@ func (app App) runCatalogValidate(arguments []string) int {
 	fmt.Fprintln(app.Output, style.Success("✓ Conven catalog is valid."))
 	fmt.Fprintln(app.Output, style.Detail("Catalog: "+style.Identifier(path)))
 	fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("Services: %d", len(catalog.Services))))
-	fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("Disabled RPC bindings: %d", len(catalog.DisabledRPCBindings))))
+	fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("Disabled bindings: %d", len(catalog.DisabledRPCBindings))))
 	return 0
 }
 

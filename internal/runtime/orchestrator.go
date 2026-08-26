@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leo1394/homebrew-conven/internal/dependency"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
@@ -159,6 +160,14 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		return nil, err
 	}
 	printPlan(output, plan, false)
+	endpointNames := dependency.EndpointNames(plan.Resolutions)
+	if len(endpointNames) > 0 {
+		fmt.Fprintln(output, style.Stage("Checking endpoints"))
+		fmt.Fprintln(output, style.Detail(style.Identifiers(endpointNames, ", ")))
+		if err := dependency.CheckEndpoints(ctx, workspace.Root, CommandEnvironment(plan.Environment.Env), plan.Environment, plan.Resolutions); err != nil {
+			return nil, err
+		}
+	}
 	connection, err := EnsureConnection(ctx, plan.Connection, ConnectionLogPath(workspace.Store.Root), workspace.Store.Root, output)
 	if retainedConnection && !sameConnectionProcess(retainedConnectionSnapshot, connection) {
 		retainedConnection = false
@@ -613,6 +622,29 @@ func Doctor(workspace *WorkspaceData, options CommonOptions, output io.Writer) e
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	if len(names) == 0 {
+		environmentName := options.Environment
+		if environmentName == "" {
+			var err error
+			environmentName, err = defaultEnvironmentName(workspace.Manifest)
+			if err != nil {
+				return err
+			}
+		}
+		environment, found := workspace.Manifest.Environments[environmentName]
+		if !found {
+			return fmt.Errorf("environment %q is not declared", environmentName)
+		}
+		fmt.Fprintln(output, style.Stage("Doctor"))
+		fmt.Fprintln(output, style.Detail("Workspace: "+workspace.Root))
+		fmt.Fprintln(output, style.Detail("Manifest: "+workspace.ConfigPath))
+		fmt.Fprintln(output, style.Detail("Runtime: "+workspace.Store.Root))
+		fmt.Fprintln(output, style.Detail("Environment: "+style.Identifier(environmentName)))
+		fmt.Fprintln(output, style.Detail("Services: 0"))
+		fmt.Fprintln(output, style.Detail("Connection: "+style.Identifier(displayConnection(ConnectionConfig{Driver: environment.Connection.Driver}))))
+		fmt.Fprintln(output, style.Success("✓ Doctor checks passed."))
+		return nil
+	}
 	plan, err := BuildPlan(workspace, options, names)
 	if err != nil {
 		return err
@@ -716,6 +748,26 @@ func printPlan(output io.Writer, plan *Plan, dryRun bool) {
 	}
 	fmt.Fprintln(output, style.Detail("Start groups: "+style.Identifier(strings.Join(groups, " -> "))))
 	fmt.Fprintln(output, style.Detail("Connection: "+style.Identifier(displayConnection(plan.Connection))))
+	owners := make([]string, 0, len(plan.Resolutions))
+	for owner := range plan.Resolutions {
+		owners = append(owners, owner)
+	}
+	sort.Strings(owners)
+	for _, owner := range owners {
+		aliases := make([]string, 0, len(plan.Resolutions[owner]))
+		for alias := range plan.Resolutions[owner] {
+			aliases = append(aliases, alias)
+		}
+		sort.Strings(aliases)
+		for _, alias := range aliases {
+			resolution := plan.Resolutions[owner][alias]
+			target := resolution.Target
+			if target == "" {
+				target = "-"
+			}
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("Dependency route: %s.%s -> %s:%s", owner, alias, resolution.Mode, target)))
+		}
+	}
 	for _, name := range plan.Order {
 		service := plan.Services[name]
 		if service.Config == nil {

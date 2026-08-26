@@ -12,7 +12,7 @@ import (
 )
 
 const editablePolicyManifest = `# original comment
-version: 1
+version: 2
 workspace:
   name: test
 services:
@@ -23,7 +23,7 @@ services:
 `
 
 const templatePolicyManifest = `# template comment
-version: 1
+version: 2
 workspace:
   name: template
 services:
@@ -123,7 +123,7 @@ func TestEditWorkspacePolicyRejectsInvalidDraftAndPreservesIt(t *testing.T) {
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 
 	result, err := EditWorkspacePolicy(workspace, func(path string) error {
-		return os.WriteFile(path, []byte("version: 1\nunknown: true\n"), 0600)
+		return os.WriteFile(path, []byte("version: 2\nunknown: true\n"), 0600)
 	})
 	if err == nil || !strings.Contains(err.Error(), "edited policy manifest is invalid") || !strings.Contains(err.Error(), "is kept") {
 		t.Fatalf("error = %v", err)
@@ -135,7 +135,7 @@ func TestEditWorkspacePolicyRejectsInvalidDraftAndPreservesIt(t *testing.T) {
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
-	if string(draft) != "version: 1\nunknown: true\n" {
+	if string(draft) != "version: 2\nunknown: true\n" {
 		t.Fatalf("preserved draft = %q", draft)
 	}
 	assertFileContents(t, manifestPath, editablePolicyManifest)
@@ -360,7 +360,7 @@ func TestImportWorkspacePolicyRejectsInvalidFileWithoutWriting(t *testing.T) {
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 	importPath := filepath.Join(t.TempDir(), "invalid.yaml")
-	if err := os.WriteFile(importPath, []byte("version: 1\nunknown: true\n"), 0600); err != nil {
+	if err := os.WriteFile(importPath, []byte("version: 2\nunknown: true\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -556,7 +556,7 @@ func TestResetWorkspacePolicyFromScanBacksUpAndRebuildsManifest(t *testing.T) {
 	beforeRepository := analyzerRepositorySnapshot(t, repository)
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	original := `# manual configuration
-version: 1
+version: 2
 workspace:
   name: manual
   policy: company
@@ -618,6 +618,33 @@ services:
 	}
 	if string(ignore) != "/runtime/\n/backups/\n" {
 		t.Fatalf("gitignore = %q", ignore)
+	}
+}
+
+func TestResetWorkspacePolicyFromScanPreservesVersionOne(t *testing.T) {
+	workspace := t.TempDir()
+	writeGoServiceRepository(t, workspace, "api-service", false, "example.com/api-service", "main")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	original := `version: 1
+workspace:
+  name: legacy
+services:
+  custom-api:
+    path: api-service
+    runner:
+      run: [manual]
+`
+	writeDiscoveryFile(t, manifestPath, original)
+
+	if _, err := ResetWorkspacePolicyFromScan(workspace); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := Load(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != 1 || !reflect.DeepEqual(ServiceNames(manifest), []string{"api-service"}) {
+		t.Fatalf("reset legacy manifest = %#v", manifest)
 	}
 }
 

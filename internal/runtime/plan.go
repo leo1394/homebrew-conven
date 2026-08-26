@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/leo1394/homebrew-conven/internal/config"
+	"github.com/leo1394/homebrew-conven/internal/dependency"
 	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
@@ -39,6 +40,7 @@ type Plan struct {
 	RunDir          string
 	ReuseCurrent    bool
 	Services        map[string]PlannedService
+	Resolutions     map[string]map[string]dependency.Resolution
 	Connection      ConnectionConfig
 }
 
@@ -102,7 +104,11 @@ func buildPlan(workspace *WorkspaceData, options CommonOptions, selected []strin
 	}
 	environmentName := options.Environment
 	if environmentName == "" {
-		environmentName = "dev"
+		var err error
+		environmentName, err = defaultEnvironmentName(workspace.Manifest)
+		if err != nil {
+			return nil, err
+		}
 	}
 	environment, found := workspace.Manifest.Environments[environmentName]
 	if !found && len(workspace.Manifest.Environments) > 0 {
@@ -122,19 +128,35 @@ func buildPlan(workspace *WorkspaceData, options CommonOptions, selected []strin
 	for _, group := range groups {
 		order = append(order, group...)
 	}
-	remote := remoteDependencies(workspace.Manifest, selected)
 	plan := &Plan{
 		Workspace:       workspace,
 		EnvironmentName: environmentName,
 		Environment:     environment,
 		Selected:        selected,
-		DeclaredRemote:  remote,
 		Order:           order,
 		Groups:          groups,
 		RunDir:          workspace.Store.CurrentDir,
 		ReuseCurrent:    reuseCurrent,
 		Services:        make(map[string]PlannedService, len(selected)),
 	}
+	environmentValues := make(map[string]string, len(environment.Env))
+	mergeValues(environmentValues, environment.Env)
+	var resolutions map[string]map[string]dependency.Resolution
+	if workspace.Manifest.Version == 1 {
+		resolutions = resolveLegacyDependencies(workspace.Manifest, selected)
+	} else {
+		environmentValues, err = config.LoadEnvironmentValues(workspace.Root, environment.Env, environment.EnvFile)
+		if err != nil {
+			return nil, fmt.Errorf("load environment %s: %w", environmentName, err)
+		}
+		resolutions, err = dependency.Resolve(workspace.Manifest, environmentName, selected, environmentValues)
+		if err != nil {
+			return nil, err
+		}
+	}
+	plan.Resolutions = resolutions
+	plan.DeclaredRemote = remoteResolutionNames(resolutions)
+	plan.Environment.Env = environmentValues
 	if err := validateInboundRouting(ConnectionConfig{Driver: environment.Connection.Driver}); err != nil {
 		return nil, err
 	}
@@ -160,6 +182,102 @@ func buildPlan(workspace *WorkspaceData, options CommonOptions, selected []strin
 		plan.Connection = connection
 	}
 	return plan, nil
+}
+
+func defaultEnvironmentName(manifest *model.Manifest) (string, error) {
+	if manifest != nil && manifest.Version == 1 {
+		return "dev", nil
+	}
+	if manifest == nil || len(manifest.Environments) == 0 {
+		return "dev", nil
+	}
+	if _, found := manifest.Environments["dev"]; found {
+		return "dev", nil
+	}
+	if len(manifest.Environments) == 1 {
+		for name := range manifest.Environments {
+			return name, nil
+		}
+	}
+	if _, found := manifest.Environments["local"]; found {
+		return "local", nil
+	}
+	names := make([]string, 0, len(manifest.Environments))
+	for name := range manifest.Environments {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return "", fmt.Errorf("no default environment is available (profiles: %s); pass --env NAME", strings.Join(names, ", "))
+}
+
+func ExpandLocalServiceDependencies(manifest *model.Manifest, selected []string) ([]string, error) {
+	if err := config.ValidateSelection(manifest, selected); err != nil {
+		return nil, err
+	}
+	expanded := append([]string(nil), selected...)
+	seen := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		seen[name] = true
+	}
+	for index := 0; index < len(expanded); index++ {
+		service := manifest.Services[expanded[index]]
+		dependencies := make([]string, 0, len(service.Dependencies))
+		for alias, declaration := range service.Dependencies {
+			dependencyName := localServiceForDependency(manifest, alias, declaration)
+			if dependencyName != "" && !seen[dependencyName] {
+				dependencies = append(dependencies, dependencyName)
+			}
+		}
+		sort.Strings(dependencies)
+		for _, dependencyName := range dependencies {
+			if seen[dependencyName] {
+				continue
+			}
+			seen[dependencyName] = true
+			expanded = append(expanded, dependencyName)
+		}
+	}
+	return expanded, nil
+}
+
+func resolveLegacyDependencies(manifest *model.Manifest, selected []string) map[string]map[string]dependency.Resolution {
+	selectedSet := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		selectedSet[name] = true
+	}
+	resolutions := make(map[string]map[string]dependency.Resolution, len(selected))
+	for _, owner := range selected {
+		service := manifest.Services[owner]
+		aliases := make([]string, 0, len(service.Dependencies))
+		for alias := range service.Dependencies {
+			aliases = append(aliases, alias)
+		}
+		sort.Strings(aliases)
+		resolutions[owner] = make(map[string]dependency.Resolution, len(aliases))
+		for _, alias := range aliases {
+			declaration := service.Dependencies[alias]
+			resolution := dependency.Resolution{Owner: owner, Alias: alias, Target: alias}
+			if selectedSet[alias] {
+				resolution.Mode = "local"
+				resolution.Env = copyStringMap(declaration.LocalEnv)
+				resolution.Host = "127.0.0.1"
+				resolution.Ports = copyPorts(manifest.Services[alias].Ports)
+			} else {
+				resolution.Mode = "remote"
+				resolution.Env = copyStringMap(declaration.RemoteEnv)
+			}
+			resolutions[owner][alias] = resolution
+		}
+	}
+	return resolutions
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	copied := make(map[string]string, len(values))
+	for key, value := range values {
+		copied[key] = value
+	}
+	return copied
 }
 
 func planService(plan *Plan, name string, selected map[string]bool) (PlannedService, error) {
@@ -266,13 +384,22 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	}
 	sort.Strings(dependencyNames)
 	for _, dependencyName := range dependencyNames {
-		dependency := service.Dependencies[dependencyName]
-		dependencyEnvironment := dependency.RemoteEnv
-		if selected[dependencyName] {
-			if len(dependency.LocalEnv) == 0 && !configRoutesLocalDependency(plannedConfig, dependencyName) {
-				return PlannedService{}, fmt.Errorf("selected local dependency %s -> %s has no localEnv routing override", name, dependencyName)
+		declaration := service.Dependencies[dependencyName]
+		resolution, found := plan.Resolutions[name][dependencyName]
+		if !found {
+			return PlannedService{}, fmt.Errorf("service %s dependency %s has no resolved route", name, dependencyName)
+		}
+		dependencyEnvironment := resolution.Env
+		if resolution.Mode == "local" {
+			if len(dependencyEnvironment) == 0 && !configRoutesLocalDependency(plannedConfig, resolution.Target) {
+				if plan.Workspace.Manifest.Version == 1 {
+					return PlannedService{}, fmt.Errorf("selected local dependency %s -> %s has no localEnv routing override", name, resolution.Target)
+				}
+				return PlannedService{}, fmt.Errorf("selected local dependency %s -> %s has no env routing override", name, resolution.Target)
 			}
-			dependencyEnvironment = dependency.LocalEnv
+			if len(dependencyEnvironment) == 0 {
+				dependencyEnvironment = declaration.LocalEnv
+			}
 		}
 		keys := make([]string, 0, len(dependencyEnvironment))
 		for key := range dependencyEnvironment {
@@ -612,8 +739,9 @@ func dependencyStartGroups(manifest *model.Manifest, selected []string) ([][]str
 	}
 	for _, name := range selected {
 		componentIndex := componentByService[name]
-		for dependency := range manifest.Services[name].Dependencies {
-			if !selectedSet[dependency] {
+		for alias, declaration := range manifest.Services[name].Dependencies {
+			dependency := localServiceForDependency(manifest, alias, declaration)
+			if dependency == "" || !selectedSet[dependency] {
 				continue
 			}
 			dependencyComponent := componentByService[dependency]
@@ -676,8 +804,9 @@ func dependencyComponents(manifest *model.Manifest, selected map[string]bool) []
 		onStack[name] = true
 
 		dependencies := make([]string, 0)
-		for dependency := range manifest.Services[name].Dependencies {
-			if selected[dependency] {
+		for alias, declaration := range manifest.Services[name].Dependencies {
+			dependency := localServiceForDependency(manifest, alias, declaration)
+			if dependency != "" && selected[dependency] {
 				dependencies = append(dependencies, dependency)
 			}
 		}
@@ -731,16 +860,12 @@ func sortComponentIndexes(indexes []int, components [][]string) {
 	})
 }
 
-func remoteDependencies(manifest *model.Manifest, selected []string) []string {
-	selectedSet := make(map[string]bool, len(selected))
-	for _, name := range selected {
-		selectedSet[name] = true
-	}
+func remoteResolutionNames(resolutions map[string]map[string]dependency.Resolution) []string {
 	remoteSet := make(map[string]bool)
-	for _, name := range selected {
-		for dependency := range manifest.Services[name].Dependencies {
-			if !selectedSet[dependency] {
-				remoteSet[dependency] = true
+	for _, serviceDependencies := range resolutions {
+		for alias, resolution := range serviceDependencies {
+			if resolution.Mode == "remote" {
+				remoteSet[alias] = true
 			}
 		}
 	}
@@ -750,4 +875,14 @@ func remoteDependencies(manifest *model.Manifest, selected []string) []string {
 	}
 	sort.Strings(remote)
 	return remote
+}
+
+func localServiceForDependency(manifest *model.Manifest, alias string, declaration model.Dependency) string {
+	if declaration.LocalService != "" {
+		return declaration.LocalService
+	}
+	if _, found := manifest.Services[alias]; found {
+		return alias
+	}
+	return ""
 }

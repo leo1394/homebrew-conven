@@ -31,7 +31,7 @@ class Conven < Formula
     workspace_catalog = build.head? || version >= "0.2.13"
     if build.head?
       expected_version = <<~EOS
-        conven version 0.2.13 (2026-08-17)
+        conven version 0.3.0 (2026-08-20)
         https://github.com/leo1394/homebrew-conven
       EOS
       expected_version = Regexp.new("#{Regexp.escape(expected_version)}\\z")
@@ -168,6 +168,7 @@ class Conven < Formula
     top_level_commands = %w[init services config policy plugins doctor help version]
     top_level_commands.insert(3, "catalog") if workspace_catalog
     top_level_commands.insert(6, "status") if workspace_catalog
+    top_level_commands.insert(2, "dependencies") if build.head? || version >= "0.3.0"
     service_actions = %w[list registry status logs start restart stop stop-all]
     service_actions.insert(4, "dashboard") if build.head? || version >= "0.2.5"
     service_actions << "cleanup" if build.head? || version >= "0.2.7"
@@ -175,6 +176,7 @@ class Conven < Formula
     catalog_actions = workspace_catalog ? %w[edit validate] : []
     plugin_actions = %w[install list run]
     plugin_actions.insert(2, "remove") if build.head? || version >= "0.2.2"
+    dependency_actions = %w[list start status logs stop stop-all reset]
     removed_top_level_commands = %w[discover list logs start restart stop]
     removed_top_level_commands.insert(2, "status") unless workspace_catalog
     %w[bash zsh fish].each do |shell|
@@ -233,6 +235,15 @@ class Conven < Formula
           assert_includes completion, "-l #{action}"
         else
           assert_includes completion, "--#{action}"
+        end
+      end
+      if build.head? || version >= "0.3.0"
+        dependency_actions.each do |action|
+          if shell == "fish"
+            assert_includes completion, "-l #{action}"
+          else
+            assert_includes completion, "--#{action}"
+          end
         end
       end
       if shell == "fish"

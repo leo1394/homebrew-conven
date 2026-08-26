@@ -155,7 +155,8 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 			continue
 		}
 		rule := policy.Routing.RemoteDependency
-		local := selected[dependencyName]
+		resolution, found := plan.Resolutions[name][dependencyName]
+		local := found && resolution.Mode == "local"
 		if local {
 			rule = policy.Routing.LocalDependency
 		}
@@ -169,7 +170,7 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 		if rule.Mode == "" || rule.Mode == "preserve" {
 			continue
 		}
-		port := plan.Workspace.Manifest.Services[dependencyName].Ports[dependency.Port]
+		port := plan.Workspace.Manifest.Services[resolution.Target].Ports[dependency.Port]
 		patch := model.ConfigPatch{
 			File:  application,
 			Path:  dependency.Binding,
