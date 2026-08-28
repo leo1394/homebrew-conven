@@ -70,16 +70,36 @@ Conven 内置的 materializer 只将生成的 YAML 写入
 
 ## 安装
 
+### Homebrew（推荐）
+
 ```bash
-brew tap leo1394/conven
-brew install conven
+brew install leo1394/conven/conven
 ```
 
-首次安装先添加 tap，再安装 `conven` Formula。之后升级可以直接使用短名称：
+安装完成后，升级可以直接使用短名称：
 
 ```bash
 brew update
 brew upgrade conven
+```
+
+### Bash
+
+如果本机 Homebrew 版本过低，无法安装 Formula，可通过 Bash 构建并安装已发布
+版本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | bash
+```
+
+Bash 安装需要 `curl`、`tar` 和 Go 1.23 或更高版本。脚本会使用仓库发布的
+SHA256 清单校验源码归档，构建 Conven，并安装到 `~/.local/bin`。如果脚本提示
+该目录不在 `PATH` 中，请按提示添加；再次执行同一命令即可升级。也可以指定版本
+或安装目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=0.3.1 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
 Conven 支持 macOS 和 Linux。只有环境使用 `ktctl` connection driver 时才需要
@@ -489,6 +509,7 @@ man conven
 在项目根目录运行仓库检查：
 
 ```bash
+bash -n install.sh
 go test ./...
 go vet ./...
 go build ./cmd/conven

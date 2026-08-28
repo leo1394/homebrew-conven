@@ -79,17 +79,36 @@ with the user's normal authority and may modify their working directory.
 
 ## Install
 
+### Homebrew (recommended)
+
 ```bash
-brew tap leo1394/conven
-brew install conven
+brew install leo1394/conven/conven
 ```
 
-Add the tap once, then install the `conven` Formula. After that, the short name
-works for upgrades:
+After installation, the short name works for upgrades:
 
 ```bash
 brew update
 brew upgrade conven
+```
+
+### Bash 
+
+If the installed Homebrew is too old to install the Formula, build and install
+the published release with Bash:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | bash
+```
+
+This fallback requires `curl`, `tar`, and Go 1.23 or later. It verifies the
+source archive against the repository's published SHA256 manifest, builds
+Conven, and installs it to `~/.local/bin`. Add that directory to `PATH` if
+prompted. Run the command again to upgrade. To choose a version or destination:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=0.3.1 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
 Conven supports macOS and Linux. `ktctl` is required only when the selected
@@ -542,6 +561,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
 Run repository checks from the project root:
 
 ```bash
+bash -n install.sh
 go test ./...
 go vet ./...
 go build ./cmd/conven

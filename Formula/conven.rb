@@ -32,7 +32,7 @@ class Conven < Formula
     generalized_bindings = build.head? || version >= "0.3.0"
     if build.head?
       expected_version = <<~EOS
-        conven version 0.3.0 (2026-08-20)
+        conven version 0.3.1 (2026-08-28)
         https://github.com/leo1394/homebrew-conven
       EOS
       expected_version = Regexp.new("#{Regexp.escape(expected_version)}\\z")

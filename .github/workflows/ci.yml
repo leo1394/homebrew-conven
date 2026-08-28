@@ -19,6 +19,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Check installer syntax
+        run: bash -n install.sh
       - name: Check project plugins are not bundled
         run: test ! -e internal/plugins/builtin/generate-apollo-consul.py
       - name: Test

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-08-28
+
+- Add a published source checksum and a SHA256-verified Bash fallback installer
+  for systems whose Homebrew is too old to install the Formula. The fallback
+  builds the published release with Go 1.23 or later.
+- Recommend the fully qualified one-command bottle installation and document
+  the Homebrew and Bash paths in the English and Chinese READMEs.
+
 ## 0.3.0 - 2026-08-20
 
 - Add Manifest v2 with explicit local-service, endpoint, remote, disabled, and
