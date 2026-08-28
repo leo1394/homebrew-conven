@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2 - 2026-08-28
+
+- Make the Bash fallback installer pass Homebrew's shell style checks so bottle
+  publication validates the complete tap successfully.
+- Run the installer style gate in project CI and the local publisher before a
+  release can create or push a tag.
+
 ## 0.3.1 - 2026-08-28
 
 - Add a published source checksum and a SHA256-verified Bash fallback installer

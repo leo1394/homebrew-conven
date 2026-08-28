@@ -38,7 +38,7 @@ jobs:
         run: |
           mandoc -Tlint docs/conven.1
           ruby -c Formula/conven.rb
-          brew style Formula/conven.rb
+          brew style Formula/conven.rb install.sh
       - name: Install and test stable and HEAD Formula from checkout
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1

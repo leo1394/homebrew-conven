@@ -10,7 +10,7 @@ import (
 	"github.com/leo1394/homebrew-conven/internal/cli"
 )
 
-var version = "0.3.1"
+var version = "0.3.2"
 var versionDate = "2026-08-28"
 
 func main() {
