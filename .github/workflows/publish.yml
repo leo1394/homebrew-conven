@@ -293,7 +293,7 @@ jobs:
       - name: Set up Homebrew
         if: steps.publication_guard.outputs.proceed == 'true'
         id: set-up-homebrew
-        uses: Homebrew/actions/setup-homebrew@fd832223f9f99ebf0244dd20658680e5d4aca049 # 2026.08.03.2
+        uses: Homebrew/actions/setup-homebrew@a657b8b0cd35d0f65cce41fce9b24cf054b49869 # 2026.08.24.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -324,7 +324,7 @@ jobs:
       - name: Set up git
         if: steps.publication_guard.outputs.proceed == 'true'
         id: git_setup
-        uses: Homebrew/actions/git-user-config@fd832223f9f99ebf0244dd20658680e5d4aca049 # 2026.08.03.2
+        uses: Homebrew/actions/git-user-config@a657b8b0cd35d0f65cce41fce9b24cf054b49869 # 2026.08.24.1
 
       - name: Recheck publication state
         if: steps.publication_guard.outputs.proceed == 'true'
@@ -638,6 +638,6 @@ jobs:
 
       - name: Push commits
         if: ${{ steps.publication_guard.outputs.proceed == 'true' && inputs.recovery_base_sha == '' && inputs.recovery_merge_sha == '' && inputs.recovery_master_sha == '' }}
-        uses: Homebrew/actions/git-try-push@fd832223f9f99ebf0244dd20658680e5d4aca049 # 2026.08.03.2
+        uses: Homebrew/actions/git-try-push@a657b8b0cd35d0f65cce41fce9b24cf054b49869 # 2026.08.24.1
         with:
           branch: master
