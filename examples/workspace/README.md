@@ -24,7 +24,8 @@ Conven checks endpoints referenced by the selected services before startup.
 
 - `.conven/conven.yaml` is the active Conven workspace manifest.
 - `.conven/catalog.yaml` is the generator service catalog. Each service uses a
-  `repository`, an `rpcBinding`, or both, plus `kind` and a unique local `port`.
+  `repository`, an `rpcBinding`, case-sensitive `rpcBindings`, or a combination,
+  plus `kind` and a unique local `port`.
   `disabledRpcBindings` lists bindings that remain remote.
 - `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` is a complete AI-readable
   contract for implementing or updating a workspace policy generator plugin.
@@ -116,6 +117,18 @@ conven services --status
 conven services --logs <service>
 conven services --stop-all
 ```
+
+Typed HTTP/RPC services listen on loopback by default. To expose only selected
+services through the host network interfaces, update the manifest safely and
+then start or restart them:
+
+```bash
+conven services --listen --on <service...>
+conven services --listen --off <service...>
+```
+
+`--on` binds `0.0.0.0`, so firewall and network rules still determine actual
+reachability. The command does not restart an already running process.
 
 Run `conven services --registry` again after adding, removing, or renaming a
 direct child service repository. It updates discovered facts in

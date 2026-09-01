@@ -109,7 +109,7 @@ jobs:
               exit 1
             fi
           done
-          for action in list registry status logs dashboard start restart stop stop-all cleanup; do
+          for action in list registry status logs dashboard start restart stop stop-all cleanup listen; do
             grep -Fq -- "--$action" "$completion_dir/conven.bash"
             grep -Fq -- "--$action" "$completion_dir/_conven"
             grep -Fq -- "-l $action" "$completion_dir/conven.fish"

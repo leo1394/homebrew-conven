@@ -4,10 +4,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/leo1394/homebrew-conven/examples"
 	"github.com/leo1394/homebrew-conven/internal/config"
+	"github.com/leo1394/homebrew-conven/internal/model"
 	"github.com/leo1394/homebrew-conven/internal/plugins"
 	convenruntime "github.com/leo1394/homebrew-conven/internal/runtime"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
@@ -101,7 +103,7 @@ func (app App) runDiscover(arguments []string) int {
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --registry [--prune]")
 		flags.PrintDefaults()
-		fmt.Fprintln(flags.Output(), "\nWithout --prune, manual service configuration is preserved; new services are added and empty discovered facts may be backfilled.")
+		fmt.Fprintln(flags.Output(), "\nWithout --prune, manual service configuration is preserved; new services are added and empty discovered facts may be backfilled. Newly identified HTTP/RPC services receive the lowest available local port starting at 18080.")
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
@@ -115,7 +117,7 @@ func (app App) runDiscover(arguments []string) int {
 	}
 	result, err := config.DiscoverWorkspace(manifestPath, workspace, *prune)
 	if err != nil {
-		return app.fail(err)
+		return app.fail(fmt.Errorf("services --registry aborted before Conven updated the manifest: %w", err))
 	}
 	style := terminal.New(app.Output)
 	fmt.Fprintln(app.Output, style.Stage("Service registry scan complete"))
@@ -129,6 +131,9 @@ func (app App) runDiscover(arguments []string) int {
 	}
 	if len(result.Updated) > 0 {
 		fmt.Fprintln(app.Output, style.Detail("Backfilled services: "+style.Identifiers(result.Updated, ", ")))
+	}
+	if len(result.Assigned) > 0 {
+		fmt.Fprintln(app.Output, style.Detail("Assigned local ports: "+style.Identifiers(result.Assigned, ", ")))
 	}
 	if len(result.Pruned) > 0 {
 		fmt.Fprintln(app.Output, style.Detail("Pruned services: "+style.Identifiers(result.Pruned, ", ")))
@@ -153,6 +158,63 @@ func (app App) runDiscover(arguments []string) int {
 			details = append(details, "Skipped repositories: "+strings.Join(result.Skipped, ", "))
 		}
 		printWarningBlock(app.Error, "Service registry scan requires review.", details, actions)
+	}
+	return 0
+}
+
+func (app App) runServiceListener(arguments []string) int {
+	flags := flag.NewFlagSet("services --listen", flag.ContinueOnError)
+	flags.SetOutput(app.Error)
+	on := flags.Bool("on", false, "listen on all interfaces (0.0.0.0)")
+	off := flags.Bool("off", false, "restore loopback-only listening")
+	flags.Usage = func() {
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --listen (--on|--off) <service...>")
+		flags.PrintDefaults()
+		fmt.Fprintln(flags.Output(), "\n--on stores all-interfaces for the selected typed HTTP/RPC services. --off removes the override and restores the loopback default. The change takes effect on the next services --start or --restart; running processes are not restarted automatically.")
+	}
+	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
+		return code
+	}
+	if *on == *off {
+		return app.fail(errors.New("services --listen requires exactly one of --on or --off"))
+	}
+	services := flags.Args()
+	if len(services) == 0 {
+		return app.fail(errors.New("services --listen requires at least one service"))
+	}
+	manifestPath, _, err := config.ResolvePath(app.Cwd)
+	if err != nil {
+		return app.fail(err)
+	}
+	listen := model.NetworkListenLoopback
+	if *on {
+		listen = model.NetworkListenAllInterfaces
+	}
+	result, err := config.SetServiceListenerScope(manifestPath, services, listen)
+	if err != nil {
+		return app.fail(fmt.Errorf("services --listen did not update the manifest: %w", err))
+	}
+	selected := append(append([]string(nil), result.Changed...), result.Unchanged...)
+	sort.Strings(selected)
+	style := terminal.New(app.Output)
+	stage := "Service listener scope updated"
+	if len(result.Changed) == 0 {
+		stage = "Service listener scope unchanged"
+	}
+	fmt.Fprintln(app.Output, style.Stage(stage))
+	mode := "loopback (127.0.0.1)"
+	if *on {
+		mode = "all-interfaces (0.0.0.0)"
+	}
+	fmt.Fprintln(app.Output, style.Detail("Mode: "+style.Identifier(mode)))
+	fmt.Fprintln(app.Output, style.Detail("Services: "+style.Identifiers(selected, ", ")))
+	fmt.Fprintln(app.Output, style.Detail("Manifest: "+manifestPath))
+	fmt.Fprintln(app.Output, style.Detail("Runtime: takes effect on the next services --start or --restart; running services were not changed."))
+	if *on {
+		printWarningBlock(app.Error, "Selected services will bind every host network interface.", []string{
+			"0.0.0.0 is not limited to the local LAN.",
+			"The host firewall and network rules determine reachability.",
+		}, nil)
 	}
 	return 0
 }

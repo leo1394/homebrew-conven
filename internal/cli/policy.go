@@ -163,6 +163,7 @@ func (app App) runPolicyEdit(arguments []string) int {
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --edit")
 		flags.PrintDefaults()
+		fmt.Fprintln(flags.Output(), "\nvi, vim, and nvim use two-space YAML indentation with expandtab. Leading indentation tabs are normalized to the same two-column stops before validation; other YAML formatting is preserved exactly.")
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
@@ -242,7 +243,9 @@ func (app App) printPolicyUsage(output io.Writer) {
   conven policy --reset
 
 --edit opens a temporary copy of the workspace's sole .conven/conven.yaml and
-publishes it only after strict validation. --import installs a local YAML file,
+publishes it only after strict validation. vi, vim, and nvim use two-space YAML
+indentation with expandtab; leading indentation tabs are normalized before
+validation without re-encoding the rest of the YAML. --import installs a local YAML file,
 or interactively selects a .yaml/.yml file from the workspace root when omitted,
 as that entire manifest without merging repository scan results. Non-interactive
 use must specify the YAML filename. Schema validation does not prove that its
@@ -271,7 +274,11 @@ func launchEditor(ctx context.Context, input *os.File, output io.Writer, errorOu
 	if editor == "" {
 		editor = "vi"
 	}
-	command := exec.CommandContext(ctx, "/bin/sh", "-c", "exec "+editor+` "$1"`, commandName, path)
+	invocation := "exec "+editor
+	if viFamilyEditor(editor) {
+		invocation += " -c 'setlocal filetype=yaml expandtab tabstop=2 shiftwidth=2 softtabstop=2 autoindent'"
+	}
+	command := exec.CommandContext(ctx, "/bin/sh", "-c", invocation+` "$1"`, commandName, path)
 	command.Stdin = input
 	command.Stdout = output
 	command.Stderr = errorOutput
@@ -282,4 +289,13 @@ func launchEditor(ctx context.Context, input *os.File, output io.Writer, errorOu
 		return fmt.Errorf("%s editor %q failed: %w", label, editor, err)
 	}
 	return nil
+}
+
+func viFamilyEditor(editor string) bool {
+	fields := strings.Fields(editor)
+	if len(fields) == 0 {
+		return false
+	}
+	name := filepath.Base(strings.Trim(fields[0], `"'`))
+	return name == "vi" || name == "vim" || name == "nvim"
 }

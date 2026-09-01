@@ -404,6 +404,8 @@ services:
   api:
     path: api
     kind: http
+    network:
+      listen: all-interfaces
     ports:
       metrics: 19090
       http: 18080
@@ -437,7 +439,7 @@ services:
 		"ktctl.kubeconfig=/secure/dev-kubeconfig",
 		"ktctl.path=/usr/local/bin/ktctl",
 		"Available services",
-		"api: type=http, ports=http=18080,metrics=19090, path=api",
+		"api: type=http, ports=http=18080,metrics=19090, listener=all-interfaces, path=api",
 		"Configured endpoints",
 		"local.postgres: protocol=tcp, address=127.0.0.1:5432, readiness=tcp",
 		"Disabled bindings",
@@ -458,6 +460,25 @@ services:
 	}
 	if strings.Index(output.String(), "Catalog: ") > strings.Index(output.String(), "ktctl.kubeconfig=") || strings.Index(output.String(), "ktctl.path=") > strings.Index(output.String(), "Available services") {
 		t.Fatalf("ktctl settings are not in the Workspace group: %q", output.String())
+	}
+}
+
+func TestStatusPortSummaryUsesCompactSinglePortDisplay(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		ports map[string]int
+		want  string
+	}{
+		{name: "none", want: "ports=-"},
+		{name: "http", ports: map[string]int{"http": 18080}, want: "port=18080"},
+		{name: "rpc", ports: map[string]int{"rpc": 18081}, want: "port=18081"},
+		{name: "multiple", ports: map[string]int{"metrics": 19090, "http": 18080}, want: "ports=http=18080,metrics=19090"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := statusPortSummary(test.ports); got != test.want {
+				t.Fatalf("port summary = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -531,7 +552,7 @@ func TestServicesHelpUsesStdout(t *testing.T) {
 		if code := app.Run(arguments); code != 0 {
 			t.Fatalf("%v exit code = %d", arguments, code)
 		}
-		for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard", "--cleanup"} {
+		for _, action := range []string{"--list", "--registry", "--listen", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard", "--cleanup"} {
 			if !strings.Contains(output.String(), action) {
 				t.Fatalf("%v help is missing %s: %q", arguments, action, output.String())
 			}
@@ -551,7 +572,7 @@ func TestServicesHelpUsesStdout(t *testing.T) {
 }
 
 func TestServiceActionHelpUsesStdout(t *testing.T) {
-	for _, action := range []string{"--list", "--registry", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard", "--cleanup"} {
+	for _, action := range []string{"--list", "--registry", "--listen", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard", "--cleanup"} {
 		t.Run(action, func(t *testing.T) {
 			var output bytes.Buffer
 			var errorOutput bytes.Buffer
@@ -598,6 +619,144 @@ func TestServicesRequiresKnownActionFirst(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServicesListenTurnsAllInterfacesOnAndOff(t *testing.T) {
+	workspace := listenerCommandWorkspace(t)
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test-version"}
+
+	if code := app.Run([]string{"services", "--listen", "api", "--on", "admin"}); code != 0 {
+		t.Fatalf("listen on exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
+	}
+	for _, expected := range []string{"Service listener scope updated", "Mode: all-interfaces (0.0.0.0)", "Services: admin, api", "next services --start or --restart"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("listen on output is missing %q: %q", expected, output.String())
+		}
+	}
+	if !strings.Contains(errorOutput.String(), "bind every host network interface") {
+		t.Fatalf("listen on warning = %q", errorOutput.String())
+	}
+	manifest, err := config.Load(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Services["api"].Network.Listen != "all-interfaces" || manifest.Services["admin"].Network.Listen != "all-interfaces" {
+		t.Fatalf("listener scopes = api:%q admin:%q", manifest.Services["api"].Network.Listen, manifest.Services["admin"].Network.Listen)
+	}
+
+	output.Reset()
+	errorOutput.Reset()
+	if code := app.Run([]string{"services", "--listen", "--off", "api"}); code != 0 {
+		t.Fatalf("listen off exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
+	}
+	if !strings.Contains(output.String(), "Mode: loopback (127.0.0.1)") || errorOutput.Len() != 0 {
+		t.Fatalf("listen off output: stdout=%q stderr=%q", output.String(), errorOutput.String())
+	}
+	manifest, err = config.Load(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Services["api"].Network.Listen != "" {
+		t.Fatalf("loopback listener config = %#v", manifest.Services["api"].Network)
+	}
+	if manifest.Services["admin"].Network.Listen != "all-interfaces" {
+		t.Fatalf("listen off changed an unselected service: %#v", manifest.Services["admin"].Network)
+	}
+}
+
+func TestServicesListenRejectsInvalidSwitchesAtomically(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		arguments []string
+		message   string
+	}{
+		{name: "missing switch", arguments: []string{"services", "--listen", "api"}, message: "requires exactly one of --on or --off"},
+		{name: "both switches", arguments: []string{"services", "--listen", "--on", "--off", "api"}, message: "requires exactly one of --on or --off"},
+		{name: "missing service", arguments: []string{"services", "--listen", "--on"}, message: "requires at least one service"},
+		{name: "unknown service", arguments: []string{"services", "--listen", "--on", "missing"}, message: "unknown services"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workspace := listenerCommandWorkspace(t)
+			manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+			before, err := os.ReadFile(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			app := App{Output: &output, Error: &output, Cwd: workspace, Version: "test-version"}
+			if code := app.Run(test.arguments); code != 1 {
+				t.Fatalf("exit code = %d: %s", code, output.String())
+			}
+			if !strings.Contains(output.String(), test.message) {
+				t.Fatalf("error is missing %q: %q", test.message, output.String())
+			}
+			after, err := os.ReadFile(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatal("failed listen command changed the manifest")
+			}
+		})
+	}
+}
+
+func listenerCommandWorkspace(t *testing.T) string {
+	t.Helper()
+	workspace := t.TempDir()
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `version: 2
+workspace:
+  name: listener-command
+  policy: trusted
+policies:
+  trusted:
+    drivers:
+      framework: go-zero
+      configSource: repository
+      discovery: consul
+      materializer: yaml-overlay
+    config:
+      sourceDir: resources
+      application: application.yaml
+    process:
+      args: [-f, "${configDir}"]
+    routing:
+      servers:
+        http:
+          port: http
+          isolation:
+            registration:
+              mode: not-applicable
+            listener:
+              path: host
+              value: 127.0.0.1
+services:
+  api:
+    path: api
+    kind: http
+    runner:
+      run: [api]
+    ports:
+      http: 18080
+  admin:
+    path: admin
+    kind: http
+    runner:
+      run: [admin]
+    ports:
+      http: 18081
+`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return workspace
 }
 
 func TestSubcommandHelpUsesStdout(t *testing.T) {
@@ -1403,6 +1562,7 @@ func TestLeafFlagErrorsUseCanonicalDoubleDash(t *testing.T) {
 		{name: "config", arguments: []string{"config"}},
 		{name: "doctor", arguments: []string{"doctor"}},
 		{name: "registry", arguments: []string{"services", "--registry"}},
+		{name: "listen", arguments: []string{"services", "--listen"}},
 		{name: "start", arguments: []string{"services", "--start"}},
 		{name: "restart", arguments: []string{"services", "--restart"}},
 		{name: "cleanup", arguments: []string{"services", "--cleanup"}},
@@ -1447,6 +1607,7 @@ func TestFlagHelpUsesCanonicalDoubleDashForLongOptions(t *testing.T) {
 		{name: "config", arguments: []string{"config", "--help"}, flag: "global"},
 		{name: "doctor", arguments: []string{"doctor", "--help"}, flag: "env"},
 		{name: "registry", arguments: []string{"services", "--registry", "--help"}, flag: "prune"},
+		{name: "listen", arguments: []string{"services", "--listen", "--help"}, flag: "on"},
 		{name: "start", arguments: []string{"services", "--start", "--help"}, flag: "dry-run"},
 		{name: "restart", arguments: []string{"services", "--restart", "--help"}, flag: "dashboard"},
 		{name: "stop", arguments: []string{"services", "--stop", "--help"}, flag: "force"},
@@ -2549,7 +2710,7 @@ func TestCompletions(t *testing.T) {
 					t.Fatalf("completion for %s is missing %s", shell, command)
 				}
 			}
-			for _, action := range []string{"--list", "--registry", "--status", "--logs", "--dashboard", "--start", "--restart", "--stop", "--stop-all", "--cleanup"} {
+			for _, action := range []string{"--list", "--registry", "--listen", "--status", "--logs", "--dashboard", "--start", "--restart", "--stop", "--stop-all", "--cleanup"} {
 				marker := action
 				if shell == "fish" {
 					marker = "-l " + strings.TrimPrefix(action, "--")
@@ -2596,6 +2757,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--list|--status|--dashboard|--cleanup)`,
 		`--registry)`,
 		`options="--prune --help"`,
+		`--listen)`,
+		`options="--on --off --help"`,
 		`--logs)`,
 		`options="--tail --dashboard --help"`,
 		`--start)`,
@@ -2650,6 +2813,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`case $action in`,
 		`--list|--status|--cleanup)`,
 		`--registry)`,
+		`--listen)`,
 		`--logs)`,
 		`--dashboard)`,
 		`--start)`,
@@ -2665,6 +2829,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--with-dependencies[also start transitive local service dependencies]`,
 		`--dashboard[open the interactive log dashboard]`,
 		`--prune[remove missing direct-child repository services]`,
+		`--on[listen on all interfaces]`,
+		`--off[restore loopback-only listening]`,
 		`--reset[destructively reset the manifest to scanned facts]`,
 		`--import[import a local YAML file as the entire manifest]`,
 		`--validate[validate the workspace service catalog]`,
@@ -2721,6 +2887,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_without_command' -a status`,
 		`__conven_services_without_action' -l list`,
 		`__conven_services_without_action' -l registry`,
+		`__conven_services_without_action' -l listen`,
 		`__conven_services_without_action' -l stop-all`,
 		`__conven_services_without_action' -l cleanup`,
 		`__conven_services_action --start' -l env`,
@@ -2738,6 +2905,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_services_action --stop' -l force`,
 		`__conven_services_action --stop-all' -l force`,
 		`__conven_services_action --registry' -l prune`,
+		`__conven_services_action --listen' -l on`,
+		`__conven_services_action --listen' -l off`,
 		`__conven_using_subcommand policy; and __conven_policy_without_action' -l edit`,
 		`__conven_using_subcommand policy; and __conven_policy_without_action' -l import`,
 		`__conven_using_subcommand policy; and __conven_policy_without_action' -l reset`,
@@ -3147,6 +3316,12 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 	}
 
 	writeCLIServiceRepository(t, workspace, "beta-service")
+	if err := os.MkdirAll(filepath.Join(workspace, "beta-service", "go", "config"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "beta-service", "go", "config", "config.go"), []byte("package config\n\ntype Config struct { zrpc.RpcServerConf }\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	output.Reset()
 	app.Cwd = filepath.Join(workspace, "alpha-service", "go")
 	if code := app.Run([]string{"services", "--registry"}); code != 0 {
@@ -3156,6 +3331,7 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 		"==> Service registry scan complete",
 		"  - Discovered services: alpha-service, beta-service",
 		"  - Added services: beta-service",
+		"  - Assigned local ports: beta-service.rpc=18080",
 		"  - Manifest:",
 	} {
 		if !strings.Contains(output.String(), expected) {
@@ -3791,6 +3967,37 @@ func TestLaunchPolicyEditorUsesConvenEditorAndSupportsArguments(t *testing.T) {
 	}
 }
 
+func TestLaunchPolicyEditorConfiguresViForYAML(t *testing.T) {
+	directory := t.TempDir()
+	script := filepath.Join(directory, "vi")
+	capture := filepath.Join(directory, "capture")
+	contents := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$EDITOR_CAPTURE\"\n"
+	if err := os.WriteFile(script, []byte(contents), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR_CAPTURE", capture)
+	t.Setenv("CONVEN_EDITOR", script)
+	t.Setenv("VISUAL", "false")
+	t.Setenv("EDITOR", "false")
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	manifest := filepath.Join(directory, "conven.yaml")
+	if err := launchPolicyEditor(context.Background(), input, io.Discard, io.Discard, manifest); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "-c\nsetlocal filetype=yaml expandtab tabstop=2 shiftwidth=2 softtabstop=2 autoindent\n" + manifest + "\n"
+	if string(data) != want {
+		t.Fatalf("vi arguments = %q, want %q", data, want)
+	}
+}
+
 func TestRegistryPruneRemovesMissingDirectChildService(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
@@ -3844,6 +4051,28 @@ func TestRegistryRejectsArgumentsAndUnknownFlags(t *testing.T) {
 			t.Fatalf("%v output = %q", test.arguments, output.String())
 		}
 	}
+}
+
+func TestRegistryFailureStatesConvenDidNotUpdateManifest(t *testing.T) {
+	workspace := t.TempDir()
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := "version: [\n"
+	if err := os.WriteFile(manifestPath, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	app := App{Output: &output, Error: &output, Cwd: workspace, Version: "test"}
+
+	if code := app.Run([]string{"services", "--registry"}); code != 1 {
+		t.Fatalf("registry failure exit code = %d: %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "services --registry aborted before Conven updated the manifest") {
+		t.Fatalf("registry failure output = %q", output.String())
+	}
+	assertFileContents(t, manifestPath, source)
 }
 
 func TestRegistryReportsKeptMissingRepositoriesAsUnchanged(t *testing.T) {

@@ -364,6 +364,13 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	runCommand := append([]string(nil), service.Runner.Run...)
 	if hasPolicy {
 		runCommand = append(runCommand, policy.Process.Args...)
+		if server, found := policy.Routing.Servers[service.Kind]; found {
+			serverArguments := server.Args
+			if plannedConfig != nil && plannedConfig.Framework == "spring-boot" && plannedConfig.Isolation.ListenerMode == model.NetworkListenAllInterfaces {
+				serverArguments = springServerArgumentsForListener(serverArguments, service.Kind, "0.0.0.0")
+			}
+			runCommand = append(runCommand, serverArguments...)
+		}
 	}
 	run, err := expandCommand(runCommand, baseContext)
 	if err != nil {

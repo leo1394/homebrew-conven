@@ -22,10 +22,11 @@ type Catalog struct {
 }
 
 type CatalogService struct {
-	Repository string `yaml:"repository"`
-	RPCBinding string `yaml:"rpcBinding"`
-	Kind       string `yaml:"kind"`
-	Port       int    `yaml:"port"`
+	Repository  string   `yaml:"repository"`
+	RPCBinding  string   `yaml:"rpcBinding"`
+	RPCBindings []string `yaml:"rpcBindings"`
+	Kind        string   `yaml:"kind"`
+	Port        int      `yaml:"port"`
 }
 
 type CatalogEditResult struct {
@@ -93,8 +94,13 @@ func validateCatalog(catalog *Catalog) error {
 		field := fmt.Sprintf("services[%d]", index)
 		repository := strings.TrimSpace(service.Repository)
 		binding := strings.TrimSpace(service.RPCBinding)
-		if repository == "" && binding == "" {
-			return fmt.Errorf("%s must declare repository, rpcBinding, or both", field)
+		serviceBindings := make([]string, 0, len(service.RPCBindings)+1)
+		if binding != "" {
+			serviceBindings = append(serviceBindings, binding)
+		}
+		serviceBindings = append(serviceBindings, service.RPCBindings...)
+		if repository == "" && len(serviceBindings) == 0 {
+			return fmt.Errorf("%s must declare repository, rpcBinding, rpcBindings, or a combination", field)
 		}
 		if service.Repository != repository || repository != "" && !validCatalogRepository(repository) {
 			return fmt.Errorf("%s.repository must start with a letter or digit and contain only letters, digits, '.', '_' or '-'", field)
@@ -102,11 +108,17 @@ func validateCatalog(catalog *Catalog) error {
 		if service.RPCBinding != binding || binding != "" && !validCatalogBinding(binding) {
 			return fmt.Errorf("%s.rpcBinding must start with a letter or '_' and contain only letters, digits, '_' or '-'", field)
 		}
+		for bindingIndex, candidate := range service.RPCBindings {
+			trimmed := strings.TrimSpace(candidate)
+			if candidate != trimmed || !validCatalogBinding(trimmed) {
+				return fmt.Errorf("%s.rpcBindings[%d] must start with a letter or '_' and contain only letters, digits, '_' or '-'", field, bindingIndex)
+			}
+		}
 		if service.Kind != "http" && service.Kind != "rpc" {
 			return fmt.Errorf("%s.kind must be http or rpc, got %q", field, service.Kind)
 		}
-		if binding != "" && service.Kind != "rpc" {
-			return fmt.Errorf("%s.kind must be rpc when rpcBinding is declared", field)
+		if len(serviceBindings) > 0 && service.Kind != "rpc" {
+			return fmt.Errorf("%s.kind must be rpc when rpcBinding or rpcBindings is declared", field)
 		}
 		if service.Port < 1 || service.Port > 65535 {
 			return fmt.Errorf("%s.port must be between 1 and 65535, got %d", field, service.Port)
@@ -114,8 +126,15 @@ func validateCatalog(catalog *Catalog) error {
 		if previous, found := repositories[repository]; repository != "" && found {
 			return fmt.Errorf("%s.repository duplicates services[%d].repository %q", field, previous, repository)
 		}
-		if previous, found := bindings[binding]; binding != "" && found {
-			return fmt.Errorf("%s.rpcBinding duplicates services[%d].rpcBinding %q", field, previous, binding)
+		seenServiceBindings := make(map[string]bool, len(serviceBindings))
+		for _, candidate := range serviceBindings {
+			if seenServiceBindings[candidate] {
+				return fmt.Errorf("%s declares duplicate RPC binding %q", field, candidate)
+			}
+			seenServiceBindings[candidate] = true
+			if previous, found := bindings[candidate]; found {
+				return fmt.Errorf("%s RPC binding duplicates services[%d] RPC binding %q", field, previous, candidate)
+			}
 		}
 		if previous, found := ports[service.Port]; found {
 			return fmt.Errorf("%s.port duplicates services[%d].port %d", field, previous, service.Port)
@@ -123,8 +142,8 @@ func validateCatalog(catalog *Catalog) error {
 		if repository != "" {
 			repositories[repository] = index
 		}
-		if binding != "" {
-			bindings[binding] = index
+		for _, candidate := range serviceBindings {
+			bindings[candidate] = index
 		}
 		ports[service.Port] = index
 	}

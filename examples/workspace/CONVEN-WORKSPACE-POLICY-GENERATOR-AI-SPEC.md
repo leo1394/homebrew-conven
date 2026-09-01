@@ -279,7 +279,7 @@ services:
     kind: rpc
     port: 18081
   - repository: inventory-rpc
-    rpcBinding: inventoryRpc
+    rpcBindings: [inventoryRpc, inventoryRPC]
     kind: rpc
     port: 18082
 disabledRpcBindings:
@@ -287,8 +287,9 @@ disabledRpcBindings:
 ```
 
 `version` 必须为 `1`。`services` 是有序 sequence。每个 service 必须声明
-`repository`、`rpcBinding` 或同时声明两者，不得隐式合成 identity。`kind` 和 `port`
-必填。`disabledRpcBindings` 是可选的 RPC binding 名称 sequence。
+`repository`、单个 `rpcBinding`、多个大小写敏感的 `rpcBindings`，或组合声明这些字段，
+不得隐式合成 identity。`kind` 和 `port` 必填。`disabledRpcBindings` 是可选的 RPC
+binding 名称 sequence。
 
 ### 6.3 字段约束
 
@@ -296,14 +297,15 @@ disabledRpcBindings:
 
 - `repository`：匹配 `[A-Za-z0-9][A-Za-z0-9._-]*`；
 - `kind`：`go-zero-apollo-consul-v1` profile 只允许 `http` 或 `rpc`；
-- `rpcBinding`：首字符为 ASCII 字母或 `_`，其余为 ASCII 字母、数字、`_`、`-`；
-- 声明 `rpcBinding` 的 service 必须使用 `kind: rpc`；
+- `rpcBinding` 和 `rpcBindings` 每一项：首字符为 ASCII 字母或 `_`，其余为 ASCII
+  字母、数字、`_`、`-`；
+- 声明任一 RPC binding 的 service 必须使用 `kind: rpc`；
 - `port`：十进制整数，范围 `1..65535`。
 
 完整目录在过滤 workspace 仓库前必须验证：
 
 - repository 不重复；
-- binding 不重复；
+- 所有单值和列表 binding 全局不重复，同一 service 内也不得重复；
 - port 全局不重复；
 - 格式、kind 和字符集合法。
 
@@ -741,6 +743,8 @@ services:
 - typed service 的 kind 必须在 policy routing servers 中存在；
 - kind 对应的 service port 必须存在；
 - health 地址必须使用 loopback 和该 service 的已声明端口。
+- 生成的新 service 必须省略 `network.listen`，即默认 loopback；更新时必须保留已有的
+  合法 `network.listen`，且没有人工明确决定时不得自动设为 `all-interfaces`。
 
 ### 13.5 模板变量
 
@@ -778,9 +782,12 @@ ${dependency.port}
 - route mode 只使用 `preserve` 或 `replace`；
 - replace route 有 value；
 - RPC registration isolation 使用 config mode；
-- RPC listener 是 `127.0.0.1:<declared-rpc-port>`；
+- Policy 中 RPC listener 基线是 `127.0.0.1:<declared-rpc-port>`；只有 service 已明确保留
+  `network.listen: all-interfaces` 时，Conven 才能将运行时副本覆盖为
+  `0.0.0.0:<declared-rpc-port>`；
 - HTTP registration isolation 是 `not-applicable`；
-- HTTP listener host 是不带端口的 loopback IP；
+- Policy 中 HTTP listener host 基线是不带端口的 loopback IP；只有 service 已明确保留
+  `network.listen: all-interfaces` 时，Conven 才能将运行时副本覆盖为 `0.0.0.0`；
 - typed go-zero process 只附加一个 `-f <absolute-runtime-config-dir>`；
 - runtime bootstrap 精确为 `config-local.yaml`，最终 `PROFILE_ACTIVE` 精确为 `local`；
 - local dependency 有 policy local route 或显式 localEnv；

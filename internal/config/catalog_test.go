@@ -19,7 +19,7 @@ services:
     kind: rpc
     port: 18081
   - repository: inventory-rpc
-    rpcBinding: inventoryRpc
+    rpcBindings: [inventoryRpc, inventoryRPC]
     kind: rpc
     port: 18082
 disabledRpcBindings:
@@ -35,7 +35,7 @@ disabledRpcBindings:
 	if len(catalog.Services) != 3 {
 		t.Fatalf("services = %#v", catalog.Services)
 	}
-	if catalog.Services[0].Repository != "catalog-api" || catalog.Services[1].RPCBinding != "catalogRpc" || catalog.Services[2].Repository != "inventory-rpc" {
+	if catalog.Services[0].Repository != "catalog-api" || catalog.Services[1].RPCBinding != "catalogRpc" || catalog.Services[2].Repository != "inventory-rpc" || len(catalog.Services[2].RPCBindings) != 2 {
 		t.Fatalf("catalog identities = %#v", catalog.Services)
 	}
 	if strings.Join(catalog.DisabledRPCBindings, ",") != "legacyRpc" {
@@ -50,10 +50,11 @@ func TestLoadCatalogRejectsInvalidCatalogs(t *testing.T) {
 		message string
 	}{
 		{name: "unknown version", data: "version: 2\nservices: []\n", message: "version must be 1"},
-		{name: "missing identity", data: "version: 1\nservices:\n  - kind: http\n    port: 18080\n", message: "must declare repository, rpcBinding, or both"},
-		{name: "binding requires rpc", data: "version: 1\nservices:\n  - rpcBinding: catalogRpc\n    kind: http\n    port: 18080\n", message: "kind must be rpc when rpcBinding is declared"},
+		{name: "missing identity", data: "version: 1\nservices:\n  - kind: http\n    port: 18080\n", message: "must declare repository, rpcBinding, rpcBindings"},
+		{name: "binding requires rpc", data: "version: 1\nservices:\n  - rpcBinding: catalogRpc\n    kind: http\n    port: 18080\n", message: "kind must be rpc when rpcBinding or rpcBindings is declared"},
 		{name: "duplicate repository", data: "version: 1\nservices:\n  - repository: api\n    kind: http\n    port: 18080\n  - repository: api\n    kind: http\n    port: 18081\n", message: "duplicates services[0].repository"},
-		{name: "duplicate binding", data: "version: 1\nservices:\n  - rpcBinding: apiRpc\n    kind: rpc\n    port: 18080\n  - rpcBinding: apiRpc\n    kind: rpc\n    port: 18081\n", message: "duplicates services[0].rpcBinding"},
+		{name: "duplicate binding", data: "version: 1\nservices:\n  - rpcBinding: apiRpc\n    kind: rpc\n    port: 18080\n  - rpcBinding: apiRpc\n    kind: rpc\n    port: 18081\n", message: "duplicates services[0] RPC binding"},
+		{name: "duplicate binding alias", data: "version: 1\nservices:\n  - repository: api\n    rpcBindings: [apiRpc, apiRpc]\n    kind: rpc\n    port: 18080\n", message: "declares duplicate RPC binding"},
 		{name: "duplicate port", data: "version: 1\nservices:\n  - repository: api\n    kind: http\n    port: 18080\n  - repository: worker\n    kind: http\n    port: 18080\n", message: "duplicates services[0].port"},
 		{name: "duplicate disabled binding", data: "version: 1\nservices: []\ndisabledRpcBindings: [apiRpc, apiRpc]\n", message: "duplicates disabledRpcBindings[0]"},
 		{name: "unknown field", data: "version: 1\nservices: []\nunknown: true\n", message: "field unknown not found"},

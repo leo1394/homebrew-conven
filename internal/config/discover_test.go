@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
 func TestScanServicesFindsSupportedDirectChildRepositories(t *testing.T) {
@@ -75,6 +77,9 @@ type Config struct {
 	service := manifest.Services["api-service"]
 	if service.Kind != "http" {
 		t.Fatalf("service kind = %q", service.Kind)
+	}
+	if !reflect.DeepEqual(service.Ports, map[string]int{"http": 18080}) {
+		t.Fatalf("service ports = %v", service.Ports)
 	}
 	if service.Discovery.Analyzer != "go-subdirectory-module" || !reflect.DeepEqual(service.Discovery.Bindings, []string{"partnerRpc"}) {
 		t.Fatalf("service discovery = %#v", service.Discovery)
@@ -199,6 +204,154 @@ services:
 	}
 }
 
+func TestDiscoverWorkspaceAssignsStableLocalPortsToNewServices(t *testing.T) {
+	workspace := t.TempDir()
+	writeGoServiceRepository(t, workspace, "customer-custom-service", false, "example.com/customer-custom-service", "main")
+	writeDiscoveryFile(t, filepath.Join(workspace, "customer-custom-service", "go", "config", "config.go"), `package config
+
+type Config struct {
+	zrpc.RpcServerConf
+}
+`)
+	writeGoServiceRepository(t, workspace, "portal-new-service", false, "example.com/portal-new-service", "main")
+	writeDiscoveryFile(t, filepath.Join(workspace, "portal-new-service", "go", "config", "config.go"), `package config
+
+type Config struct {
+	rest.RestConf
+}
+`)
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	writeDiscoveryFile(t, manifestPath, `version: 2
+workspace:
+  name: test
+services:
+  existing-service:
+    path: existing-service
+    runner:
+      run: [existing-service]
+    ports:
+      http: 18080
+      metrics: 18082
+`)
+
+	result, err := DiscoverWorkspace(manifestPath, workspace, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Added, []string{"customer-custom-service", "portal-new-service"}) {
+		t.Fatalf("added = %v", result.Added)
+	}
+	manifest, err := Load(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(manifest.Services["customer-custom-service"].Ports, map[string]int{"rpc": 18081}) {
+		t.Fatalf("customer ports = %v", manifest.Services["customer-custom-service"].Ports)
+	}
+	if !reflect.DeepEqual(manifest.Services["portal-new-service"].Ports, map[string]int{"http": 18083}) {
+		t.Fatalf("portal ports = %v", manifest.Services["portal-new-service"].Ports)
+	}
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = DiscoverWorkspace(manifestPath, workspace, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Added) != 0 || len(result.Updated) != 0 {
+		t.Fatalf("repeat discovery changed services: added=%v updated=%v", result.Added, result.Updated)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("repeat discovery changed assigned ports")
+	}
+}
+
+func TestDiscoverWorkspaceBackfillsPortForPreviouslyDiscoveredService(t *testing.T) {
+	workspace := t.TempDir()
+	writeGoServiceRepository(t, workspace, "customer-custom-service", false, "example.com/customer-custom-service", "main")
+	writeDiscoveryFile(t, filepath.Join(workspace, "customer-custom-service", "go", "config", "config.go"), `package config
+
+type Config struct {
+	zrpc.RpcServerConf
+}
+`)
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	writeDiscoveryFile(t, manifestPath, `version: 2
+workspace:
+  name: test
+services:
+  customer-custom-service:
+    path: customer-custom-service
+    kind: rpc
+    discovery:
+      analyzer: go-subdirectory-module
+    runner:
+      workdir: go
+      build: [go, build, -o, "${artifact}", .]
+      run: ["${artifact}"]
+    ports: {}
+`)
+
+	result, err := DiscoverWorkspace(manifestPath, workspace, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Updated, []string{"customer-custom-service"}) {
+		t.Fatalf("updated = %v", result.Updated)
+	}
+	manifest, err := Load(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(manifest.Services["customer-custom-service"].Ports, map[string]int{"rpc": 18080}) {
+		t.Fatalf("customer ports = %v", manifest.Services["customer-custom-service"].Ports)
+	}
+}
+
+func TestDiscoverWorkspaceAddsKindPortWithoutChangingOtherPorts(t *testing.T) {
+	workspace := t.TempDir()
+	writeGoServiceRepository(t, workspace, "customer-custom-service", false, "example.com/customer-custom-service", "main")
+	writeDiscoveryFile(t, filepath.Join(workspace, "customer-custom-service", "go", "config", "config.go"), `package config
+
+type Config struct {
+	zrpc.RpcServerConf
+}
+`)
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	writeDiscoveryFile(t, manifestPath, `version: 2
+workspace:
+  name: test
+services:
+  customer-custom-service:
+    path: customer-custom-service
+    kind: rpc
+    runner:
+      run: [customer-custom-service]
+    ports:
+      metrics: 18080
+`)
+
+	result, err := DiscoverWorkspace(manifestPath, workspace, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Updated, []string{"customer-custom-service"}) {
+		t.Fatalf("updated = %v", result.Updated)
+	}
+	manifest, err := Load(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(manifest.Services["customer-custom-service"].Ports, map[string]int{"metrics": 18080, "rpc": 18081}) {
+		t.Fatalf("customer ports = %v", manifest.Services["customer-custom-service"].Ports)
+	}
+}
+
 func TestDiscoverWorkspaceBackfillsOnlyEmptyDiscoveredFacts(t *testing.T) {
 	workspace := t.TempDir()
 	writeGoServiceRepository(t, workspace, "api-service", false, "example.com/api-service", "main")
@@ -240,7 +393,7 @@ services:
 		}
 	}
 
-	manual := strings.Replace(string(data), "kind: http", "kind: rpc", 1)
+	manual := strings.Replace(string(data), "kind: http", "kind: rpc\n    network:\n      listen: all-interfaces", 1)
 	manual = strings.Replace(manual, "analyzer: go-subdirectory-module", "analyzer: manual", 1)
 	if err := os.WriteFile(manifestPath, []byte(manual), 0600); err != nil {
 		t.Fatal(err)
@@ -256,7 +409,7 @@ services:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Version != 1 || manifest.Services["custom-api"].Kind != "rpc" || manifest.Services["custom-api"].Discovery.Analyzer != "manual" {
+	if manifest.Version != 1 || manifest.Services["custom-api"].Kind != "rpc" || manifest.Services["custom-api"].Network.Listen != "all-interfaces" || manifest.Services["custom-api"].Discovery.Analyzer != "manual" {
 		t.Fatalf("manual facts changed: %#v", manifest.Services["custom-api"])
 	}
 	if repositoryAfter := analyzerRepositorySnapshot(t, repository); !reflect.DeepEqual(repositoryAfter, repositoryBefore) {
@@ -515,6 +668,161 @@ services:
 	if string(after) != string(before) {
 		t.Fatal("failed merged-key prune changed the manifest")
 	}
+}
+
+func TestDiscoverWorkspaceAddsSpringBootServiceWithUniquePolicyAndPort(t *testing.T) {
+	workspace := t.TempDir()
+	writeSpringBootServiceRepository(t, workspace, "data-mart-service")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	writeDiscoveryFile(t, manifestPath, `version: 2
+workspace:
+  name: test
+  policy: go-workspace
+policies:
+  go-workspace: {}
+  spring-boot-consul:
+    drivers:
+      framework: spring-boot
+      configSource: repository
+      discovery: consul
+      materializer: yaml-overlay
+    config:
+      sourceDir: src/main/resources
+      application: application.yml
+    process:
+      args:
+        - "--spring.config.location=file:${configDir}/"
+        - "--service.registration.enabled=false"
+        - "--spring.cloud.consul.discovery.register=false"
+    routing:
+      servers:
+        rpc:
+          port: rpc
+          args:
+            - "--grpc.server.address=127.0.0.1"
+            - "--grpc.server.port=${port.rpc}"
+          isolation:
+            registration:
+              mode: config
+              path: service.registration.enabled
+              disabledValue: false
+            listener:
+              path: grpc.server.address
+              value: 127.0.0.1
+services:
+  existing-service:
+    path: existing-service
+    runner:
+      run: [existing]
+    ports:
+      rpc: 18086
+`)
+
+	result, err := DiscoverWorkspace(manifestPath, workspace, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Added, []string{"data-mart-service"}) || !reflect.DeepEqual(result.Assigned, []string{"data-mart-service.rpc=18080"}) {
+		t.Fatalf("discovery result = %#v", result)
+	}
+	manifest, err := Load(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := manifest.Services["data-mart-service"]
+	if service.Policy != "spring-boot-consul" || service.Kind != "rpc" || service.Ports["rpc"] != 18080 {
+		t.Fatalf("Spring service = %#v", service)
+	}
+	if service.Runner.Artifact != "${serviceDir}/build/libs/datamart-0.0.1-SNAPSHOT.jar" || service.Health.Address != "127.0.0.1:${port.rpc}" {
+		t.Fatalf("Spring runner/health = %#v / %#v", service.Runner, service.Health)
+	}
+}
+
+func TestDiscoverWorkspaceFailsAtomicallyWithoutUniqueSpringPolicy(t *testing.T) {
+	workspace := t.TempDir()
+	writeSpringBootServiceRepository(t, workspace, "data-mart-service")
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	source := `version: 2
+workspace:
+  name: test
+  policy: go-workspace
+policies:
+  go-workspace: {}
+services: {}
+`
+	writeDiscoveryFile(t, manifestPath, source)
+
+	_, err := DiscoverWorkspace(manifestPath, workspace, false)
+	if err == nil || !strings.Contains(err.Error(), "requires exactly one compatible") {
+		t.Fatalf("missing Spring policy error = %v", err)
+	}
+	data, readErr := os.ReadFile(manifestPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != source {
+		t.Fatalf("failed discovery changed manifest:\n%s", data)
+	}
+}
+
+func TestDiscoverWorkspaceFailsAtomicallyForUnprotectedSpringCustomConsulRegistration(t *testing.T) {
+	workspace := t.TempDir()
+	writeSpringBootServiceRepository(t, workspace, "data-mart-service")
+	writeDiscoveryFile(t, filepath.Join(workspace, "data-mart-service", "src", "main", "java", "ConsulConfig.java"), `
+@Configuration
+public class ConsulConfig {
+    public void register() {
+        client.agentServiceRegister(newService);
+    }
+}
+`)
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	source := `version: 2
+workspace:
+  name: test
+services: {}
+`
+	writeDiscoveryFile(t, manifestPath, source)
+
+	_, err := DiscoverWorkspace(manifestPath, workspace, false)
+	if err == nil {
+		t.Fatal("unprotected Spring custom registration was accepted")
+	}
+	for _, expected := range []string{"custom Consul registration", "src/main/java/ConsulConfig.java", "@ConditionalOnProperty(", "--service.registration.enabled=false"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("custom registration error is missing %q: %v", expected, err)
+		}
+	}
+	data, readErr := os.ReadFile(manifestPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != source {
+		t.Fatalf("failed custom registration discovery changed manifest:\n%s", data)
+	}
+}
+
+func TestDiscoveredPolicyRejectsMultipleCompatibleSpringPolicies(t *testing.T) {
+	policy := model.Policy{
+		Drivers: model.PolicyDrivers{Framework: "spring-boot", ConfigSource: "repository", Discovery: "consul", Materializer: "yaml-overlay"},
+		Routing: model.PolicyRouting{Servers: map[string]model.ServerRoute{"rpc": {Port: "rpc"}}},
+	}
+	manifest := &model.Manifest{Policies: map[string]model.Policy{"spring-a": policy, "spring-b": policy}}
+	_, err := discoveredPolicy(manifest, DiscoveredService{Name: "data-mart-service", Framework: "spring-boot", DiscoveryDriver: "consul", Kind: "rpc"}, "")
+	if err == nil || !strings.Contains(err.Error(), "candidates: spring-a, spring-b") {
+		t.Fatalf("multiple Spring policies error = %v", err)
+	}
+}
+
+func writeSpringBootServiceRepository(t *testing.T, workspace string, name string) {
+	t.Helper()
+	repository := filepath.Join(workspace, name)
+	mustMkdirAll(t, filepath.Join(repository, ".git"))
+	writeDiscoveryFile(t, filepath.Join(repository, "gradlew"), "#!/bin/sh\n")
+	writeDiscoveryFile(t, filepath.Join(repository, "settings.gradle"), "rootProject.name = 'datamart'\n")
+	writeDiscoveryFile(t, filepath.Join(repository, "build.gradle"), "plugins { id 'org.springframework.boot' version '2.6.5' }\nversion = '0.0.1-SNAPSHOT'\ndependencies { implementation 'net.devh:grpc-server-spring-boot-starter:2.13.1.RELEASE' }\n")
+	writeDiscoveryFile(t, filepath.Join(repository, "src", "main", "java", "Application.java"), "@SpringBootApplication public class Application { public static void main(String[] args) { SpringApplication.run(Application.class, args); } }\n")
+	writeDiscoveryFile(t, filepath.Join(repository, "src", "main", "java", "GrpcServer.java"), "@GrpcService public class GrpcServer {}\n")
 }
 
 func writeGoServiceRepository(t *testing.T, workspace string, name string, gitFile bool, module string, packageName string) {

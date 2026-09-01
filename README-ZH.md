@@ -46,14 +46,41 @@ flowchart LR
 运行计划时，Conven 才会启动：
 
 - 已禁用远程服务注册，或该服务类型明确不需要注册；
-- 服务监听地址绑定到 loopback IP；
+- 服务监听地址使用声明的范围，默认绑定到 loopback IP；
 - run argv 指向 Conven 保护的运行时配置；
 - 集群连接不会建立从集群到本机的入站路由。
 
 任何证明缺失或含糊时，启动都会按 fail-closed 原则失败。目前可信的类型化服务
-契约是 HTTP/RPC 服务使用 `go-zero + Consul + yaml-overlay`。未知的框架、服务
-发现或 materializer 组合会直接拒绝，而不是假设其安全。Conven 能验证生成文件
-和 argv，但无法证明任意二进制一定会遵守传入的参数。
+契约包括 HTTP/RPC 服务使用 `go-zero + Consul + yaml-overlay` 或
+`Spring Boot + Consul + yaml-overlay`。未知的框架、服务发现或 materializer 组合会
+直接拒绝，而不是假设其安全。Conven 能验证生成文件和 argv，但无法证明任意二进制
+一定会遵守传入的参数。
+
+typed service 默认只监听 loopback。如果需要让同一局域网内的其他设备访问某一个
+服务，可只为该服务显式开放所有网卡：
+
+```yaml
+services:
+  portal-api-service:
+    kind: http
+    network:
+      listen: all-interfaces
+```
+
+Conven 会为该服务强制写入 `0.0.0.0`，并在启动计划中输出警告。`0.0.0.0` 表示主机
+所有网卡，并非只开放局域网网卡；最终可达范围仍由系统防火墙和网络环境控制。本地服务
+路由和健康检查仍使用 `127.0.0.1`。不配置 `network.listen` 或显式设为 `loopback`
+时保持默认的仅本机访问；不接受任意自定义监听地址。
+
+也可以通过 services 命令按服务开关：
+
+```bash
+conven services --listen --on portal-api-service
+conven services --listen --off portal-api-service
+```
+
+命令会原子更新 `.conven/conven.yaml`，但不会隐式重启正在运行的进程。新的监听范围在
+下一次 `services --start` 或 `services --restart` 时生效。
 
 Conven 内置的 materializer 只将生成的 YAML 写入
 `.conven/runtime/current/configs/<service>`，不会覆盖仓库内的 YAML。fresh start
@@ -98,7 +125,7 @@ SHA256 清单校验源码归档，构建 Conven，并安装到 `~/.local/bin`。
 或安装目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=0.3.2 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=0.3.3 bash
 curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
@@ -215,15 +242,33 @@ conven services --start --dev portal-api-service partner-service
 | `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` | 用于实现 workspace Policy 生成器插件的 AI 可读规范。 |
 | `README.md` | 介绍生成文件和 Conven 工作流的 workspace 本地快速上手文档。 |
 
-每个文件仅在缺失时创建；已有的普通文件会保持不变。`init` 可以识别支持的 Go main module
-布局，并记录可以证明的路径、runner、服务类型和绑定候选。它**不会**猜测端口、
-完整业务依赖图、公司 Policy、Apollo 凭据或集群连接信息。启动前需要人工确认
-一次候选配置。
+每个文件仅在缺失时创建；已有的普通文件会保持不变。`init` 可以识别支持的 Go main
+module 和根目录 Gradle Spring Boot 可执行 JAR 项目，并记录可以证明的路径、runner、
+服务类型、绑定候选、健康检查和 HTTP/RPC 服务的唯一 local port。端口从 `18080` 开始
+选择未占用的最小值，已有分配不会被重新编号。registry 对 Java 仅做静态分析，不执行
+Gradle，也不访问网络。它**不会**猜测完整业务依赖图、公司 Policy、凭据或集群连接信息。
+启动前需要人工确认一次候选配置。
 
-后续执行 `services --registry` 会刷新仓库条目，但不会猜测端口或改写
-`.conven/catalog.yaml`。catalog entry 可以使用 `repository`、`rpcBinding` 或同时
-使用两者，因此服务不必存在本地 checkout。使用 `conven catalog --edit` 更新目录，
-使用 `conven catalog --validate` 校验目录。
+后续执行 `services --registry` 会刷新仓库条目，并以同样的确定性规则为新识别的
+HTTP/RPC 服务分配 local port，但不会改写 `.conven/catalog.yaml`。catalog entry 可以
+使用 `repository`、单个 `rpcBinding`、保持大小写的多个 `rpcBindings`，或组合使用，
+因此服务不必存在本地 checkout。
+使用 `conven catalog --edit` 更新目录，使用 `conven catalog --validate` 校验目录。
+
+Java 首版边界保持明确：仓库根目录必须包含 `gradlew`、唯一的
+`settings.gradle[.kts]`、唯一的 `build.gradle[.kts]`、Spring Boot plugin 和唯一
+`@SpringBootApplication` 入口。HTTP 需要 Web starter 与 controller，gRPC 需要 server
+starter 与 `@GrpcService`；同时存在两类证据时不猜测 kind。boot JAR 名只能来自显式
+`bootJar.archiveFileName`，或字面量 `rootProject.name` 与 `version`。暂不推断 Maven、
+WAR、嵌套 Boot 模块和动态 artifact。typed Spring 服务只有在恰好存在一个兼容的
+`spring-boot + consul + repository + yaml-overlay` Policy 时才写入；否则 registry
+原子失败且不修改 manifest。
+
+标准 Spring Cloud Consul 注册由 Adapter 参数关闭，不要求额外业务注解。如果 analyzer
+发现已知的手工 Consul 注册调用，则注册类必须使用可信的
+`@ConditionalOnProperty` 契约；缺失、配置错误或无法确认调用归属时，registry 会在
+写入 manifest 前整体失败，并输出源码路径和可直接采用的修改示例。Go/go-zero 的自定义
+注册必须服从最终运行时配置中的 `discovType`；无条件手工注册不属于可信接入。
 
 如果项目维护了 Policy 生成器，请安装后运行唯一的 workspace 插件，或显式指定名称。
 首次运行前还需按生成的 AI 规范补全 workspace 专用的 `conven-generator.json`；`init`
@@ -304,6 +349,13 @@ Conven 不要求所有语言使用同一个硬编码参数。业务源码应保�
 业务服务源码的推荐接入 API。完整实现、错误示例和 canary 端口行为验证见
 [服务运行时配置契约](docs/service-runtime-config-contract-zh.md)。
 
+可信 Spring Boot Adapter 会在公共 Policy 参数后追加服务类型参数，并严格要求 runtime
+config location、`service.registration.enabled=false`、关闭 Spring Cloud Consul 注册、
+指定的 listener scope 和声明的 local port。受保护参数缺失、重复或冲突时会在启动前拒绝。
+仅当业务包含手工 Consul 注册时，注册类才需要使用默认值为 `true` 的中性属性
+`service.registration.enabled`，且不依赖 Conven 专用变量。标准 Spring Cloud Consul
+注册由框架原生开关控制。
+
 `services --start --dry-run` 在静态编排完成后结束。它不会访问 Apollo、建立连接、
 生成运行时配置、构建代码、启动进程或修改 runtime 目录。
 
@@ -331,7 +383,7 @@ Conven 不要求所有语言使用同一个硬编码参数。业务源码应保�
 | 部分 | 描述 |
 | --- | --- |
 | `workspace` | 项目名和默认 Policy |
-| `services` | 仓库路径、runner、端口、健康检查和依赖 |
+| `services` | 仓库路径、runner、端口、监听范围、健康检查和依赖 |
 | `policies` | 框架/配置 driver、运行时 overlay、路由和隔离规则 |
 | `environments` | 环境变量和可选的集群连接 |
 
@@ -375,6 +427,8 @@ services:
 | 校验生成器服务目录 | `conven catalog --validate` |
 | 列出 manifest 中的服务 | `conven services --list` |
 | 刷新扫描到的服务仓库 | `conven services --registry` |
+| 开放指定服务供局域网访问 | `conven services --listen --on SERVICE...` |
+| 恢复指定服务仅本机访问 | `conven services --listen --off SERVICE...` |
 | 验证指定环境 | `conven doctor --test` |
 | 预览启动计划 | `conven services --start --test --dry-run SERVICE...` |
 | 启动本地服务群 | `conven services --start --test SERVICE...` |

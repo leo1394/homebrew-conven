@@ -32,7 +32,7 @@ class Conven < Formula
     generalized_bindings = build.head? || version >= "0.3.0"
     if build.head?
       expected_version = <<~EOS
-        conven version 0.3.2 (2026-08-28)
+        conven version 0.3.3 (2026-09-01)
         https://github.com/leo1394/homebrew-conven
       EOS
       expected_version = Regexp.new("#{Regexp.escape(expected_version)}\\z")
@@ -173,6 +173,7 @@ class Conven < Formula
     service_actions = %w[list registry status logs start restart stop stop-all]
     service_actions.insert(4, "dashboard") if build.head? || version >= "0.2.5"
     service_actions << "cleanup" if build.head? || version >= "0.2.7"
+    service_actions << "listen" if build.head? || version >= "0.3.3"
     policy_actions = %w[edit import reset]
     catalog_actions = workspace_catalog ? %w[edit validate] : []
     plugin_actions = %w[install list run]

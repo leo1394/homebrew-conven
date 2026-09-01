@@ -177,6 +177,8 @@ func (app App) runServices(arguments []string) int {
 		return app.runList(remaining)
 	case "--registry":
 		return app.runDiscover(remaining)
+	case "--listen":
+		return app.runServiceListener(remaining)
 	case "--status":
 		return app.runStatus(remaining)
 	case "--logs":
@@ -965,6 +967,7 @@ Manage the local service session for the current workspace.
 available actions
    --list       List services declared by the workspace
    --registry   Update services from direct-child repositories; --prune missing ones
+   --listen     Turn all-interfaces listening on or off for selected services
    --status     Show the current local service state
    --logs       Show logs; --tail streams plain text, --dashboard opens the UI
    --dashboard  Open the interactive log dashboard

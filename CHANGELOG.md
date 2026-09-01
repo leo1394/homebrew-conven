@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.3 - 2026-09-01
+
+- Add static discovery for root Gradle Spring Boot HTTP and gRPC services,
+  deterministic local-port allocation, compatible-policy selection, and
+  fail-closed validation for custom Consul registration.
+- Add trusted Spring Boot local isolation with repository runtime config,
+  protected command-line arguments, loopback listeners, and disabled Consul
+  registration.
+- Add per-service listener scope with loopback as the default and
+  `conven services --listen --on|--off` for explicitly allowing or revoking
+  all-interface access.
+- Make policy editing configure vi-family editors for two-space YAML and
+  normalize leading indentation tabs before validation.
+- Show listener scope in `conven status` and simplify a service with one
+  declared port to `port=<number>`.
+
 ## 0.3.2 - 2026-08-28
 
 - Make the Bash fallback installer pass Homebrew's shell style checks so bottle

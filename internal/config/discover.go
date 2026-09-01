@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/leo1394/homebrew-conven/internal/model"
@@ -18,13 +19,20 @@ import (
 )
 
 type DiscoveredService struct {
-	Name      string
-	Path      string
-	Analyzer  string
-	Kind      string
-	Bindings  []string
-	Runner    model.Runner
+	Name            string
+	Path            string
+	Analyzer        string
+	Framework       string
+	DiscoveryDriver string
+	Policy          string
+	Kind            string
+	Bindings        []string
+	Runner          model.Runner
+	Ports           map[string]int
+	Health          model.Health
 }
+
+const firstDiscoveredLocalPort = 18080
 
 type DiscoveryResult struct {
 	Discovered []string
@@ -34,6 +42,7 @@ type DiscoveryResult struct {
 	Missing    []string
 	Pruned     []string
 	Skipped    []string
+	Assigned   []string
 }
 
 type discoveredManifest struct {
@@ -48,9 +57,12 @@ type discoveredManifestWorkspace struct {
 
 type discoveredEntry struct {
 	Path      string              `yaml:"path"`
+	Policy    string              `yaml:"policy,omitempty"`
 	Kind      string              `yaml:"kind,omitempty"`
 	Discovery discoveredDiscovery `yaml:"discovery"`
 	Runner    discoveredRunner    `yaml:"runner"`
+	Ports     map[string]int      `yaml:"ports,omitempty"`
+	Health    discoveredHealth    `yaml:"health,omitempty"`
 }
 
 type discoveredDiscovery struct {
@@ -59,9 +71,18 @@ type discoveredDiscovery struct {
 }
 
 type discoveredRunner struct {
-	Workdir string   `yaml:"workdir"`
-	Build   []string `yaml:"build"`
-	Run     []string `yaml:"run"`
+	Workdir  string   `yaml:"workdir"`
+	Artifact string   `yaml:"artifact,omitempty"`
+	Build    []string `yaml:"build"`
+	Run      []string `yaml:"run"`
+}
+
+type discoveredHealth struct {
+	Type    string   `yaml:"type,omitempty"`
+	Address string   `yaml:"address,omitempty"`
+	URL     string   `yaml:"url,omitempty"`
+	Command []string `yaml:"command,omitempty"`
+	Timeout string   `yaml:"timeout,omitempty"`
 }
 
 func ScanServices(workspace string) ([]DiscoveredService, []string, error) {
@@ -112,12 +133,15 @@ func ScanServices(workspace string) ([]DiscoveredService, []string, error) {
 		}
 		sort.Strings(bindings)
 		discovered = append(discovered, DiscoveredService{
-			Name:     analysis.ServiceName,
-			Path:     name,
-			Analyzer: analysis.Analyzer,
-			Kind:     kind,
-			Bindings: bindings,
-			Runner:   analysis.Runner,
+			Name:            analysis.ServiceName,
+			Path:            name,
+			Analyzer:        analysis.Analyzer,
+			Framework:       analysis.Framework,
+			DiscoveryDriver: analysis.Discovery,
+			Kind:            kind,
+			Bindings:        bindings,
+			Runner:          analysis.Runner,
+			Health:          analysis.Health,
 		})
 	}
 	sort.Slice(discovered, func(left int, right int) bool {
@@ -136,20 +160,38 @@ func renderDiscoveredManifest(workspace string, services []DiscoveredService, ve
 	if err != nil {
 		return nil, err
 	}
+	services = copyDiscoveredServices(services)
+	sort.Slice(services, func(left int, right int) bool {
+		return services[left].Name < services[right].Name
+	})
+	usedPorts := make(map[int]bool)
+	for index := range services {
+		ports, changed, err := assignDiscoveredPort(services[index].Kind, services[index].Ports, usedPorts)
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			services[index].Ports = ports
+		}
+	}
 	entries := make(map[string]discoveredEntry, len(services))
 	for _, service := range services {
 		entries[service.Name] = discoveredEntry{
-			Path: service.Path,
-			Kind: service.Kind,
+			Path:   service.Path,
+			Policy: service.Policy,
+			Kind:   service.Kind,
 			Discovery: discoveredDiscovery{
 				Analyzer: service.Analyzer,
 				Bindings: append([]string(nil), service.Bindings...),
 			},
 			Runner: discoveredRunner{
-				Workdir: service.Runner.Workdir,
-				Build:   append([]string(nil), service.Runner.Build...),
-				Run:     append([]string(nil), service.Runner.Run...),
+				Workdir:  service.Runner.Workdir,
+				Artifact: service.Runner.Artifact,
+				Build:    append([]string(nil), service.Runner.Build...),
+				Run:      append([]string(nil), service.Runner.Run...),
 			},
+			Ports: copyDiscoveredPorts(service.Ports),
+			Health: discoveredHealthFor(service.Health),
 		}
 	}
 	var data bytes.Buffer
@@ -191,6 +233,10 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 	}
 
 	existingByName := manifest.Services
+	usedPorts := make(map[int]bool)
+	for _, existing := range existingByName {
+		claimDiscoveredPorts(usedPorts, existing.Ports)
+	}
 	matched := make(map[string]bool)
 	additions := make([]DiscoveredService, 0)
 	updates := make(map[string]model.Service)
@@ -213,12 +259,39 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 			matched[existingName] = true
 			result.Existing = append(result.Existing, existingName)
 			existing := existingByName[existingName]
+			service.Policy, err = discoveredPolicy(manifest, service, existing.Policy)
+			if err != nil {
+				return result, err
+			}
 			updated, changed := backfillDiscoveredDescription(existing, service)
+			if updated.Discovery.Analyzer == service.Analyzer {
+				ports, portsChanged, err := assignDiscoveredPort(updated.Kind, updated.Ports, usedPorts)
+				if err != nil {
+					return result, err
+				}
+				if portsChanged {
+					updated.Ports = ports
+					changed = true
+					result.Assigned = append(result.Assigned, discoveredPortAssignment(existingName, updated.Kind, ports))
+				}
+			}
 			if changed {
 				updates[existingName] = updated
 				result.Updated = append(result.Updated, existingName)
 			}
 			continue
+		}
+		service.Policy, err = discoveredPolicy(manifest, service, "")
+		if err != nil {
+			return result, err
+		}
+		ports, _, err := assignDiscoveredPort(service.Kind, service.Ports, usedPorts)
+		if err != nil {
+			return result, err
+		}
+		service.Ports = ports
+		if service.Kind != "" {
+			result.Assigned = append(result.Assigned, discoveredPortAssignment(service.Name, service.Kind, ports))
 		}
 		additions = append(additions, service)
 		result.Added = append(result.Added, service.Name)
@@ -250,6 +323,7 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 	sort.Strings(result.Updated)
 	sort.Strings(result.Missing)
 	sort.Strings(result.Pruned)
+	sort.Strings(result.Assigned)
 
 	candidate := *manifest
 	candidate.Services = services
@@ -295,18 +369,122 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 
 func discoveredModelService(service DiscoveredService) model.Service {
 	return model.Service{
-		Path: service.Path,
-		Kind: service.Kind,
+		Path:   service.Path,
+		Policy: service.Policy,
+		Kind:   service.Kind,
 		Discovery: model.ServiceDiscovery{
 			Analyzer: service.Analyzer,
 			Bindings: append([]string(nil), service.Bindings...),
 		},
 		Runner: service.Runner,
+		Ports:  copyDiscoveredPorts(service.Ports),
+		Health: service.Health,
 	}
+}
+
+func discoveredPolicy(manifest *model.Manifest, service DiscoveredService, explicit string) (string, error) {
+	if service.Framework == "" || service.DiscoveryDriver == "" || service.Kind == "" {
+		return explicit, nil
+	}
+	compatible := func(policy model.Policy) bool {
+		if policy.Drivers.Framework != service.Framework || policy.Drivers.Discovery != service.DiscoveryDriver || policy.Drivers.ConfigSource != "repository" || policy.Drivers.Materializer != "yaml-overlay" {
+			return false
+		}
+		_, found := policy.Routing.Servers[service.Kind]
+		return found
+	}
+	if explicit != "" {
+		policy, found := manifest.Policies[explicit]
+		if found && compatible(policy) {
+			return explicit, nil
+		}
+		return "", fmt.Errorf("discovered %s service %q has incompatible policy %q; configure a %s/%s/repository/yaml-overlay policy with a %s server route", service.Framework, service.Name, explicit, service.Framework, service.DiscoveryDriver, service.Kind)
+	}
+	candidates := make([]string, 0)
+	for _, name := range sortedPolicyNames(manifest) {
+		if compatible(manifest.Policies[name]) {
+			candidates = append(candidates, name)
+		}
+	}
+	if len(candidates) != 1 {
+		detail := "none"
+		if len(candidates) > 0 {
+			detail = strings.Join(candidates, ", ")
+		}
+		return "", fmt.Errorf("discovered %s service %q requires exactly one compatible %s/%s/repository/yaml-overlay policy with a %s server route; candidates: %s", service.Framework, service.Name, service.Framework, service.DiscoveryDriver, service.Kind, detail)
+	}
+	return candidates[0], nil
+}
+
+func discoveredPortAssignment(name string, kind string, ports map[string]int) string {
+	return name + "." + kind + "=" + strconv.Itoa(ports[kind])
+}
+
+func discoveredHealthFor(health model.Health) discoveredHealth {
+	return discoveredHealth{
+		Type:    health.Type,
+		Address: health.Address,
+		URL:     health.URL,
+		Command: append([]string(nil), health.Command...),
+		Timeout: health.Timeout,
+	}
+}
+
+func copyDiscoveredServices(services []DiscoveredService) []DiscoveredService {
+	copied := make([]DiscoveredService, len(services))
+	for index, service := range services {
+		copied[index] = service
+		copied[index].Ports = copyDiscoveredPorts(service.Ports)
+	}
+	return copied
+}
+
+func copyDiscoveredPorts(ports map[string]int) map[string]int {
+	if len(ports) == 0 {
+		return nil
+	}
+	copied := make(map[string]int, len(ports))
+	for name, port := range ports {
+		copied[name] = port
+	}
+	return copied
+}
+
+func claimDiscoveredPorts(used map[int]bool, ports map[string]int) {
+	for _, port := range ports {
+		used[port] = true
+	}
+}
+
+func assignDiscoveredPort(kind string, ports map[string]int, used map[int]bool) (map[string]int, bool, error) {
+	claimDiscoveredPorts(used, ports)
+	if kind != RepositoryKindHTTP && kind != RepositoryKindRPC {
+		return ports, false, nil
+	}
+	if _, found := ports[kind]; found {
+		return ports, false, nil
+	}
+	for port := firstDiscoveredLocalPort; port <= 65535; port++ {
+		if used[port] {
+			continue
+		}
+		assigned := copyDiscoveredPorts(ports)
+		if assigned == nil {
+			assigned = make(map[string]int, 1)
+		}
+		assigned[kind] = port
+		used[port] = true
+		return assigned, true, nil
+	}
+	return nil, false, errors.New("no local port is available for a discovered HTTP/RPC service")
 }
 
 func backfillDiscoveredDescription(existing model.Service, discovered DiscoveredService) (model.Service, bool) {
 	changed := false
+	if existing.Policy == "" && discovered.Policy != "" {
+		existing.Policy = discovered.Policy
+		changed = true
+	}
 	if existing.Kind == "" && discovered.Kind != "" {
 		existing.Kind = discovered.Kind
 		changed = true
@@ -318,10 +496,20 @@ func backfillDiscoveredDescription(existing model.Service, discovered Discovered
 		}
 		changed = true
 	}
+	if existing.Health.Type == "" && discovered.Health.Type != "" {
+		existing.Health = discovered.Health
+		changed = true
+	}
 	return existing, changed
 }
 
 func appendDiscoveredDescription(mapping *yaml.Node, service model.Service) {
+	if mappingValue(mapping, "policy") == nil && service.Policy != "" {
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "policy"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: service.Policy},
+		)
+	}
 	if mappingValue(mapping, "kind") == nil && service.Kind != "" {
 		mapping.Content = append(mapping.Content,
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kind"},
@@ -336,6 +524,40 @@ func appendDiscoveredDescription(mapping *yaml.Node, service model.Service) {
 		})
 		mapping.Content = append(mapping.Content,
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "discovery"},
+			value,
+		)
+	}
+	if len(service.Ports) > 0 {
+		value := mappingValue(mapping, "ports")
+		if value == nil {
+			value = &yaml.Node{}
+			value.Encode(copyDiscoveredPorts(service.Ports))
+			mapping.Content = append(mapping.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "ports"},
+				value,
+			)
+		} else if value.Kind == yaml.MappingNode {
+			names := make([]string, 0, len(service.Ports))
+			for name := range service.Ports {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				if mappingValue(value, name) != nil {
+					continue
+				}
+				value.Content = append(value.Content,
+					&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name},
+					&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprintf("%d", service.Ports[name])},
+				)
+			}
+		}
+	}
+	if mappingValue(mapping, "health") == nil && service.Health.Type != "" {
+		value := &yaml.Node{}
+		value.Encode(service.Health)
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "health"},
 			value,
 		)
 	}
@@ -485,17 +707,21 @@ func removeMappingEntries(mapping *yaml.Node, names []string) {
 func discoveredServiceNode(service DiscoveredService) (*yaml.Node, error) {
 	value := &yaml.Node{}
 	err := value.Encode(discoveredEntry{
-		Path: service.Path,
-		Kind: service.Kind,
+		Path:   service.Path,
+		Policy: service.Policy,
+		Kind:   service.Kind,
 		Discovery: discoveredDiscovery{
 			Analyzer: service.Analyzer,
 			Bindings: append([]string(nil), service.Bindings...),
 		},
 		Runner: discoveredRunner{
-			Workdir: service.Runner.Workdir,
-			Build:   append([]string(nil), service.Runner.Build...),
-			Run:     append([]string(nil), service.Runner.Run...),
+			Workdir:  service.Runner.Workdir,
+			Artifact: service.Runner.Artifact,
+			Build:    append([]string(nil), service.Runner.Build...),
+			Run:      append([]string(nil), service.Runner.Run...),
 		},
+		Ports: copyDiscoveredPorts(service.Ports),
+		Health: discoveredHealthFor(service.Health),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode discovered service %q: %w", service.Name, err)
@@ -504,6 +730,10 @@ func discoveredServiceNode(service DiscoveredService) (*yaml.Node, error) {
 }
 
 func saveManifestDocument(path string, document *yaml.Node, source []byte, sourceInfo os.FileInfo, expected *model.Manifest) error {
+	return saveManifestDocumentForOperation(path, document, source, sourceInfo, expected, "discovery")
+}
+
+func saveManifestDocumentForOperation(path string, document *yaml.Node, source []byte, sourceInfo os.FileInfo, expected *model.Manifest, operation string) error {
 	var data bytes.Buffer
 	encoder := yaml.NewEncoder(&data)
 	encoder.SetIndent(2)
@@ -521,7 +751,7 @@ func saveManifestDocument(path string, document *yaml.Node, source []byte, sourc
 	if !reflect.DeepEqual(updated, expected) {
 		return fmt.Errorf("validate updated Conven manifest: encoded manifest does not match the validated discovery result")
 	}
-	return publishManifestUpdate(path, data.Bytes(), source, sourceInfo, "discovery")
+	return publishManifestUpdate(path, data.Bytes(), source, sourceInfo, operation)
 }
 
 func publishManifestUpdate(path string, data []byte, source []byte, sourceInfo os.FileInfo, operation string) error {

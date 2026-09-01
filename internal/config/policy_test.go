@@ -92,6 +92,35 @@ func TestEditWorkspacePolicyPublishesExactValidatedDraft(t *testing.T) {
 	}
 }
 
+func TestEditWorkspacePolicyNormalizesLeadingIndentationTabs(t *testing.T) {
+	workspace := t.TempDir()
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
+	candidate := strings.Replace(editablePolicyManifest, "  name: test", "\tname: edited", 1)
+	want := strings.Replace(editablePolicyManifest, "  name: test", "  name: edited", 1)
+
+	result, err := EditWorkspacePolicy(workspace, func(path string) error {
+		return os.WriteFile(path, []byte(candidate), 0600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.DraftPath != "" {
+		t.Fatalf("result = %#v", result)
+	}
+	assertFileContents(t, manifestPath, want)
+}
+
+func TestNormalizeYAMLIndentationPreservesTabsAfterContent(t *testing.T) {
+	input := []byte("\tname: \"left\tright\"\n  value: |\n    text\tvalue\n")
+	want := "  name: \"left\tright\"\n  value: |\n    text\tvalue\n"
+
+	got, changed := normalizeYAMLIndentation(input)
+	if !changed || string(got) != want {
+		t.Fatalf("normalizeYAMLIndentation() = (%q, %v), want (%q, true)", got, changed, want)
+	}
+}
+
 func TestEditWorkspacePolicyNoChangeDoesNotReplaceManifest(t *testing.T) {
 	workspace := t.TempDir()
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")

@@ -112,6 +112,12 @@ func EditWorkspacePolicy(cwd string, edit func(string) error) (PolicyEditResult,
 		result.DraftPath = draftPath
 		return result, fmt.Errorf("policy editor failed: %w; edited draft was not published by Conven and is kept at %q", editErr, draftPath)
 	}
+	candidate, err = normalizePolicyDraftIndentation(draftPath, candidate)
+	if err != nil {
+		removeDraft = false
+		result.DraftPath = draftPath
+		return result, fmt.Errorf("format edited policy indentation: %w; edited draft was not published by Conven and is kept at %q", err, draftPath)
+	}
 	if _, err := decodeManifest(candidate, draftPath); err != nil {
 		removeDraft = false
 		result.DraftPath = draftPath
@@ -226,6 +232,10 @@ func applyWorkspacePolicyCandidate(workspace string, boundary string, input []by
 			removeDraft = false
 			result.DraftPath = draftPath
 			return result, fmt.Errorf("%s editor failed: %w; edited draft was not published by Conven and is kept at %q", options.candidateName, editErr, draftPath)
+		}
+		edited, err = normalizePolicyDraftIndentation(draftPath, edited)
+		if err != nil {
+			return result, keepDraftOnError(fmt.Errorf("format edited %s indentation: %w", options.candidateName, err))
 		}
 		if _, err := decodeManifest(edited, draftPath); err != nil {
 			removeDraft = false
@@ -408,6 +418,74 @@ func readPolicyDraft(path string) ([]byte, error) {
 		return nil, fmt.Errorf("inspect edited policy draft %q: %w", path, err)
 	}
 	return data, nil
+}
+
+func normalizePolicyDraftIndentation(path string, data []byte) ([]byte, error) {
+	formatted, changed := normalizeYAMLIndentation(data)
+	if !changed {
+		return data, nil
+	}
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".conven-policy-format-*")
+	if err != nil {
+		return nil, fmt.Errorf("create formatted policy draft: %w", err)
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(0600); err != nil {
+		temporary.Close()
+		return nil, fmt.Errorf("protect formatted policy draft: %w", err)
+	}
+	if _, err := temporary.Write(formatted); err != nil {
+		temporary.Close()
+		return nil, fmt.Errorf("write formatted policy draft: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return nil, fmt.Errorf("sync formatted policy draft: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return nil, fmt.Errorf("close formatted policy draft: %w", err)
+	}
+	if err := os.Rename(temporaryName, path); err != nil {
+		return nil, fmt.Errorf("publish formatted policy draft: %w", err)
+	}
+	_ = syncDirectory(directory)
+	return formatted, nil
+}
+
+func normalizeYAMLIndentation(data []byte) ([]byte, bool) {
+	formatted := make([]byte, 0, len(data))
+	lineStart := true
+	column := 0
+	changed := false
+	for _, character := range data {
+		if lineStart {
+			switch character {
+			case ' ':
+				formatted = append(formatted, character)
+				column++
+				continue
+			case '\t':
+				spaces := 2 - column%2
+				formatted = append(formatted, bytes.Repeat([]byte{' '}, spaces)...)
+				column += spaces
+				changed = true
+				continue
+			default:
+				lineStart = false
+			}
+		}
+		formatted = append(formatted, character)
+		if character == '\n' {
+			lineStart = true
+			column = 0
+		}
+	}
+	if !changed {
+		return data, false
+	}
+	return formatted, true
 }
 
 func savePolicySnapshot(boundary string, pattern string, data []byte) (string, error) {

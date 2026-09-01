@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/leo1394/homebrew-conven/internal/dependency"
+	"github.com/leo1394/homebrew-conven/internal/model"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
@@ -784,6 +785,9 @@ func printPlan(output io.Writer, plan *Plan, dryRun bool) {
 		fmt.Fprintln(output, style.Detail("Output: "+service.Config.Plan.TargetDir))
 		if isolation := plannedIsolationDescription(service.Config); isolation != "" {
 			fmt.Fprintln(output, style.Detail("Local isolation: "+isolation))
+		}
+		if service.Config.Isolation.ListenerMode == model.NetworkListenAllInterfaces {
+			fmt.Fprintln(output, style.Warning("Warning: "+name+" listens on 0.0.0.0 across all network interfaces; LAN access is still controlled by the host firewall."))
 		}
 		for _, route := range service.Config.Routes {
 			location := "Remote"

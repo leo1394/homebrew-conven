@@ -1,4 +1,4 @@
-.TH CONVEN 1 "August 28, 2026" "Conven 0.3.2" "User Commands"
+.TH CONVEN 1 "September 1, 2026" "Conven 0.3.3" "User Commands"
 .SH NAME
 conven \- run a focused set of local microservices with remote dependencies
 .SH SYNOPSIS
@@ -25,7 +25,11 @@ ports, dependencies, and policy-backed configuration adapters.
 .PP
 For typed local services, startup fails closed unless the selected policy can
 prove that remote service registration is disabled or not applicable and that
-the service listener is restricted to a loopback address.
+the service listener uses its declared scope. The default scope is loopback.
+An individual typed service may set
+.B network.listen: all-interfaces
+to bind the verified IPv4 wildcard address 0.0.0.0. This binds every host
+interface; the host firewall still determines reachability.
 Conven does not create a reverse route from the remote cluster to local
 services.
 .SH GLOBAL OPTIONS
@@ -140,8 +144,8 @@ Conven injects the reserved
 argument, which plugin arguments cannot override.
 .TP
 .B services
-List, start, restart, stop, clean, and inspect services in the effective
-workspace.
+List, configure listener scope, start, restart, stop, clean,
+and inspect services in the effective workspace.
 See
 .B SERVICES ACTIONS
 below.
@@ -189,6 +193,20 @@ Existing non-empty manual declarations take precedence.
 With
 .BR \-\-prune ,
 remove manifest services whose repositories no longer exist.
+.TP
+.B "\-\-listen (\-\-on|\-\-off) service..."
+Change the desired listener scope for selected typed HTTP/RPC services.
+.B \-\-on
+stores
+.B all-interfaces
+and makes the trusted adapter bind 0.0.0.0.
+.B \-\-off
+removes the override and restores the loopback default.
+The manifest update is atomic. Running processes are not restarted; the change
+takes effect on the next
+.B services \-\-start
+or
+.B services \-\-restart .
 .TP
 .B \-\-status
 Show the saved local session, hot-reload watcher, service PID and PGID
@@ -408,6 +426,15 @@ service discovery, materialization, routing, and local-isolation rules.
 .PP
 .B conven policy \-\-edit
 publishes a temporary edited copy only after strict validation.
+For
+.BR vi ,
+.BR vim ,
+and
+.BR nvim ,
+Conven enables two-space YAML indentation with
+.BR expandtab .
+Before validation it normalizes only leading indentation tabs to the same
+two-column stops and does not re-encode the remaining YAML.
 .B conven policy \-\-import
 installs an entire local YAML file, backs up the previous manifest, and does not
 merge it with repository scan results. If the filename is omitted, Conven scans
@@ -440,7 +467,9 @@ Workspace-local Python plugins; this scope takes precedence over global plugins.
 User- or AI-reviewed policy-generator catalog. A service declares
 .IR repository ,
 .IR rpcBinding ,
-or both, together with
+case-sensitive
+.IR rpcBindings ,
+or a combination, together with
 .I kind
 and a unique local
 .IR port .
@@ -545,12 +574,27 @@ Conven does not require every language to use the same flag. The current trusted
 go-zero and Consul adapter requires exactly one
 .B \-f
 argument whose value is the verified absolute runtime configuration directory.
-Other adapters should use their framework-native argument, for example Spring
-Boot's
-.BR \-\-spring.config.location .
+The trusted Spring Boot and Consul adapter requires exactly one
+.BR \-\-spring.config.location ,
+disables both the neutral custom registration switch and Spring Cloud Consul
+registration, and verifies the selected listener scope and declared local port.
 The manifest or policy expands
 .B ${configDir}
 into that argument; business source need not reference Conven-specific names.
+.PP
+Standard Spring Cloud Consul auto-registration needs no extra application
+annotation. If repository analysis finds a known manual Consul registration
+call, the class performing it must use
+.B @ConditionalOnProperty
+for
+.BR service.registration.enabled ,
+with a true existing-deployment default. Missing, incorrect, or ambiguous
+conditions abort
+.B services --registry
+before Conven updates the manifest; the error includes the source path and a
+complete modification example. Custom go-zero registration must honor the final
+.B discovType
+value instead of registering unconditionally.
 .PP
 Static command validation proves that the adapter argument points to the guarded
 runtime directory. Runtime health and adapter contract tests must additionally
@@ -559,7 +603,11 @@ from the repository default.
 .SH SAFETY
 For typed services, the verified adapter contract prevents selected services
 from being advertised through the configured remote service registry and
-limits their listeners to loopback.
+limits their listeners to loopback by default. A service explicitly configured
+with
+.B network.listen: all-interfaces
+is intentionally reachable through every host interface permitted by the
+firewall.
 It does not isolate business data or messaging.
 Local services may still connect to remote databases, Kafka, RPC endpoints, and
 other infrastructure, and may write data or consume messages.

@@ -56,7 +56,7 @@ func (app App) runWorkspaceStatus(arguments []string) int {
 		if kind == "" {
 			kind = "-"
 		}
-		fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("%s: type=%s, ports=%s, path=%s", style.Identifier(name), kind, statusPorts(service.Ports), service.Path)))
+		fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("%s: type=%s, %s, listener=%s, path=%s", style.Identifier(name), kind, statusPortSummary(service.Ports), service.Network.EffectiveListen(), service.Path)))
 	}
 	printConfiguredEndpoints(workspace, app.Output)
 
@@ -90,6 +90,15 @@ func statusPorts(ports map[string]int) string {
 		values = append(values, fmt.Sprintf("%s=%d", name, ports[name]))
 	}
 	return strings.Join(values, ",")
+}
+
+func statusPortSummary(ports map[string]int) string {
+	if len(ports) == 1 {
+		for _, port := range ports {
+			return fmt.Sprintf("port=%d", port)
+		}
+	}
+	return "ports=" + statusPorts(ports)
 }
 
 func printConfiguredEndpoints(workspace *convenruntime.WorkspaceData, output interface{ Write([]byte) (int, error) }) {

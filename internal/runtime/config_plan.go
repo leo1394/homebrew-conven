@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,6 +26,7 @@ type PlannedConfig struct {
 type PlannedIsolation struct {
 	RegistrationMode  string
 	RegistrationGuard *materialize.Guard
+	ListenerMode      string
 	ListenerGuard     materialize.Guard
 	ListenerPort      int
 	RuntimeConfigDir  bool
@@ -184,7 +186,7 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 		planned.Plan.Patches = append(planned.Plan.Patches, plannedPatch)
 	}
 	if hasServer {
-		isolation, guards, err := planServerIsolation(server, application, context)
+		isolation, guards, err := planServerIsolation(server, application, context, policy.Drivers.Framework == "spring-boot", service.Network.EffectiveListen())
 		if err != nil {
 			return nil, fmt.Errorf("plan %s local isolation: %w", name, err)
 		}
@@ -222,7 +224,7 @@ func planRuntimeConfigGuards(plan materialize.Plan, context config.ExpandContext
 	return guards, nil
 }
 
-func planServerIsolation(server model.ServerRoute, application string, context config.ExpandContext) (PlannedIsolation, []materialize.Guard, error) {
+func planServerIsolation(server model.ServerRoute, application string, context config.ExpandContext, allowCreate bool, listenerMode string) (PlannedIsolation, []materialize.Guard, error) {
 	if server.Isolation.Registration.Mode != "config" && server.Isolation.Registration.Mode != "not-applicable" {
 		return PlannedIsolation{}, nil, fmt.Errorf("registration mode must be config or not-applicable")
 	}
@@ -231,6 +233,7 @@ func planServerIsolation(server model.ServerRoute, application string, context c
 	}
 	isolation := PlannedIsolation{
 		RegistrationMode: server.Isolation.Registration.Mode,
+		ListenerMode:     listenerMode,
 		ListenerPort:     context.Manifest.Services[context.Service].Ports[server.Port],
 	}
 	guards := make([]materialize.Guard, 0, 2)
@@ -244,7 +247,7 @@ func planServerIsolation(server model.ServerRoute, application string, context c
 		if err != nil {
 			return PlannedIsolation{}, nil, fmt.Errorf("registration guard: %w", err)
 		}
-		guard := materialize.Guard{File: planned.File, Path: planned.Path, Value: planned.Value}
+		guard := materialize.Guard{File: planned.File, Path: planned.Path, Value: planned.Value, AllowCreate: allowCreate}
 		isolation.RegistrationGuard = &guard
 		guards = append(guards, guard)
 	}
@@ -257,7 +260,25 @@ func planServerIsolation(server model.ServerRoute, application string, context c
 	if err != nil {
 		return PlannedIsolation{}, nil, fmt.Errorf("listener guard: %w", err)
 	}
-	listener := materialize.Guard{File: plannedListener.File, Path: plannedListener.Path, Value: plannedListener.Value}
+	if listenerMode == model.NetworkListenAllInterfaces {
+		listener, ok := plannedListener.Value.(string)
+		if !ok {
+			return PlannedIsolation{}, nil, fmt.Errorf("listener guard value must be a string")
+		}
+		if err := validateServiceListener(listener, isolation.ListenerPort, model.NetworkListenLoopback); err != nil {
+			return PlannedIsolation{}, nil, fmt.Errorf("trusted base listener: %w", err)
+		}
+		if net.ParseIP(listener) != nil {
+			plannedListener.Value = "0.0.0.0"
+		} else {
+			_, port, err := net.SplitHostPort(listener)
+			if err != nil {
+				return PlannedIsolation{}, nil, fmt.Errorf("parse listener guard %q: %w", listener, err)
+			}
+			plannedListener.Value = net.JoinHostPort("0.0.0.0", port)
+		}
+	}
+	listener := materialize.Guard{File: plannedListener.File, Path: plannedListener.Path, Value: plannedListener.Value, AllowCreate: allowCreate}
 	isolation.ListenerGuard = listener
 	guards = append(guards, listener)
 	return isolation, guards, nil

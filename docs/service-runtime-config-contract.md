@@ -103,8 +103,8 @@ A typed service's trusted adapter must define:
 - how listener and registration isolation are verified;
 - how actual configuration consumption is proven.
 
-The current built-in trusted adapter covers go-zero, Consul, and `yaml-overlay`
-only. It requires:
+The current built-in trusted adapters cover go-zero or Spring Boot with Consul
+and `yaml-overlay`. The go-zero contract requires:
 
 ```yaml
 policies:
@@ -119,6 +119,39 @@ The final command may contain only the executable and one verified
 Other languages can run as runner-only services. Equivalent automatic routing
 and isolation require a trusted adapter for that framework, not just a different
 language label.
+
+### 3.3 Listener scope
+
+A typed service defaults to `network.listen: loopback`; omitting `network` has
+the same meaning. Conven's trusted adapter writes and verifies a loopback IP in
+the final runtime configuration. A service may explicitly opt into LAN access:
+
+```yaml
+services:
+  portal-api-service:
+    kind: http
+    network:
+      listen: all-interfaces
+```
+
+`all-interfaces` writes and verifies the IPv4 wildcard address `0.0.0.0` in the
+runtime copy and, for Spring Boot, in the protected server argument. It applies
+only to that service. Conven rejects arbitrary addresses and runner-only
+services cannot declare this setting because no trusted adapter can enforce it.
+Health checks and local dependency routes remain on `127.0.0.1`.
+
+`0.0.0.0` binds every host interface. It does not itself restrict traffic to
+the local network; firewall and network rules determine reachability.
+
+The same desired state can be changed without opening an editor:
+
+```bash
+conven services --listen --on portal-api-service
+conven services --listen --off portal-api-service
+```
+
+The command atomically updates the manifest. It does not change a running
+process; start or restart the service to apply the new scope.
 
 ## 4. argv placement
 
@@ -215,6 +248,14 @@ func main() {
 Skipping `flag.Parse()`, treating the directory as a YAML file, ignoring the
 parsed value, or falling back to `etc/` all violate the contract.
 
+If a Go service bypasses standard go-zero registration and directly invokes a
+Consul registration API, that code must read the same final runtime configuration
+and register only when `discovType == "consul"`. Conven materializes that value
+as an empty string. A service with an unconditional `ServiceRegister` call cannot
+use the trusted go-zero adapter. Registration hidden behind project wrappers or
+dependencies cannot be proven by generic static analysis and must be covered by
+the behavioral test in section 11.
+
 ## 6. Java / Spring Boot
 
 Spring Boot should use its native `spring.config.location`; application source
@@ -241,13 +282,18 @@ public final class CatalogApplication {
 }
 ```
 
-The runtime directory must contain a Spring-recognized `application.yaml`.
+The trusted adapter requires the repository config source
+`src/main/resources/application.yml`; Conven copies that directory and writes
+the guarded runtime `application.yml` there.
 `spring.config.location` replaces the default search locations. Do not use an
 `optional:` location or application fallback to classpath configuration. See
 [Spring Boot Externalized Configuration](https://docs.spring.io/spring-boot/reference/features/external-config.html)
 for the location and fail-closed behavior.
 
-A Spring trusted adapter must also verify equivalent runtime properties:
+A Spring trusted adapter appends server-specific arguments after common policy
+arguments and requires exactly one copy of every protected argument. It rejects
+missing or conflicting config locations, registration switches, listener
+addresses, and ports. The runtime configuration contains equivalent properties:
 
 ```yaml
 server:
@@ -259,7 +305,46 @@ spring:
     consul:
       discovery:
         register: false
+
+service:
+  registration:
+    enabled: false
 ```
+
+Custom registration code must use the neutral application property, defaulting
+to the existing cluster behavior:
+
+```java
+@Configuration
+@ConditionalOnProperty(
+    prefix = "service.registration",
+    name = "enabled",
+    havingValue = "true",
+    matchIfMissing = true
+)
+public class ConsulConfig {
+    // Existing registration and deregistration implementation.
+}
+```
+
+Services using only standard Spring Cloud Consul auto-registration do not need
+this annotation; the adapter disables it through the native
+`spring.cloud.consul.discovery.register=false` property. When the analyzer finds
+a known manual registration API, it verifies that the complete condition and
+the registration call belong to the same class. A missing or incorrect condition,
+or ambiguous ownership, aborts `services --registry` before Conven writes the
+manifest. The error includes the source path, required annotation, and local
+argument example.
+
+This check covers only direct registration APIs known to the analyzer.
+Registration hidden in project wrappers or dependency JARs still requires the
+registry canary test in section 11; static inspection is not a substitute for
+behavioral proof.
+
+The initial analyzer supports only root Gradle Spring Boot executable JARs. It
+derives the artifact from `bootJar.archiveFileName`, or from literal
+`rootProject.name` and `version` values. Maven, WAR, nested Boot modules, dynamic
+artifact names, and mixed HTTP/gRPC evidence require an explicit runner.
 
 ## 7. Python
 

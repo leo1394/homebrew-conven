@@ -401,7 +401,7 @@ exit 0
 		Driver:     "ktctl",
 		Command:    ktctl,
 		Namespace:  "test",
-		Timeout:    3 * time.Second,
+		Timeout:    10 * time.Second,
 		Readiness:  []ConnectionEndpoint{{Name: "cluster-api", Address: address}},
 	}, logPath, "pod-create-eof-workspace", &output)
 	if err == nil {

@@ -1,8 +1,8 @@
 # Declarative service catalog used by Conven policy generators.
 #
-# A service must declare repository, rpcBinding, or both. Entries with only an
-# rpcBinding are resolved from consumer configuration when possible. The kind
-# must be http or rpc, and every port must be unique.
+# A service must declare repository, rpcBinding/rpcBindings, or a combination.
+# Binding-only entries are resolved from consumer configuration when possible.
+# The kind must be http or rpc, and every port must be unique.
 version: 1
 
 services: []
@@ -13,7 +13,7 @@ services: []
   #   kind: rpc
   #   port: 18081
   # - repository: inventory-rpc
-  #   rpcBinding: inventoryRpc
+  #   rpcBindings: [inventoryRpc, inventoryRPC]
   #   kind: rpc
   #   port: 18082
 

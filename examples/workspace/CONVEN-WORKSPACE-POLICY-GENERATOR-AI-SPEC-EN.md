@@ -304,7 +304,7 @@ services:
     kind: rpc
     port: 18081
   - repository: inventory-rpc
-    rpcBinding: inventoryRpc
+    rpcBindings: [inventoryRpc, inventoryRPC]
     kind: rpc
     port: 18082
 disabledRpcBindings:
@@ -312,8 +312,9 @@ disabledRpcBindings:
 ```
 
 `version` MUST equal `1`. `services` is an ordered sequence. Every service MUST declare
-`repository`, `rpcBinding`, or both; neither identity is implicitly synthesized. `kind` and `port`
-are required. `disabledRpcBindings` is an optional ordered sequence of RPC binding names.
+`repository`, one `rpcBinding`, case-sensitive `rpcBindings`, or a combination; no identity is
+implicitly synthesized. `kind` and `port` are required. `disabledRpcBindings` is an optional
+ordered sequence of RPC binding names.
 
 ### 6.3 Field Constraints
 
@@ -321,15 +322,15 @@ Field constraints:
 
 - `repository`: matches `[A-Za-z0-9][A-Za-z0-9._-]*`;
 - `kind`: the `go-zero-apollo-consul-v1` profile permits only `http` or `rpc`;
-- `rpcBinding`: starts with an ASCII letter or `_`, followed only by ASCII letters, digits, `_`, or
-  `-`;
-- a service with `rpcBinding` MUST use `kind: rpc`;
+- every `rpcBinding` or `rpcBindings` item starts with an ASCII letter or `_`, followed only by
+  ASCII letters, digits, `_`, or `-`;
+- a service with any RPC binding MUST use `kind: rpc`;
 - `port`: a decimal integer in the range `1..65535`.
 
 The complete catalog MUST be validated before filtering it to workspace repositories:
 
 - repositories are unique;
-- bindings are unique;
+- all singular and list bindings are globally unique and are not repeated within one service;
 - ports are globally unique;
 - format, kind, and character sets are valid.
 
@@ -793,6 +794,9 @@ Requirements:
 - the kind of a typed service MUST exist in the policy's routing servers;
 - the service port corresponding to that kind MUST exist;
 - the health address MUST use loopback and the service's declared port.
+- generated services MUST omit `network.listen`, which means loopback; updates MUST preserve an
+  existing valid `network.listen`, and MUST NOT opt a service into `all-interfaces` without an
+  explicit human decision.
 
 ### 13.5 Template Variables
 
@@ -831,9 +835,13 @@ following static invariants offline:
 - route mode uses only `preserve` or `replace`;
 - a replace route has a value;
 - RPC registration isolation uses config mode;
-- the RPC listener is `127.0.0.1:<declared-rpc-port>`;
+- the policy RPC listener baseline is `127.0.0.1:<declared-rpc-port>`; Conven may override the
+  runtime copy to `0.0.0.0:<declared-rpc-port>` only for a preserved explicit
+  `network.listen: all-interfaces` service setting;
 - HTTP registration isolation is `not-applicable`;
-- the HTTP listener host is a loopback IP without a port;
+- the policy HTTP listener baseline is a loopback IP without a port; Conven may override the
+  runtime copy to `0.0.0.0` only for a preserved explicit `network.listen: all-interfaces`
+  service setting;
 - a typed go-zero process appends exactly one `-f <absolute-runtime-config-dir>`;
 - runtime bootstrap is exactly `config-local.yaml`, and final `PROFILE_ACTIVE` is exactly `local`;
 - a local dependency has either a policy local route or explicit localEnv;

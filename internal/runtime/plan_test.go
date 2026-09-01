@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/leo1394/homebrew-conven/internal/dependency"
+	"github.com/leo1394/homebrew-conven/internal/materialize"
 	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
@@ -383,6 +385,18 @@ func TestPlanServiceMaterializesSelectedDependencyWithoutLocalEnv(t *testing.T) 
 		t.Fatalf("policy process env = %#v", api.Environment)
 	}
 
+	lanService := manifest.Services["api"]
+	lanService.Network = model.ServiceNetwork{Listen: "all-interfaces"}
+	manifest.Services["api"] = lanService
+	lanPlan, err := BuildPlan(workspace, CommonOptions{Environment: "dev"}, []string{"api", "db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lanAPI := lanPlan.Services["api"]
+	if lanAPI.Config.Isolation.ListenerMode != "all-interfaces" || lanAPI.Config.Isolation.ListenerGuard.Value != "0.0.0.0" {
+		t.Fatalf("all-interfaces isolation = %#v", lanAPI.Config.Isolation)
+	}
+
 	remotePlan, err := BuildPlan(workspace, CommonOptions{Environment: "dev"}, []string{"api"})
 	if err != nil {
 		t.Fatal(err)
@@ -413,6 +427,120 @@ func TestPlanServiceSnapshotsPorts(t *testing.T) {
 	service.Ports["metrics"] = 9090
 	if _, found := manifestService.Ports["metrics"]; found {
 		t.Fatal("planned service ports share the manifest port map")
+	}
+}
+
+func TestBuildPlanAppendsSpringServerArgsAfterCommonArgs(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	resources := filepath.Join(workspaceRoot, "data-mart-service", "src", "main", "resources")
+	if err := os.MkdirAll(resources, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(resources, "application.yml"), []byte("service:\n  registration:\n    enabled: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(workspaceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := &model.Manifest{
+		Version: 2,
+		Workspace: model.Workspace{Name: "spring", Policy: "go-workspace"},
+		Environments: map[string]model.Environment{"dev": {}},
+		Policies: map[string]model.Policy{
+			"go-workspace": {},
+			"spring-boot-consul": {
+				Drivers: model.PolicyDrivers{Framework: "spring-boot", ConfigSource: "repository", Discovery: "consul", Materializer: "yaml-overlay"},
+				Config: model.PolicyConfig{SourceDir: "src/main/resources", Application: "application.yml"},
+				Process: model.PolicyProcess{Args: []string{
+					"--spring.config.location=file:${configDir}/",
+					"--service.registration.enabled=false",
+					"--spring.cloud.consul.discovery.register=false",
+				}},
+				Routing: model.PolicyRouting{Servers: map[string]model.ServerRoute{
+					"rpc": {
+						Port: "rpc",
+						Patches: []model.ConfigPatch{{Path: "grpc.server.port", Value: "${port.rpc}"}},
+						Args: []string{"--grpc.server.address=127.0.0.1", "--grpc.server.port=${port.rpc}"},
+						Isolation: model.ServerIsolation{
+							Registration: model.RegistrationGuard{Mode: "config", Path: "service.registration.enabled", DisabledValue: false},
+							Listener: model.ListenerGuard{Path: "grpc.server.address", Value: "127.0.0.1"},
+						},
+					},
+				}},
+			},
+		},
+		Services: map[string]model.Service{
+			"data-mart-service": {
+				Path: "data-mart-service",
+				Policy: "spring-boot-consul",
+				Kind: "rpc",
+				Runner: model.Runner{Artifact: "${serviceDir}/build/libs/datamart.jar", Run: []string{"java", "-jar", "${artifact}", "--spring.profiles.active=dev"}},
+				Ports: map[string]int{"rpc": 18087},
+				Health: model.Health{Type: "tcp", Address: "127.0.0.1:${port.rpc}"},
+			},
+		},
+	}
+	plan, err := BuildPlan(&WorkspaceData{Root: workspaceRoot, Manifest: manifest, Store: store}, CommonOptions{Environment: "dev"}, []string{"data-mart-service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := plan.Services["data-mart-service"]
+	wantTail := []string{
+		"--spring.profiles.active=dev",
+		"--spring.config.location=file:" + filepath.Join(store.CurrentDir, "configs", "data-mart-service") + string(filepath.Separator),
+		"--service.registration.enabled=false",
+		"--spring.cloud.consul.discovery.register=false",
+		"--grpc.server.address=127.0.0.1",
+		"--grpc.server.port=18087",
+	}
+	if !reflect.DeepEqual(service.Run[len(service.Run)-len(wantTail):], wantTail) {
+		t.Fatalf("Spring run args = %#v", service.Run)
+	}
+	if len(service.Config.Plan.Guards) != 2 || !service.Config.Plan.Guards[0].AllowCreate || !service.Config.Plan.Guards[1].AllowCreate {
+		t.Fatalf("Spring isolation guards = %#v", service.Config.Plan.Guards)
+	}
+	if err := os.MkdirAll(service.Config.Plan.ConfigRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := materialize.Materialize(context.Background(), service.Config.Plan); err != nil {
+		t.Fatal(err)
+	}
+	runtimeApplication, err := os.ReadFile(filepath.Join(service.Config.Plan.TargetDir, "application.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"enabled: false", "address: 127.0.0.1", "port: 18087"} {
+		if !strings.Contains(string(runtimeApplication), expected) {
+			t.Fatalf("Spring runtime application is missing %q:\n%s", expected, runtimeApplication)
+		}
+	}
+
+	manifestService := manifest.Services["data-mart-service"]
+	manifestService.Network = model.ServiceNetwork{Listen: "all-interfaces"}
+	manifest.Services["data-mart-service"] = manifestService
+	lanPlan, err := BuildPlan(&WorkspaceData{Root: workspaceRoot, Manifest: manifest, Store: store}, CommonOptions{Environment: "dev"}, []string{"data-mart-service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lanService := lanPlan.Services["data-mart-service"]
+	if lanService.Config.Isolation.ListenerMode != "all-interfaces" || lanService.Config.Isolation.ListenerGuard.Value != "0.0.0.0" {
+		t.Fatalf("Spring all-interfaces isolation = %#v", lanService.Config.Isolation)
+	}
+	foundLANArgument := false
+	for _, argument := range lanService.Run {
+		if argument == "--grpc.server.address=0.0.0.0" {
+			foundLANArgument = true
+		}
+		if argument == "--grpc.server.address=127.0.0.1" {
+			t.Fatalf("Spring run retained loopback listener: %#v", lanService.Run)
+		}
+	}
+	if !foundLANArgument {
+		t.Fatalf("Spring run is missing all-interfaces listener: %#v", lanService.Run)
+	}
+	if lanService.Health.Address != "127.0.0.1:18087" {
+		t.Fatalf("all-interfaces changed local health address: %#v", lanService.Health)
 	}
 }
 

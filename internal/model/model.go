@@ -56,6 +56,7 @@ type PolicyRouting struct {
 type ServerRoute struct {
 	Port      string          `yaml:"port"`
 	Patches   []ConfigPatch   `yaml:"patches"`
+	Args      []string        `yaml:"args"`
 	Isolation ServerIsolation `yaml:"isolation"`
 }
 
@@ -132,6 +133,7 @@ type Service struct {
 	Path         string                `yaml:"path"`
 	Policy       string                `yaml:"policy"`
 	Kind         string                `yaml:"kind"`
+	Network      ServiceNetwork        `yaml:"network"`
 	Discovery    ServiceDiscovery      `yaml:"discovery"`
 	Runner       Runner                `yaml:"runner"`
 	Ports        map[string]int        `yaml:"ports"`
@@ -140,6 +142,22 @@ type Service struct {
 	Config       ServiceConfig         `yaml:"config"`
 	Health       Health                `yaml:"health"`
 	Dependencies map[string]Dependency `yaml:"dependencies"`
+}
+
+const (
+	NetworkListenLoopback      = "loopback"
+	NetworkListenAllInterfaces = "all-interfaces"
+)
+
+type ServiceNetwork struct {
+	Listen string `yaml:"listen"`
+}
+
+func (network ServiceNetwork) EffectiveListen() string {
+	if network.Listen == "" {
+		return NetworkListenLoopback
+	}
+	return network.Listen
 }
 
 type ServiceDiscovery struct {

@@ -39,8 +39,11 @@ type RepositoryAnalysis struct {
 	Analyzer          string
 	ServiceName       string
 	ModulePath        string
+	Framework         string
+	Discovery         string
 	Runner            model.Runner
 	Kind              string
+	Health            model.Health
 	RPCClientBindings []RPCClientBindingCandidate
 }
 
@@ -73,6 +76,7 @@ func BuiltinRepositoryAnalyzers() []RepositoryAnalyzer {
 	return []RepositoryAnalyzer{
 		GoRootModuleAdapter{},
 		GoSubdirectoryModuleAdapter{},
+		JavaGradleSpringBootAdapter{},
 	}
 }
 

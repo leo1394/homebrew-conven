@@ -41,6 +41,32 @@ func TestValidateLoopbackListener(t *testing.T) {
 	}
 }
 
+func TestValidateAllInterfacesListener(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		port  int
+		valid bool
+	}{
+		{name: "ipv4 host", value: "0.0.0.0", valid: true},
+		{name: "ipv4 listener", value: "0.0.0.0:18081", port: 18081, valid: true},
+		{name: "loopback", value: "127.0.0.1:18081", port: 18081},
+		{name: "specific interface", value: "192.168.1.10:18081", port: 18081},
+		{name: "ipv6 all interfaces", value: "[::]:18081", port: 18081},
+		{name: "wrong port", value: "0.0.0.0:18082", port: 18081},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateServiceListener(test.value, test.port, "all-interfaces")
+			if test.valid && err != nil {
+				t.Fatalf("valid listener rejected: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatalf("unsafe listener %q accepted", test.value)
+			}
+		})
+	}
+}
+
 func TestValidatePlannedIsolationFailsClosedForRPC(t *testing.T) {
 	if err := validatePlannedIsolation("partner", "rpc", nil); err == nil || !strings.Contains(err.Error(), "no policy-backed") {
 		t.Fatalf("missing policy error = %v", err)
@@ -152,6 +178,130 @@ func TestValidateRuntimeConfigConsumptionRequiresVerifiedRuntimePath(t *testing.
 	}
 	if err := validateRuntimeConfigConsumption("api", config, []string{"api", "-f", target}, map[string]string{"PROFILE_ACTIVE": "dev"}); err == nil || !strings.Contains(err.Error(), "unverified") {
 		t.Fatalf("non-local profile runtime config error = %v", err)
+	}
+}
+
+func TestValidateSpringBootIsolationAndRuntimeArguments(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "configs", "data-mart-service")
+	registration := materialize.Guard{File: "application.yml", Path: "service.registration.enabled", Value: false, AllowCreate: true}
+	config := &PlannedConfig{
+		Framework: "spring-boot",
+		Discovery: "consul",
+		Plan: materialize.Plan{
+			Driver:       materialize.DriverYAMLOverlay,
+			SourceDriver: materialize.SourceRepository,
+			TargetDir:    target,
+			Application:  "application.yml",
+		},
+		Isolation: PlannedIsolation{
+			RegistrationMode:  "config",
+			RegistrationGuard: &registration,
+			ListenerGuard:     materialize.Guard{File: "application.yml", Path: "grpc.server.address", Value: "127.0.0.1", AllowCreate: true},
+			ListenerPort:      18087,
+		},
+	}
+	if err := validatePlannedIsolation("data-mart-service", "rpc", config); err != nil {
+		t.Fatal(err)
+	}
+	run := []string{
+		"java", "-jar", "/workspace/data-mart-service/build/libs/datamart.jar",
+		"--spring.profiles.active=dev",
+		"--spring.config.location=file:" + target + string(filepath.Separator),
+		"--service.registration.enabled=false",
+		"--spring.cloud.consul.discovery.register=false",
+		"--grpc.server.address=127.0.0.1",
+		"--grpc.server.port=18087",
+	}
+	if err := validateRuntimeConfigConsumption("data-mart-service", config, run, nil); err != nil {
+		t.Fatal(err)
+	}
+	if config.Isolation.RuntimeConfigRef != "spring-config-location(application.yml)" {
+		t.Fatalf("runtime config reference = %q", config.Isolation.RuntimeConfigRef)
+	}
+
+	config.Isolation.ListenerMode = "all-interfaces"
+	config.Isolation.ListenerGuard.Value = "0.0.0.0"
+	lanRun := append([]string(nil), run...)
+	for index, argument := range lanRun {
+		if argument == "--grpc.server.address=127.0.0.1" {
+			lanRun[index] = "--grpc.server.address=0.0.0.0"
+		}
+	}
+	if err := validatePlannedIsolation("data-mart-service", "rpc", config); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRuntimeConfigConsumption("data-mart-service", config, lanRun, nil); err != nil {
+		t.Fatal(err)
+	}
+	config.Isolation.ListenerMode = ""
+	config.Isolation.ListenerGuard.Value = "127.0.0.1"
+
+	tests := []struct {
+		name    string
+		replace string
+		with    string
+		message string
+	}{
+		{name: "registration enabled", replace: "--service.registration.enabled=false", with: "--service.registration.enabled=true", message: "conflicts"},
+		{name: "non-loopback", replace: "--grpc.server.address=127.0.0.1", with: "--grpc.server.address=0.0.0.0", message: "conflicts"},
+		{name: "wrong port", replace: "--grpc.server.port=18087", with: "--grpc.server.port=9898", message: "conflicts"},
+		{name: "wrong config", replace: "--spring.config.location=file:" + target + string(filepath.Separator), with: "--spring.config.location=file:/workspace/resources/", message: "conflicts"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed := append([]string(nil), run...)
+			for index, argument := range changed {
+				if argument == test.replace {
+					changed[index] = test.with
+				}
+			}
+			err := validateRuntimeConfigConsumption("data-mart-service", config, changed, nil)
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("runtime argument error = %v", err)
+			}
+		})
+	}
+	duplicated := append(append([]string(nil), run...), "--grpc.server.port=18087")
+	if err := validateRuntimeConfigConsumption("data-mart-service", config, duplicated, nil); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("duplicate protected argument error = %v", err)
+	}
+}
+
+func TestValidateSpringBootIsolationRejectsUnsafeContract(t *testing.T) {
+	registration := materialize.Guard{File: "application.yml", Path: "service.registration.enabled", Value: true}
+	config := &PlannedConfig{
+		Framework: "spring-boot",
+		Discovery: "consul",
+		Plan: materialize.Plan{Driver: materialize.DriverYAMLOverlay, SourceDriver: materialize.SourceRepository, Application: "application.yml"},
+		Isolation: PlannedIsolation{
+			RegistrationMode:  "config",
+			RegistrationGuard: &registration,
+			ListenerGuard:     materialize.Guard{File: "application.yml", Path: "server.address", Value: "127.0.0.1"},
+			ListenerPort:      18080,
+		},
+	}
+	if err := validatePlannedIsolation("api", "http", config); err == nil || !strings.Contains(err.Error(), "to false") {
+		t.Fatalf("enabled registration error = %v", err)
+	}
+	registration.Value = false
+	config.Plan.TargetDir = "/runtime/configs/api"
+	if err := validatePlannedIsolation("api", "http", config); err != nil {
+		t.Fatal(err)
+	}
+	httpRun := []string{
+		"java", "-jar", "/workspace/api.jar",
+		"--spring.config.location=file:/runtime/configs/api/",
+		"--service.registration.enabled=false",
+		"--spring.cloud.consul.discovery.register=false",
+		"--server.address=127.0.0.1",
+		"--server.port=18080",
+	}
+	if err := validateRuntimeConfigConsumption("api", config, httpRun, nil); err != nil {
+		t.Fatal(err)
+	}
+	config.Isolation.ListenerGuard.Value = "0.0.0.0"
+	if err := validatePlannedIsolation("api", "http", config); err == nil || !strings.Contains(err.Error(), "not a loopback") {
+		t.Fatalf("non-loopback error = %v", err)
 	}
 }
 

@@ -51,15 +51,45 @@ when a trusted adapter can verify the final runtime plan:
 
 - remote service registration is disabled, or registration is explicitly not
   applicable to that server kind;
-- the service listener is bound to a loopback IP;
+- the service listener uses the declared scope, defaulting to a loopback IP;
 - the run argv points to Conven's guarded runtime configuration;
 - the connection creates no cluster-to-local inbound route.
 
 If any proof is missing or ambiguous, startup fails closed. The currently
-trusted typed-service contract is `go-zero + Consul + yaml-overlay` for HTTP and
-RPC services. Unknown framework, discovery, or materializer combinations are
-rejected instead of being assumed safe. Conven verifies generated files and
-argv; it cannot prove that an arbitrary binary actually honors its flags.
+trusted typed-service contracts cover HTTP/RPC services using either
+`go-zero + Consul + yaml-overlay` or `Spring Boot + Consul + yaml-overlay`.
+Unknown framework, discovery, or materializer combinations are rejected instead
+of being assumed safe. Conven verifies generated files and argv; it cannot
+prove that an arbitrary binary actually honors its flags.
+
+Typed services listen on loopback by default. To let another device on the
+same LAN reach one specific service, opt that service into all interfaces:
+
+```yaml
+services:
+  portal-api-service:
+    kind: http
+    network:
+      listen: all-interfaces
+```
+
+Conven then enforces `0.0.0.0` for that service and prints a startup warning.
+This exposes every host interface, not only the LAN interface, so the host
+firewall still defines actual reachability. Local service routes and health
+checks continue to use `127.0.0.1`. Omit `network.listen`, or set it to
+`loopback`, for the default local-only behavior. Arbitrary bind addresses are
+not accepted.
+
+The equivalent per-service switches are:
+
+```bash
+conven services --listen --on portal-api-service
+conven services --listen --off portal-api-service
+```
+
+They update `.conven/conven.yaml` atomically and do not restart a running
+process. The selected scope takes effect on the next `services --start` or
+`services --restart`.
 
 Conven's built-in materializer writes generated YAML only to
 `.conven/runtime/current/configs/<service>`; it does not overwrite repository
@@ -107,7 +137,7 @@ Conven, and installs it to `~/.local/bin`. Add that directory to `PATH` if
 prompted. Run the command again to upgrade. To choose a version or destination:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=0.3.2 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=0.3.3 bash
 curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
@@ -232,17 +262,41 @@ files:
 | `README.md` | Workspace-local quick start for the generated files and Conven workflow. |
 
 Each file is created only when missing; an existing regular file is preserved.
-For supported Go main-module layouts, `init` records only verified
-paths, runners, service kinds, and binding candidates. It does **not** infer
-ports, a complete business dependency graph, organization-specific policy,
-Apollo credentials, or cluster connection details. Review the generated
-workspace manifest before starting services.
+For supported Go main-module layouts and root Gradle Spring Boot executable-JAR
+projects, `init` records only verified paths, runners, service kinds, binding
+candidates, health checks, and unique local ports for identified HTTP/RPC
+services. Local ports use the lowest unclaimed value from `18080`; existing
+assignments are never renumbered. Spring detection is static: Conven never runs
+Gradle or accesses the network during registry scanning. It does **not** infer a
+complete business dependency graph, organization-specific policy, credentials,
+or cluster connection details. Review the generated manifest before starting.
 
-Later `services --registry` runs refresh repository entries without guessing
-ports or editing `.conven/catalog.yaml`. Catalog entries may use `repository`,
-`rpcBinding`, or both, so a service does not require a local checkout. Use
+Later runs of `services --registry` refresh repository entries and assign the
+same deterministic local ports to newly identified HTTP/RPC services without
+editing `.conven/catalog.yaml`. Catalog entries may use `repository`, one
+`rpcBinding`, multiple case-sensitive `rpcBindings`, or a combination, so a
+service does not require a local checkout. Use
 `conven catalog --edit` to update the catalog and `conven catalog --validate`
 to check it.
+
+The initial Java boundary is deliberately narrow: the repository root must
+contain `gradlew`, one `settings.gradle[.kts]`, one `build.gradle[.kts]`, the
+Spring Boot plugin, and exactly one `@SpringBootApplication` entry point. HTTP
+requires a Web starter plus a controller; gRPC requires a server starter plus
+`@GrpcService`. Mixed evidence is left untyped. The boot JAR name must come from
+an explicit `bootJar.archiveFileName`, or from literal `rootProject.name` and
+`version` values. Maven, WAR, nested Boot modules, and dynamic artifact names
+are not inferred. A typed Spring service is added only when exactly one
+`spring-boot + consul + repository + yaml-overlay` policy supports its kind;
+otherwise registry fails without changing the manifest.
+
+Standard Spring Cloud Consul registration is disabled by adapter arguments and
+needs no extra application annotation. If the analyzer finds a known manual
+Consul registration call, its class must use the trusted `@ConditionalOnProperty`
+contract. Missing, incorrect, or ambiguous ownership aborts the complete registry
+scan before the manifest is written and prints the source path plus a ready-to-use
+fix. Custom Go/go-zero registration must honor the final runtime `discovType`;
+unconditional manual registration is not a trusted integration.
 
 If the project maintains a policy generator, install it and run the sole
 workspace plugin or name it explicitly. Complete the workspace-specific
@@ -337,6 +391,15 @@ integration API. See the [service runtime configuration contract](docs/service-r
 for complete implementations, invalid examples, and the canary-port behavioral
 test.
 
+The trusted Spring Boot adapter appends kind-specific server arguments after
+the common policy arguments. It requires the exact runtime config location,
+`service.registration.enabled=false`, Spring Cloud Consul registration disabled,
+the selected listener scope, and the declared local port. Missing, duplicate, or
+conflicting protected arguments are rejected before startup. Application code
+with manual Consul registration uses the neutral `service.registration.enabled`
+property with a default of `true`; it does not reference Conven-specific
+variables. Standard Spring Cloud Consul registration uses its native switch.
+
 `services --start --dry-run` stops after static planning. It does not contact
 Apollo, establish a connection, materialize configuration, build code, start a
 process, or modify the runtime directory.
@@ -366,7 +429,7 @@ It has four main parts:
 | Section | Describes |
 | --- | --- |
 | `workspace` | Project name and default policy |
-| `services` | Repository paths, runners, ports, health checks, and dependencies |
+| `services` | Repository paths, runners, ports, listener scopes, health checks, and dependencies |
 | `policies` | Framework/config drivers, runtime overlays, routing, and isolation |
 | `environments` | Environment variables and optional cluster connection |
 
@@ -412,6 +475,8 @@ you explicitly use a shell such as `[sh, -c, "..."]`.
 | Validate the generator service catalog | `conven catalog --validate` |
 | List manifest services | `conven services --list` |
 | Refresh scanned repositories | `conven services --registry` |
+| Allow LAN access for selected services | `conven services --listen --on SERVICE...` |
+| Restore loopback-only access | `conven services --listen --off SERVICE...` |
 | Validate one environment | `conven doctor --test` |
 | Preview a start | `conven services --start --test --dry-run SERVICE...` |
 | Start a local group | `conven services --start --test SERVICE...` |

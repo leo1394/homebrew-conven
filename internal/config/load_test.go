@@ -170,6 +170,27 @@ func TestLoadPolicyAndCentralServiceDescriptions(t *testing.T) {
 	}
 }
 
+func TestLoadValidatesServiceListenerScope(t *testing.T) {
+	configured := strings.Replace(policyManifestYAML, "    kind: rpc\n", "    kind: rpc\n    network:\n      listen: all-interfaces\n", 1)
+	manifest, err := Load(writeManifest(t, configured))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Services["api"].Network.Listen != "all-interfaces" {
+		t.Fatalf("listener scope = %q", manifest.Services["api"].Network.Listen)
+	}
+
+	invalid := strings.Replace(configured, "listen: all-interfaces", "listen: public", 1)
+	if _, err := Load(writeManifest(t, invalid)); err == nil || !strings.Contains(err.Error(), "must be loopback or all-interfaces") {
+		t.Fatalf("invalid listener scope error = %v", err)
+	}
+
+	untyped := strings.Replace(validManifestYAML, "    path: services/api\n", "    path: services/api\n    network:\n      listen: all-interfaces\n", 1)
+	if _, err := Load(writeManifest(t, untyped)); err == nil || !strings.Contains(err.Error(), "requires a typed service kind") {
+		t.Fatalf("untyped listener scope error = %v", err)
+	}
+}
+
 func TestLoadRejectsUnknownNestedPolicyField(t *testing.T) {
 	yaml := strings.Replace(policyManifestYAML, "      materializer: yaml-overlay", "      materializer: yaml-overlay\n      companyMagic: true", 1)
 

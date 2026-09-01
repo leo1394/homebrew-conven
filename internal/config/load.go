@@ -179,6 +179,14 @@ func validateManifest(manifest *model.Manifest) error {
 		if service.Kind != "" && invalidName(service.Kind) {
 			return fmt.Errorf("services.%s.kind must contain no whitespace", name)
 		}
+		switch service.Network.Listen {
+		case "", model.NetworkListenLoopback, model.NetworkListenAllInterfaces:
+		default:
+			return fmt.Errorf("services.%s.network.listen must be loopback or all-interfaces, got %q", name, service.Network.Listen)
+		}
+		if service.Network.Listen != "" && service.Kind == "" {
+			return fmt.Errorf("services.%s.network.listen requires a typed service kind", name)
+		}
 		if service.Discovery.Analyzer == "" && len(service.Discovery.Bindings) > 0 {
 			return fmt.Errorf("services.%s.discovery.analyzer is required when bindings are declared", name)
 		}
@@ -501,6 +509,11 @@ func validatePolicy(name string, policy model.Policy) error {
 		for index, patch := range server.Patches {
 			if err := validateConfigPatch(patch, fmt.Sprintf("%s.routing.servers.%s.patches[%d]", prefix, kind, index)); err != nil {
 				return err
+			}
+		}
+		for index, argument := range server.Args {
+			if strings.TrimSpace(argument) == "" {
+				return fmt.Errorf("%s.routing.servers.%s.args[%d] must not be empty", prefix, kind, index)
 			}
 		}
 		if err := validateServerIsolation(server.Isolation, fmt.Sprintf("%s.routing.servers.%s.isolation", prefix, kind)); err != nil {

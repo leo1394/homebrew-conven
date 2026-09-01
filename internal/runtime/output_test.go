@@ -74,6 +74,13 @@ func TestPrintPlanUsesPlainStageAndDetailStructure(t *testing.T) {
 	if strings.Contains(output.String(), "\x1b[") {
 		t.Fatalf("non-terminal output contains ANSI: %q", output.String())
 	}
+	plan.Services["api"].Config.Isolation.ListenerMode = "all-interfaces"
+	plan.Services["api"].Config.Isolation.ListenerGuard.Value = "0.0.0.0"
+	output.Reset()
+	printPlan(&output, plan, true)
+	if !strings.Contains(output.String(), "Warning: api listens on 0.0.0.0 across all network interfaces; LAN access is still controlled by the host firewall.") {
+		t.Fatalf("all-interfaces warning is missing: %q", output.String())
+	}
 }
 
 func TestPlannedIsolationDescriptionKeepsRPCListenerAddress(t *testing.T) {
@@ -89,6 +96,21 @@ func TestPlannedIsolationDescriptionKeepsRPCListenerAddress(t *testing.T) {
 		Plan: materialize.Plan{Application: "application.yaml", RuntimeBootstrap: "config-local.yaml"},
 	}
 	want := "registration=disabled via application.yaml:discovType; listener=loopback(127.0.0.1:18081); runtime-config=guarded-bootstrap(config-local.yaml->application.yaml)"
+	if got := plannedIsolationDescription(config); got != want {
+		t.Fatalf("isolation description = %q, want %q", got, want)
+	}
+}
+
+func TestPlannedIsolationDescriptionShowsAllInterfaces(t *testing.T) {
+	config := &PlannedConfig{
+		Isolation: PlannedIsolation{
+			RegistrationMode: "not-applicable",
+			ListenerMode:     "all-interfaces",
+			ListenerGuard:    materialize.Guard{File: "application.yaml", Path: "host", Value: "0.0.0.0"},
+			ListenerPort:     18080,
+		},
+	}
+	want := "registration=not-applicable; listener=all-interfaces(0.0.0.0:18080); runtime-config=unverified"
 	if got := plannedIsolationDescription(config); got != want {
 		t.Fatalf("isolation description = %q, want %q", got, want)
 	}

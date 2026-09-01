@@ -48,6 +48,9 @@ func Completion(shell string) (string, error) {
             --registry)
                 options="--prune --help"
                 ;;
+            --listen)
+                options="--on --off --help"
+                ;;
             --logs)
                 options="--tail --dashboard --help"
                 ;;
@@ -65,7 +68,7 @@ func Completion(shell string) (string, error) {
                 ;;
             *)
                 if [ "$COMP_CWORD" -eq "$action_index" ]; then
-                    options="--list --registry --status --logs --dashboard --start --restart --stop --stop-all --cleanup --help"
+                    options="--list --registry --listen --status --logs --dashboard --start --restart --stop --stop-all --cleanup --help"
                 else
                     options=""
                 fi
@@ -256,6 +259,13 @@ _conven() {
                         '--prune[remove missing direct-child repository services]' \
                         '--help[show command help]'
                     ;;
+                --listen)
+                    _arguments \
+                        '--on[listen on all interfaces]' \
+                        '--off[restore loopback-only listening]' \
+                        '--help[show command help]' \
+                        '*:service:'
+                    ;;
                 --logs)
                     _arguments \
                         '--tail[stream aggregated logs as plain text]' \
@@ -310,6 +320,7 @@ _conven() {
                         _arguments \
                             '--list[list services declared by the workspace]' \
                             '--registry[update services from child repositories]' \
+                            '--listen[change listener scope for selected services]' \
                             '--status[show current local service state]' \
                             '--logs[show or stream current session logs]' \
                             '--dashboard[open the interactive log dashboard]' \
@@ -689,6 +700,7 @@ complete -c conven -n '__conven_using_subcommand doctor' -l context -r -d 'Kubec
 complete -c conven -n '__conven_using_subcommand doctor' -l namespace -r -d 'Kubernetes namespace'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l list -d 'List services declared by the workspace'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l registry -d 'Update services from child repositories'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l listen -d 'Change listener scope for selected services'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l status -d 'Show current local service state'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l logs -d 'Show or stream current session logs'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l dashboard -d 'Open the interactive log dashboard'
@@ -698,6 +710,8 @@ complete -c conven -n '__conven_using_subcommand services; and __conven_services
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l stop-all -d 'Stop all services and release the workspace connection'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l cleanup -d 'Remove saved build artifacts and service logs'
 complete -c conven -n '__conven_services_action --registry' -l prune -d 'Remove missing direct-child repository services'
+complete -c conven -n '__conven_services_action --listen' -l on -d 'Listen on all interfaces'
+complete -c conven -n '__conven_services_action --listen' -l off -d 'Restore loopback-only listening'
 complete -c conven -n '__conven_services_action --logs' -l tail -d 'Stream aggregated logs as plain text'
 complete -c conven -n '__conven_services_action --logs' -l dashboard -d 'Open the interactive log dashboard'
 complete -c conven -n '__conven_services_action --start' -l env -r -d 'Environment profile'

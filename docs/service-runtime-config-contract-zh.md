@@ -96,7 +96,8 @@ typed service 的 trusted adapter 必须同时定义：
 - 如何验证 listener 和 registration 隔离；
 - 如何证明服务实际消费了配置。
 
-当前内置的 trusted adapter 仅支持 go-zero、Consul 和 `yaml-overlay`，并要求：
+当前内置的 trusted adapter 支持 go-zero 或 Spring Boot 与 Consul、`yaml-overlay`
+的组合。go-zero 契约要求：
 
 ```yaml
 policies:
@@ -109,6 +110,38 @@ policies:
 
 其他语言可以作为 runner-only service 运行。要获得同等级别的自动配置改写和隔离验证，
 需要为对应框架实现 trusted adapter，不能只修改语言名称。
+
+### 3.3 Listener scope
+
+typed service 默认使用 `network.listen: loopback`；省略 `network` 含义相同。Conven
+通过 trusted adapter 在最终运行时配置中写入并校验 loopback IP。需要让局域网设备
+访问某个服务时，可仅对该服务显式配置：
+
+```yaml
+services:
+  portal-api-service:
+    kind: http
+    network:
+      listen: all-interfaces
+```
+
+`all-interfaces` 会在运行时副本中写入并校验 IPv4 通配地址 `0.0.0.0`；Spring Boot
+受保护的 server 参数也会同步改写。该配置只影响当前服务。Conven 不接受任意地址，
+runner-only service 也不能声明该配置，因为没有 trusted adapter 可以证明其生效。
+健康检查和本地依赖路由仍使用 `127.0.0.1`。
+
+`0.0.0.0` 会绑定主机所有网卡，本身不限制为局域网流量；最终可达范围取决于防火墙
+和网络规则。
+
+无需打开编辑器，也可以切换同一配置状态：
+
+```bash
+conven services --listen --on portal-api-service
+conven services --listen --off portal-api-service
+```
+
+该命令原子更新 manifest，不会改变已经运行的进程；需要 start 或 restart 对应服务
+才能应用新的监听范围。
 
 ## 4. argv 位置
 
@@ -204,6 +237,11 @@ func main() {
 没有调用 `flag.Parse()`、把目录当作 YAML 文件、解析后不使用或在失败后回退到 `etc/`
 都不符合契约。
 
+如果 Go 服务绕过 go-zero 的标准注册逻辑并直接调用 Consul 注册 API，自定义逻辑也必须
+读取同一份最终运行时配置，并且只在 `discovType == "consul"` 时注册。Conven 会把该值
+物化为空字符串；无条件调用 `ServiceRegister` 的服务不能使用可信 go-zero Adapter。
+源码封装或依赖库中的注册行为无法仅靠通用静态扫描证明，必须由第 11 节的行为测试覆盖。
+
 ## 6. Java / Spring Boot
 
 Spring Boot 应使用框架原生的 `spring.config.location`，而不是在业务代码中识别 Conven。
@@ -230,12 +268,15 @@ public final class CatalogApplication {
 }
 ```
 
-运行时目录至少包含 Spring Boot 可以识别的 `application.yaml`。使用
+可信 Adapter 要求仓库配置源为 `src/main/resources/application.yml`；Conven 会复制该
+目录并在运行副本中写入受保护的 `application.yml`。使用
 `spring.config.location` 替换默认搜索位置；不要使用带 `optional:` 的路径，也不要在
 加载失败后自行回退到 classpath 配置。具体加载规则见
 [Spring Boot Externalized Configuration](https://docs.spring.io/spring-boot/reference/features/external-config.html)。
 
-Spring trusted adapter 还必须验证运行时配置中的等价属性，例如：
+Spring trusted adapter 在公共 Policy 参数后追加服务类型参数，并要求每个受保护参数
+恰好出现一次。config location、注册开关、监听地址或端口缺失、重复、冲突时都会拒绝
+启动。运行时配置中还会写入等价属性：
 
 ```yaml
 server:
@@ -247,7 +288,39 @@ spring:
     consul:
       discovery:
         register: false
+
+service:
+  registration:
+    enabled: false
 ```
+
+自定义注册代码使用中性的应用属性，并默认保持已有集群行为：
+
+```java
+@Configuration
+@ConditionalOnProperty(
+    prefix = "service.registration",
+    name = "enabled",
+    havingValue = "true",
+    matchIfMissing = true
+)
+public class ConsulConfig {
+    // 既有注册与注销实现。
+}
+```
+
+仅使用 Spring Cloud Consul 标准自动注册的服务不要求该注解；Adapter 会通过框架原生的
+`spring.cloud.consul.discovery.register=false` 关闭它。analyzer 发现已知的手工注册 API
+时，会确认完整条件注解与注册调用位于同一个类。条件缺失、值不符合上述契约或无法确认
+归属时，`services --registry` 会在 Conven 写入 manifest 前整体失败，错误信息包含源码
+路径、所需注解和本地参数示例。
+
+该检查只覆盖 analyzer 明确认识的直接注册 API。项目封装或依赖 JAR 中隐藏的注册行为
+仍需通过第 11 节的注册中心 canary 测试证明；静态检查不能替代行为验证。
+
+首版 analyzer 只支持根目录 Gradle Spring Boot 可执行 JAR。artifact 来自
+`bootJar.archiveFileName`，或字面量 `rootProject.name` 与 `version`。Maven、WAR、
+嵌套 Boot 模块、动态 artifact 名称和 HTTP/gRPC 混合证据需要显式 runner。
 
 ## 7. Python
 
