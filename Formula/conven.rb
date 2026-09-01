@@ -6,6 +6,13 @@ class Conven < Formula
   license "MIT"
   head "https://github.com/leo1394/homebrew-conven.git", branch: "master"
 
+  bottle do
+    root_url "https://github.com/leo1394/homebrew-conven/releases/download/conven-0.3.3"
+    sha256 cellar: :any_skip_relocation, arm64_tahoe:   "f481fa88ae0bfcb14ba77dd81da22abd6cf6b1a849fe398f7ed052269d87fb28"
+    sha256 cellar: :any_skip_relocation, arm64_sequoia: "8efc33be8f745d3626f6962f3c82e33b0d889402abd889f06083b9aba15609da"
+    sha256 cellar: :any,                 x86_64_linux:  "e944c2f0a1a28a947a3564c44813dff66496c5b0de868aa4799edc260d6b1e6e"
+  end
+
   depends_on "go" => :build
   depends_on "python" => :test
 
