@@ -7,6 +7,8 @@
 
 ![Conven——解决本地开发与集群环境隔离的痛点](assets/conven-banner-zh.png)
 
+> **可验证的本地微服务编排工具：**明确选择本地服务，显式连接其余依赖，并持续验证运行时隔离。
+
 Conven 是一个专注于本地开发的微服务编排工具。它选择一组服务在本地运行，并通过
 配置的 Endpoint 或开发集群访问其余依赖。生成配置始终保存在服务源码仓库之外。
 
@@ -42,7 +44,8 @@ flowchart LR
 
 ## 安全设计
 
-对于声明了 `kind: http` 或 `kind: rpc` 的服务，只有可信 Adapter 能验证最终
+对于声明了 `kinds: [http]`、`kinds: [rpc]` 或多个 listener 的服务，只有可信
+Adapter 能验证最终
 运行计划时，Conven 才会启动：
 
 - 已禁用远程服务注册，或该服务类型明确不需要注册；
@@ -50,11 +53,11 @@ flowchart LR
 - run argv 指向 Conven 保护的运行时配置；
 - 集群连接不会建立从集群到本机的入站路由。
 
-任何证明缺失或含糊时，启动都会按 fail-closed 原则失败。目前可信的类型化服务
-契约包括 HTTP/RPC 服务使用 `go-zero + Consul + yaml-overlay` 或
-`Spring Boot + Consul + yaml-overlay`。未知的框架、服务发现或 materializer 组合会
-直接拒绝，而不是假设其安全。Conven 能验证生成文件和 argv，但无法证明任意二进制
-一定会遵守传入的参数。
+任何证明缺失或含糊时，启动都会按 fail-closed 原则失败。Analyzer 只提取源码事实，
+Certifier 将事实与唯一匹配的 Policy 编译为可信运行契约；核心编排只消费该契约，
+不按框架分支。启动后还会验证 listener 归属和注册中心增量。完整的框架、配置交付与
+注册中心支持范围见[类型化服务支持矩阵](docs/typed-service-support-zh.md)。Conven 能
+验证运行计划和可观察结果，但无法证明任意二进制一定会遵守传入的参数。
 
 typed service 默认只监听 loopback。如果需要让同一局域网内的其他设备访问某一个
 服务，可只为该服务显式开放所有网卡：
@@ -62,7 +65,7 @@ typed service 默认只监听 loopback。如果需要让同一局域网内的其
 ```yaml
 services:
   portal-api-service:
-    kind: http
+    kinds: [http]
     network:
       listen: all-interfaces
 ```
@@ -90,9 +93,11 @@ Conven 内置的 materializer 只将生成的 YAML 写入
 
 > **本地服务隔离不等于数据隔离。** 本地服务仍会使用运行时配置中的远程
 > 数据库、Kafka、未选中的 RPC 客户端和后台任务，因此可能写入数据或消费消息。
-> Conven 不会隔离这些副作用。
+> Conven 不会隔离这些副作用。已识别的 Kafka consumer 必须具有中性 guard；在统一
+> 异步工作负载本地路由实现前，暂时默认注入
+> `SERVICE_KAFKA_CONSUMERS_ENABLED=true`，需要隔离时可由服务环境显式设为 `false`。
 
-未声明 `kind` 的 runner-only 服务不具备相同的 Adapter 安全保证。项目自定义的
+未声明 `kinds` 的 runner-only 服务不具备相同的 Adapter 安全保证。项目自定义的
 `prepare` 和 `build` 命令也会以当前用户权限运行，并可能修改其工作目录。
 
 ## 安装
@@ -125,13 +130,13 @@ SHA256 清单校验源码归档，构建 Conven，并安装到 `~/.local/bin`。
 或安装目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=0.3.3 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.1 bash
 curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
-Conven 支持 macOS 和 Linux。只有环境使用 `ktctl` connection driver 时才需要
-安装 `ktctl`；只有 Python 插件需要 Python 3。匹配 Homebrew bottle 时，客户端
-不需要安装 Go；从源码构建 Conven 需要 Go 1.23 或更高版本。
+Conven 支持 macOS 和 Linux。Homebrew 和 `install.sh` 只安装 Conven，不自动安装
+项目使用的语言运行时和包管理器。只有环境使用 `ktctl` connection driver 时才需要
+安装 `ktctl`；匹配 Homebrew bottle 时，客户端不需要安装 Go。
 
 ## 快速上手
 
@@ -150,8 +155,8 @@ conven services --list
 本地 Service 依赖时使用显式选项 `--with-dependencies`：
 
 ```bash
-conven services --start portal-api-service
-conven services --start portal-api-service --with-dependencies
+conven services --start user-svc order-svc
+conven services --start order-svc --with-dependencies
 ```
 
 默认只启动显式选中的 Service。将本地 Service 所需的连接地址声明为环境 Endpoint，
@@ -168,10 +173,10 @@ environments:
         address: 127.0.0.1:5432
 
 services:
-  portal-api-service:
-    path: services/portal-api-service
+  order-svc:
+    path: services/order-svc
     runner:
-      run: [go, run, ./cmd/portal-api-service]
+      run: [go, run, ./cmd/order-svc]
     dependencies:
       postgres:
         env:
@@ -183,7 +188,7 @@ Conven 会在启动 Service 前检查其引用的 Endpoint。只有一个环境�
 
 ```bash
 conven doctor --env local
-conven services --start portal-api-service
+conven services --start user-svc order-svc
 conven status
 ```
 
@@ -201,9 +206,9 @@ conven doctor --test
 conven services --start --test portal-api-service partner-service visit-plan-mgr-service
 ```
 
-0.3 可直接读取现有 Manifest v1 workspace，无需迁移，并保持 0.2.x 的 `dev` 默认环境、
-本地依赖和远程依赖行为。Manifest v2 在此基础上增加无集群环境、环境文件、显式
-Endpoint 和依赖解析规则。
+1.0 使用 Manifest v3。旧的 v1/v2 workspace 需要先停止运行中的 session，再执行
+`conven workspace --migrate`；Conven 会在备份和完整校验后原子替换 manifest。
+无法证明 registry identity、runtime 或 Policy 时迁移会整体失败并保留原文件。
 
 请将示例服务名替换为 `conven services --list` 输出的名称。在交互式终端中也可以
 省略服务名，通过选择器选择。启动完成后，Conven 默认打开 Dashboard。按 `q`
@@ -224,9 +229,9 @@ conven services --stop-all
 cd /path/to/workspace
 
 conven init
-conven catalog --validate
+conven workspace --validate
 conven services --list
-conven policy --edit
+conven workspace --edit
 
 conven doctor --dev
 conven services --start --dev --dry-run portal-api-service partner-service
@@ -238,37 +243,20 @@ conven services --start --dev portal-api-service partner-service
 | 文件 | 用途 |
 | --- | --- |
 | `.conven/conven.yaml` | 定义环境、服务、Policy 和运行行为的规范 workspace manifest。 |
-| `.conven/catalog.yaml` | 声明 repository/RPC binding identity、服务类型、唯一 local port 和 disabled bindings 的生成器目录。 |
 | `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` | 用于实现 workspace Policy 生成器插件的 AI 可读规范。 |
 | `README.md` | 介绍生成文件和 Conven 工作流的 workspace 本地快速上手文档。 |
 
-每个文件仅在缺失时创建；已有的普通文件会保持不变。`init` 可以识别支持的 Go main
-module 和根目录 Gradle Spring Boot 可执行 JAR 项目，并记录可以证明的路径、runner、
-服务类型、绑定候选、健康检查和 HTTP/RPC 服务的唯一 local port。端口从 `18080` 开始
-选择未占用的最小值，已有分配不会被重新编号。registry 对 Java 仅做静态分析，不执行
-Gradle，也不访问网络。它**不会**猜测完整业务依赖图、公司 Policy、凭据或集群连接信息。
-启动前需要人工确认一次候选配置。
+每个文件仅在缺失时创建；已有普通文件保持不变。`.conven/conven.yaml` 是唯一服务清单。
+`init` 和后续的 `services --registry` 只做静态扫描，不运行构建、不访问网络；它们记录
+可以证明的 runner、listener、注册代码、binding 和健康检查，并从 `18080` 开始为新服务
+分配最低未占用端口，已有端口不重新编号。已支持框架但证据不足时 registry 原子失败，
+完全不支持的仓库则以具体原因列入 skipped repositories。
 
-后续执行 `services --registry` 会刷新仓库条目，并以同样的确定性规则为新识别的
-HTTP/RPC 服务分配 local port，但不会改写 `.conven/catalog.yaml`。catalog entry 可以
-使用 `repository`、单个 `rpcBinding`、保持大小写的多个 `rpcBindings`，或组合使用，
-因此服务不必存在本地 checkout。
-使用 `conven catalog --edit` 更新目录，使用 `conven catalog --validate` 校验目录。
-
-Java 首版边界保持明确：仓库根目录必须包含 `gradlew`、唯一的
-`settings.gradle[.kts]`、唯一的 `build.gradle[.kts]`、Spring Boot plugin 和唯一
-`@SpringBootApplication` 入口。HTTP 需要 Web starter 与 controller，gRPC 需要 server
-starter 与 `@GrpcService`；同时存在两类证据时不猜测 kind。boot JAR 名只能来自显式
-`bootJar.archiveFileName`，或字面量 `rootProject.name` 与 `version`。暂不推断 Maven、
-WAR、嵌套 Boot 模块和动态 artifact。typed Spring 服务只有在恰好存在一个兼容的
-`spring-boot + consul + repository + yaml-overlay` Policy 时才写入；否则 registry
-原子失败且不修改 manifest。
-
-标准 Spring Cloud Consul 注册由 Adapter 参数关闭，不要求额外业务注解。如果 analyzer
-发现已知的手工 Consul 注册调用，则注册类必须使用可信的
-`@ConditionalOnProperty` 契约；缺失、配置错误或无法确认调用归属时，registry 会在
-写入 manifest 前整体失败，并输出源码路径和可直接采用的修改示例。Go/go-zero 的自定义
-注册必须服从最终运行时配置中的 `discovType`；无条件手工注册不属于可信接入。
+Conven 支持 Go、Spring Boot、Python、Node.js 和 Bun 的常见 HTTP/RPC 框架，以及
+passive、Kubernetes DNS、Consul、Nacos、Eureka 和 Etcd 契约。它不会猜测完整业务
+依赖图、公司 Policy、凭据或集群连接信息。具体边界和修复示例见
+[类型化服务支持矩阵](docs/typed-service-support-zh.md)与
+[服务运行时配置契约](docs/service-runtime-config-contract-zh.md)。
 
 如果项目维护了 Policy 生成器，请安装后运行唯一的 workspace 插件，或显式指定名称。
 首次运行前还需按生成的 AI 规范补全 workspace 专用的 `conven-generator.json`；`init`
@@ -277,10 +265,10 @@ WAR、嵌套 Boot 模块和动态 artifact。typed Spring 服务只有在恰好�
 ```bash
 conven plugins --install ./generate-workspace-policy.py
 conven plugins --run --output
-conven policy --import --edit
+conven workspace --import --edit
 ```
 
-Conven 当前不内置任何项目专用插件。`policy --import` 会验证并替换完整 manifest，
+Conven 当前不内置任何项目专用插件。`workspace --import` 会验证并替换完整 manifest，
 并非 YAML merge。
 
 ## 一次启动如何完成
@@ -290,7 +278,8 @@ Conven 当前不内置任何项目专用插件。`policy --import` 会验证并�
 3. 验证本地 Service、Endpoint、remote、disabled 路由以及隔离契约、命令和路径。
 4. 检查被引用的外部 Endpoint 是否就绪。
 5. 复用或建立环境连接，在 `.conven/runtime/current` 生成运行时配置。
-6. 执行 prepare、build、start 和 health check，再记录状态和聚合日志。
+6. 执行 prepare、build、start 和 health check，再验证 listener 归属与注册中心增量，
+   最后记录状态和聚合日志。
 
 ### 配置物化顺序
 
@@ -349,12 +338,10 @@ Conven 不要求所有语言使用同一个硬编码参数。业务源码应保�
 业务服务源码的推荐接入 API。完整实现、错误示例和 canary 端口行为验证见
 [服务运行时配置契约](docs/service-runtime-config-contract-zh.md)。
 
-可信 Spring Boot Adapter 会在公共 Policy 参数后追加服务类型参数，并严格要求 runtime
-config location、`service.registration.enabled=false`、关闭 Spring Cloud Consul 注册、
-指定的 listener scope 和声明的 local port。受保护参数缺失、重复或冲突时会在启动前拒绝。
-仅当业务包含手工 Consul 注册时，注册类才需要使用默认值为 `true` 的中性属性
-`service.registration.enabled`，且不依赖 Conven 专用变量。标准 Spring Cloud Consul
-注册由框架原生开关控制。
+可信 Adapter 最后注入受保护的 host、port 和禁注册参数；缺失、重复或冲突时会在启动前
+拒绝。业务包含手工注册逻辑时必须提供框架原生或中性的关闭开关，且不得依赖 Conven
+专用变量。具体语言契约和修复示例统一放在
+[服务运行时配置契约](docs/service-runtime-config-contract-zh.md)。
 
 `services --start --dry-run` 在静态编排完成后结束。它不会访问 Apollo、建立连接、
 生成运行时配置、构建代码、启动进程或修改 runtime 目录。
@@ -390,7 +377,7 @@ config location、`service.registration.enabled=false`、关闭 Spring Cloud Con
 最小的 runner-only workspace 如下：
 
 ```yaml
-version: 2
+version: 3
 
 workspace:
   name: demo
@@ -401,19 +388,23 @@ environments:
       driver: none
 
 services:
-  portal-api-service:
-    path: services/portal-api-service
+  user-svc:
+    path: services/user-svc
     runner:
-      run: [go, run, ./cmd/portal-api-service]
+      run: [go, run, ./cmd/user-svc]
     ports:
       http: 18080
-    health:
-      type: process
+    healthChecks:
+      - type: process
 ```
 
-该示例有意省略 `kind`，因此只是通用 runner-only 配置。类型化 HTTP/RPC 服务必须
+该示例有意省略 `kinds`，因此只是通用 runner-only 配置。类型化 HTTP/RPC 服务必须
 引用具有完整且可验证隔离契约的 Policy。包含多服务、依赖环境、健康检查和 `ktctl`
 连接的配置可参考[示例 manifest](examples/application.yaml)。
+
+Manifest v3 使用 `kinds`、`healthChecks`、命名 registry、明确的 discovery identity、
+`providerAliases` 和 `consumerBindings`。每个 kind 必须拥有对应端口、Policy server
+route 和 health check；同一进程可以暴露多个 listener。
 
 命令使用 argv 数组。除非显式调用 shell，例如 `[sh, -c, "..."]`，否则管道、
 重定向和 `&&` 不会被解释执行。
@@ -423,8 +414,9 @@ services:
 | 操作 | 命令 |
 | --- | --- |
 | 查看完整 workspace 状态 | `conven status` |
-| 编辑生成器服务目录 | `conven catalog --edit` |
-| 校验生成器服务目录 | `conven catalog --validate` |
+| 编辑 workspace manifest | `conven workspace --edit` |
+| 校验 workspace manifest | `conven workspace --validate` |
+| 迁移旧 manifest | `conven workspace --migrate` |
 | 列出 manifest 中的服务 | `conven services --list` |
 | 刷新扫描到的服务仓库 | `conven services --registry` |
 | 开放指定服务供局域网访问 | `conven services --listen --on SERVICE...` |
@@ -478,7 +470,8 @@ conven services --logs --tail
 ```
 
 交互式 start 和 restart 默认打开 Dashboard；`--tail` 使用 Plain 模式。Dashboard
-支持日志自动换行、滚动和 `/` 搜索。按 `q` 或 `Ctrl-C` 退出查看，不会停止服务。
+支持日志自动换行、滚动和 `/` 搜索；按 `g` 或 `G` 跳到最新日志并持续 follow，Home
+跳到最旧日志。按 `q` 或 `Ctrl-C` 退出查看，不会停止服务。
 
 ## 配置与插件
 
@@ -501,7 +494,7 @@ workspace 配置位于 `.conven/config`，全局配置位于 `~/.conven/config`�
 conven plugins --install ./plugin.py
 conven plugins --list
 conven plugins --run --output
-conven policy --import
+conven workspace --import
 conven plugins --remove plugin
 
 # 显式使用用户全局插件范围。
@@ -516,7 +509,7 @@ workspace 插件位于 `.conven/plugins`，全局插件位于 `~/.conven/plugins
 只有一个插件时可以省略名称，存在多个时会打开单选器；workspace 没有插件时，单选器
 会显示 global 候选，即使只有一个候选也需要确认。显式 global run 必须提供名称。
 `--output` 不带文件名时会原样传给插件，生成器约定写入 `application.yaml`；
-`policy --import` 不带文件名时会从 workspace 根目录的 `.yaml` 和 `.yml` 文件中单选。
+`workspace --import` 不带文件名时会从 workspace 根目录的 `.yaml` 和 `.yml` 文件中单选。
 插件以规范 workspace 作为工作目录运行。请将插件视为可信本地代码，并在导入前检查
 它生成的 Policy 候选配置。默认分组列表需要处于 workspace 中；在 workspace 外请使用
 `conven plugins --list --global`。
@@ -540,13 +533,14 @@ workspace 运行目录和文件仅允许当前用户访问。Conven 会拒绝 sy
 
 ## 适用范围
 
-- 服务 runner 不限语言；自动仓库分析目前仅支持已适配的 Go module 布局。
-- 配置可以来自仓库 YAML 或 Apollo，并使用 `yaml-overlay` 生成运行时副本。
+- 服务 runner 不限语言；自动仓库分析覆盖支持矩阵中列出的 Go、Java、Python、Node.js
+  和 Bun 框架，未知仓库仍可显式声明为 runner-only。
+- 配置可以来自仓库、Apollo 或环境变量，并使用 YAML、properties 或 environment
+  Adapter 生成运行契约。
 - `ktctl connect` 用于建立本机到集群的访问能力。Conven 不使用 `ktctl exchange`，
   不创建反向路由，也不是 service mesh 或 preview environment 工具。
-- 健康检查只用于确认启动就绪；Conven 不是监控系统。
-- 外部 Consul preflight 只覆盖识别到的客户端绑定，不会完整检查数据库、Kafka、
-  后台任务或所有依赖的就绪状态。
+- 健康检查和 listener/registry observer 只用于证明本次本地启动；Conven 不是监控系统。
+- 外部依赖检查只覆盖识别到的绑定，不会完整检查数据库、Kafka、后台任务或所有依赖。
 
 ## 帮助与开发
 

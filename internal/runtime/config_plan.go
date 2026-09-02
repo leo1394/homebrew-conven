@@ -16,18 +16,25 @@ import (
 
 type PlannedConfig struct {
 	Policy    string
+	Contract  string
+	Contracts map[string]string
+	Runtime   string
 	Framework string
 	Discovery string
 	Plan      materialize.Plan
 	Routes    []PlannedRoute
 	Isolation PlannedIsolation
+	Isolations map[string]PlannedIsolation
 }
 
 type PlannedIsolation struct {
 	RegistrationMode  string
 	RegistrationGuard *materialize.Guard
+	RegistrationEnv   string
 	ListenerMode      string
 	ListenerGuard     materialize.Guard
+	ListenerEnv       string
+	PortEnv           string
 	ListenerPort      int
 	RuntimeConfigDir  bool
 	RuntimeConfigRef  string
@@ -38,6 +45,28 @@ type PlannedRoute struct {
 	Binding    string
 	Local      bool
 	Mode       string
+}
+
+func (planned *PlannedConfig) IsolationFor(kind string) PlannedIsolation {
+	if planned == nil {
+		return PlannedIsolation{}
+	}
+	if isolation, found := planned.Isolations[kind]; found {
+		return isolation
+	}
+	return planned.Isolation
+}
+
+func (planned *PlannedConfig) ForKind(kind string) *PlannedConfig {
+	if planned == nil {
+		return nil
+	}
+	view := *planned
+	view.Isolation = planned.IsolationFor(kind)
+	if contract, found := planned.Contracts[kind]; found {
+		view.Contract = contract
+	}
+	return &view
 }
 
 func policyForService(manifest *model.Manifest, service model.Service) (string, model.Policy, bool) {
@@ -57,7 +86,10 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 	if !found || policy.Drivers.Materializer == "" {
 		return nil, nil
 	}
-	if policy.Drivers.Materializer != string(materialize.DriverYAMLOverlay) {
+	if policy.Drivers.Materializer == "environment" {
+		return planEnvironmentServiceConfig(plan, name, service, policyName, policy, context)
+	}
+	if policy.Drivers.Materializer != string(materialize.DriverYAMLOverlay) && policy.Drivers.Materializer != string(materialize.DriverPropertiesOverlay) {
 		return nil, fmt.Errorf("service %s policy %s uses unsupported materializer %q", name, policyName, policy.Drivers.Materializer)
 	}
 	sourceValue, err := config.Expand(policy.Config.SourceDir, context)
@@ -113,8 +145,11 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 	}
 	planned := &PlannedConfig{
 		Policy:    policyName,
+		Contracts: make(map[string]string),
+		Runtime:   policyRuntime(policy),
 		Framework: policy.Drivers.Framework,
 		Discovery: policy.Drivers.Discovery,
+		Isolations: make(map[string]PlannedIsolation),
 		Plan: materialize.Plan{
 			Service:          name,
 			Driver:           materialize.Driver(policy.Drivers.Materializer),
@@ -132,11 +167,13 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 			},
 		},
 	}
-	server, hasServer := policy.Routing.Servers[service.Kind]
 	patches := make([]model.ConfigPatch, 0, len(policy.Config.Patches)+len(service.Config.Patches))
 	patches = append(patches, policy.Config.Patches...)
-	if hasServer {
-		patches = append(patches, server.Patches...)
+	kinds := service.EffectiveKinds()
+	for _, kind := range kinds {
+		if server, found := policy.Routing.Servers[kind]; found {
+			patches = append(patches, server.Patches...)
+		}
 	}
 	patches = append(patches, service.Config.Patches...)
 	for index, patch := range patches {
@@ -156,11 +193,12 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 		if dependency.Binding == "" {
 			continue
 		}
-		rule := policy.Routing.RemoteDependency
+		routing := RoutingAdapter(policyRoutingAdapter{})
+		rule := routing.Rule(policy.Routing, false)
 		resolution, found := plan.Resolutions[name][dependencyName]
 		local := found && resolution.Mode == "local"
 		if local {
-			rule = policy.Routing.LocalDependency
+			rule = routing.Rule(policy.Routing, true)
 		}
 		route := PlannedRoute{
 			Dependency: dependencyName,
@@ -185,23 +223,129 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 		}
 		planned.Plan.Patches = append(planned.Plan.Patches, plannedPatch)
 	}
-	if hasServer {
-		isolation, guards, err := planServerIsolation(server, application, context, policy.Drivers.Framework == "spring-boot", service.Network.EffectiveListen())
+	for _, kind := range kinds {
+		server, hasServer := policy.Routing.Servers[kind]
+		if !hasServer {
+			continue
+		}
+		adapter, found, err := runtimeContractForPolicy(policy, kind)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s runtime contract: %w", name, err)
+		}
+		if !found {
+			return nil, fmt.Errorf("service %s policy %q does not satisfy a trusted runtime contract for kind %q", name, policyName, kind)
+		}
+		planned.Contracts[kind] = adapter.Name()
+		if planned.Contract == "" {
+			planned.Contract = adapter.Name()
+		}
+		isolation, guards, err := planServerIsolation(server, application, context, adapter.AllowGuardCreation(), service.Network.EffectiveListen())
 		if err != nil {
 			return nil, fmt.Errorf("plan %s local isolation: %w", name, err)
 		}
-		planned.Isolation = isolation
+		planned.Isolations[kind] = isolation
+		if planned.Isolation.RegistrationMode == "" {
+			planned.Isolation = isolation
+		}
 		planned.Plan.Guards = append(planned.Plan.Guards, guards...)
-		runtimeGuards, err := planRuntimeConfigGuards(planned.Plan, context)
+		runtimeGuards, err := adapter.RuntimeConfigGuards(planned.Plan, context)
 		if err != nil {
 			return nil, fmt.Errorf("plan %s runtime config isolation: %w", name, err)
 		}
 		if len(runtimeGuards) > 0 {
-			planned.Isolation.RuntimeConfigDir = true
+			isolation.RuntimeConfigDir = true
+			planned.Isolations[kind] = isolation
+			if planned.Isolation.ListenerPort == isolation.ListenerPort {
+				planned.Isolation.RuntimeConfigDir = true
+			}
 			planned.Plan.Guards = append(planned.Plan.Guards, runtimeGuards...)
 		}
 	}
 	return planned, nil
+}
+
+func planEnvironmentServiceConfig(_ *Plan, name string, service model.Service, policyName string, policy model.Policy, _ config.ExpandContext) (*PlannedConfig, error) {
+	planned := &PlannedConfig{
+		Policy:     policyName,
+		Contracts:  make(map[string]string),
+		Runtime:    policyRuntime(policy),
+		Framework:  policy.Drivers.Framework,
+		Discovery:  policy.Drivers.Discovery,
+		Isolations: make(map[string]PlannedIsolation),
+		Plan: materialize.Plan{
+			Service:      name,
+			Driver:       materialize.DriverEnvironment,
+			SourceDriver: materialize.SourceEnvironment,
+		},
+	}
+	for _, kind := range service.EffectiveKinds() {
+		server := policy.Routing.Servers[kind]
+		adapter, found, err := runtimeContractForPolicy(policy, kind)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s runtime contract: %w", name, err)
+		}
+		if !found {
+			return nil, fmt.Errorf("service %s policy %q does not satisfy a trusted runtime contract for kind %q", name, policyName, kind)
+		}
+		listener := "127.0.0.1"
+		if service.Network.EffectiveListen() == model.NetworkListenAllInterfaces {
+			listener = "0.0.0.0"
+		}
+		listenerEnv := server.Isolation.Listener.Path
+		if listenerEnv == "" {
+			listenerEnv = "HOST"
+		}
+		portEnv := environmentPortKey(server, kind, len(service.EffectiveKinds()))
+		registrationMode := "not-applicable"
+		registrationEnv := ""
+		var registrationGuard *materialize.Guard
+		if policy.Drivers.Discovery != "passive" && policy.Drivers.Discovery != "kubernetes-dns" {
+			registrationMode = "config"
+			registrationEnv = server.Isolation.Registration.Path
+			if registrationEnv == "" {
+				registrationEnv = "SERVICE_REGISTRATION_ENABLED"
+			}
+			guard := materialize.Guard{Path: registrationEnv, Value: false}
+			registrationGuard = &guard
+		}
+		isolation := PlannedIsolation{
+			RegistrationMode:  registrationMode,
+			RegistrationGuard: registrationGuard,
+			RegistrationEnv:   registrationEnv,
+			ListenerMode:      service.Network.EffectiveListen(),
+			ListenerGuard:     materialize.Guard{Path: listenerEnv, Value: listener},
+			ListenerEnv:       listenerEnv,
+			PortEnv:           portEnv,
+			ListenerPort:      service.Ports[server.Port],
+		}
+		planned.Contracts[kind] = adapter.Name()
+		if planned.Contract == "" {
+			planned.Contract = adapter.Name()
+			planned.Isolation = isolation
+		}
+		planned.Isolations[kind] = isolation
+	}
+	return planned, nil
+}
+
+func environmentPortKey(server model.ServerRoute, kind string, listenerCount int) string {
+	want := "${port." + server.Port + "}"
+	for key, value := range server.Env {
+		if value == want {
+			return key
+		}
+	}
+	if listenerCount == 1 {
+		return "PORT"
+	}
+	return strings.ToUpper(strings.ReplaceAll(kind, "-", "_")) + "_PORT"
+}
+
+func policyRuntime(policy model.Policy) string {
+	if policy.Drivers.Runtime != "" {
+		return policy.Drivers.Runtime
+	}
+	return policy.Drivers.Framework
 }
 
 func planRuntimeConfigGuards(plan materialize.Plan, context config.ExpandContext) ([]materialize.Guard, error) {

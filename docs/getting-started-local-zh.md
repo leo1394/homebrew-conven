@@ -1,4 +1,4 @@
-# Conven 0.3.0 纯本地开发新手手册
+# Conven 纯本地开发新手手册
 
 本文适用于项目刚开始开发、没有 Kubernetes 集群，也没有远程数据库或 Kafka 的场景。
 Conven 负责本地业务 Service 的选择、启动顺序、运行时配置、健康检查和日志；PostgreSQL、
@@ -14,9 +14,9 @@ conven services --list
 conven status
 ```
 
-`init --local` 创建 Manifest v2 和 `connection.driver: none` 的 `local` 环境，不生成
+`init --local` 创建 Manifest v3 和 `connection.driver: none` 的 `local` 环境，不生成
 Compose 文件，也不要求 Docker。请先确认 `user-svc`、`order-svc` 等服务已被识别；
-必要时使用 `conven policy --edit` 完善 runner、端口和依赖关系。
+必要时使用 `conven workspace --edit` 完善 runner、端口和依赖关系。
 
 ## 2. 启动项目基础设施
 
@@ -34,7 +34,7 @@ Docker Compose。Conven 不安装、不启动、不停止，也不删除这些�
 在 `.conven/conven.yaml` 的 `local` 环境中声明可访问地址，并由 Service 引用：
 
 ```yaml
-version: 2
+version: 3
 
 workspace:
   name: shop

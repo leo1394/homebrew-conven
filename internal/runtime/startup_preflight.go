@@ -24,10 +24,12 @@ func materializeRuntimeConfigs(ctx context.Context, plan *Plan, names []string, 
 		if service.Config == nil {
 			continue
 		}
-		fmt.Fprintf(output, "%s %s config\n", style.Stage("Materializing"), style.Identifier(name))
-		fmt.Fprintln(output, style.Detail(fmt.Sprintf("Drivers: %s -> %s", service.Config.Plan.SourceDriver, service.Config.Plan.Driver)))
-		if err := materialize.Materialize(ctx, service.Config.Plan); err != nil {
-			return fmt.Errorf("materialize %s config: %w", name, err)
+		if service.Config.Plan.Driver != materialize.DriverEnvironment {
+			fmt.Fprintf(output, "%s %s config\n", style.Stage("Materializing"), style.Identifier(name))
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("Drivers: %s -> %s", service.Config.Plan.SourceDriver, service.Config.Plan.Driver)))
+			if err := materialize.Materialize(ctx, service.Config.Plan); err != nil {
+				return fmt.Errorf("materialize %s config: %w", name, err)
+			}
 		}
 		if err := verifyServiceIsolation(service); err != nil {
 			return err
@@ -50,14 +52,11 @@ func runRuntimePreflight(ctx context.Context, plan *Plan, output io.Writer, anno
 			}
 			return err
 		}
-		if service.Config != nil && service.Config.Framework == "go-zero" && service.Config.Discovery == "consul" && service.Config.Plan.Driver == materialize.DriverYAMLOverlay {
-			preflightEnabled = true
-		}
 	}
 	dependencies := make([]ExternalConsulDependency, 0)
 	for _, name := range plan.Order {
 		service := plan.Services[name]
-		detected, err := detectExternalConsulDependencies(service, service.Kind)
+		detected, enabled, err := inspectRuntimeContractExternalDependencies(service, service.Kind)
 		if err != nil {
 			if announce {
 				fmt.Fprintln(output, style.Stage("Local isolation preflight"))
@@ -66,6 +65,9 @@ func runRuntimePreflight(ctx context.Context, plan *Plan, output io.Writer, anno
 				fmt.Fprintln(output, style.Failure("✗ Final runtime config and dependency recheck failed."))
 			}
 			return err
+		}
+		if enabled {
+			preflightEnabled = true
 		}
 		dependencies = append(dependencies, detected...)
 	}

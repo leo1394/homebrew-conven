@@ -57,12 +57,12 @@ func EditWorkspacePolicy(cwd string, edit func(string) error) (PolicyEditResult,
 	source, sourceInfo, err := readManifestForUpdate(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return result, fmt.Errorf("Conven manifest %q is missing; run \"conven policy --reset\" or import a complete manifest with \"conven policy --import\"", path)
+			return result, fmt.Errorf("Conven manifest %q is missing; run \"conven workspace --reset\" or import a complete manifest with \"conven workspace --import\"", path)
 		}
 		return result, err
 	}
 	if edit == nil {
-		return result, fmt.Errorf("policy editor is not configured")
+		return result, fmt.Errorf("workspace editor is not configured")
 	}
 
 	backupDirectory, err := ensurePolicyBackupDirectory(boundary)
@@ -71,7 +71,7 @@ func EditWorkspacePolicy(cwd string, edit func(string) error) (PolicyEditResult,
 	}
 	draft, err := os.CreateTemp(backupDirectory, "conven.yaml-edit-*.yaml")
 	if err != nil {
-		return result, fmt.Errorf("create policy edit draft: %w", err)
+		return result, fmt.Errorf("create workspace edit draft: %w", err)
 	}
 	draftPath := draft.Name()
 	removeDraft := true
@@ -82,54 +82,54 @@ func EditWorkspacePolicy(cwd string, edit func(string) error) (PolicyEditResult,
 	}()
 	if err := draft.Chmod(0600); err != nil {
 		draft.Close()
-		return result, fmt.Errorf("protect policy edit draft: %w", err)
+		return result, fmt.Errorf("protect workspace edit draft: %w", err)
 	}
 	if _, err := draft.Write(source); err != nil {
 		draft.Close()
-		return result, fmt.Errorf("write policy edit draft: %w", err)
+		return result, fmt.Errorf("write workspace edit draft: %w", err)
 	}
 	if err := draft.Sync(); err != nil {
 		draft.Close()
-		return result, fmt.Errorf("sync policy edit draft: %w", err)
+		return result, fmt.Errorf("sync workspace edit draft: %w", err)
 	}
 	if err := draft.Close(); err != nil {
-		return result, fmt.Errorf("close policy edit draft: %w", err)
+		return result, fmt.Errorf("close workspace edit draft: %w", err)
 	}
 
 	editErr := edit(draftPath)
 	candidate, readErr := readPolicyDraft(draftPath)
 	if readErr != nil {
 		if editErr != nil {
-			return result, fmt.Errorf("policy editor failed: %v; inspect edited draft: %w", editErr, readErr)
+		return result, fmt.Errorf("workspace editor failed: %v; inspect edited draft: %w", editErr, readErr)
 		}
 		return result, readErr
 	}
 	if editErr != nil {
 		if bytes.Equal(candidate, source) {
-			return result, fmt.Errorf("policy editor failed: %w", editErr)
+			return result, fmt.Errorf("workspace editor failed: %w", editErr)
 		}
 		removeDraft = false
 		result.DraftPath = draftPath
-		return result, fmt.Errorf("policy editor failed: %w; edited draft was not published by Conven and is kept at %q", editErr, draftPath)
+		return result, fmt.Errorf("workspace editor failed: %w; edited draft was not published by Conven and is kept at %q", editErr, draftPath)
 	}
 	candidate, err = normalizePolicyDraftIndentation(draftPath, candidate)
 	if err != nil {
 		removeDraft = false
 		result.DraftPath = draftPath
-		return result, fmt.Errorf("format edited policy indentation: %w; edited draft was not published by Conven and is kept at %q", err, draftPath)
+		return result, fmt.Errorf("format edited workspace indentation: %w; edited draft was not published by Conven and is kept at %q", err, draftPath)
 	}
 	if _, err := decodeManifest(candidate, draftPath); err != nil {
 		removeDraft = false
 		result.DraftPath = draftPath
-		return result, fmt.Errorf("edited policy manifest is invalid: %w; edited draft was not published by Conven and is kept at %q", err, draftPath)
+		return result, fmt.Errorf("edited workspace manifest is invalid: %w; edited draft was not published by Conven and is kept at %q", err, draftPath)
 	}
 	if bytes.Equal(candidate, source) {
-		if err := verifyManifestSnapshot(path, source, sourceInfo, "policy edit"); err != nil {
+		if err := verifyManifestSnapshot(path, source, sourceInfo, "workspace edit"); err != nil {
 			return result, err
 		}
 		return result, nil
 	}
-	if err := publishManifestUpdate(path, candidate, source, sourceInfo, "policy edit"); err != nil {
+	if err := publishManifestUpdate(path, candidate, source, sourceInfo, "workspace edit"); err != nil {
 		removeDraft = false
 		result.DraftPath = draftPath
 		return result, fmt.Errorf("%w; edited draft was not published by Conven and is kept at %q", err, draftPath)
@@ -155,7 +155,7 @@ func ImportWorkspacePolicy(cwd string, importPath string, edit func(string) erro
 	sourcePath = filepath.Clean(sourcePath)
 	manifestPath := ManifestPath(workspace)
 	if sourcePath == manifestPath {
-		return result, fmt.Errorf("policy import %q is the current workspace manifest; choose a separate source file", sourcePath)
+		return result, fmt.Errorf("workspace import %q is the current workspace manifest; choose a separate source file", sourcePath)
 	}
 	imported, importInfo, err := readPolicyImportFile(sourcePath)
 	if err != nil {
@@ -163,15 +163,15 @@ func ImportWorkspacePolicy(cwd string, importPath string, edit func(string) erro
 	}
 	manifestInfo, statErr := os.Stat(manifestPath)
 	if statErr == nil && os.SameFile(importInfo, manifestInfo) {
-		return result, fmt.Errorf("policy import %q is the current workspace manifest; choose a separate source file", sourcePath)
+		return result, fmt.Errorf("workspace import %q is the current workspace manifest; choose a separate source file", sourcePath)
 	}
 	if statErr != nil && !os.IsNotExist(statErr) {
-		return result, fmt.Errorf("inspect current Conven manifest %q before policy import: %w", manifestPath, statErr)
+		return result, fmt.Errorf("inspect current Conven manifest %q before workspace import: %w", manifestPath, statErr)
 	}
 	result, err = applyWorkspacePolicyCandidate(workspace, boundary, imported, edit, policyCandidateOptions{
-		validationName: fmt.Sprintf("policy import %q", sourcePath),
-		candidateName:  "imported policy manifest",
-		operation:      "policy import",
+		validationName: fmt.Sprintf("workspace import %q", sourcePath),
+		candidateName:  "imported workspace manifest",
+		operation:      "workspace import",
 		draftPattern:   "conven.yaml-import-edit-*.yaml",
 		backupPattern:  "conven.yaml-before-import-*.bak",
 		backupLabel:    "import",
@@ -282,30 +282,30 @@ func applyWorkspacePolicyCandidate(workspace string, boundary string, input []by
 func readPolicyImportFile(path string) ([]byte, os.FileInfo, error) {
 	observed, err := os.Lstat(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("inspect policy import %q: %w", path, err)
+		return nil, nil, fmt.Errorf("inspect workspace import %q: %w", path, err)
 	}
 	if observed.Mode()&os.ModeSymlink != 0 || !observed.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("policy import %q must be a real regular file, not a symbolic link", path)
+		return nil, nil, fmt.Errorf("workspace import %q must be a real regular file, not a symbolic link", path)
 	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open policy import %q without following symbolic links: %w", path, err)
+		return nil, nil, fmt.Errorf("open workspace import %q without following symbolic links: %w", path, err)
 	}
 	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return nil, nil, fmt.Errorf("inspect opened policy import %q: %w", path, err)
+		return nil, nil, fmt.Errorf("inspect opened workspace import %q: %w", path, err)
 	}
 	if !info.Mode().IsRegular() || !os.SameFile(observed, info) {
-		return nil, nil, fmt.Errorf("policy import %q changed while it was opened; retry the command", path)
+		return nil, nil, fmt.Errorf("workspace import %q changed while it was opened; retry the command", path)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxPolicyImportSize+1))
 	if err != nil {
-		return nil, nil, fmt.Errorf("read policy import %q: %w", path, err)
+		return nil, nil, fmt.Errorf("read workspace import %q: %w", path, err)
 	}
 	if len(data) > maxPolicyImportSize {
-		return nil, nil, fmt.Errorf("policy import %q exceeds the %d-byte size limit", path, maxPolicyImportSize)
+		return nil, nil, fmt.Errorf("workspace import %q exceeds the %d-byte size limit", path, maxPolicyImportSize)
 	}
 	return data, info, nil
 }
@@ -331,7 +331,7 @@ func ResetWorkspacePolicyFromScan(cwd string) (PolicyResetResult, error) {
 		result.Discovered = append(result.Discovered, service.Name)
 	}
 	if len(discovered) == 0 {
-		return result, fmt.Errorf("scan found no supported direct-child repositories; policy reset did not publish a manifest")
+		return result, fmt.Errorf("scan found no supported direct-child repositories; workspace reset did not publish a manifest")
 	}
 	version := 2
 	if !missing {
@@ -348,7 +348,7 @@ func ResetWorkspacePolicyFromScan(cwd string) (PolicyResetResult, error) {
 		return result, fmt.Errorf("validate scan-reset Conven manifest: %w", err)
 	}
 	if !missing && bytes.Equal(candidate, source) {
-		if err := verifyManifestSnapshot(path, source, sourceInfo, "policy reset"); err != nil {
+		if err := verifyManifestSnapshot(path, source, sourceInfo, "workspace reset"); err != nil {
 			return result, err
 		}
 		return result, nil
@@ -362,7 +362,7 @@ func ResetWorkspacePolicyFromScan(cwd string) (PolicyResetResult, error) {
 			return result, err
 		}
 		if !created {
-			return result, fmt.Errorf("Conven manifest %q was created during policy reset; retry the command", path)
+			return result, fmt.Errorf("Conven manifest %q was created during workspace reset; retry the command", path)
 		}
 		result.Changed = true
 		result.Created = true
@@ -371,10 +371,10 @@ func ResetWorkspacePolicyFromScan(cwd string) (PolicyResetResult, error) {
 
 	backup, err := savePolicySnapshot(boundary, "conven.yaml-before-reset-*.bak", source)
 	if err != nil {
-		return result, fmt.Errorf("back up Conven manifest before policy reset: %w", err)
+		return result, fmt.Errorf("back up Conven manifest before workspace reset: %w", err)
 	}
 	result.BackupPath = backup
-	if err := publishManifestUpdate(path, candidate, source, sourceInfo, "policy reset"); err != nil {
+	if err := publishManifestUpdate(path, candidate, source, sourceInfo, "workspace reset"); err != nil {
 		return result, fmt.Errorf("%w; pre-reset manifest backup kept at %q", err, backup)
 	}
 	result.Changed = true
@@ -415,7 +415,7 @@ func readPolicyManifest(path string) ([]byte, os.FileInfo, bool, error) {
 func readPolicyDraft(path string) ([]byte, error) {
 	data, _, err := readManifestForUpdate(path)
 	if err != nil {
-		return nil, fmt.Errorf("inspect edited policy draft %q: %w", path, err)
+		return nil, fmt.Errorf("inspect edited workspace draft %q: %w", path, err)
 	}
 	return data, nil
 }
@@ -426,29 +426,29 @@ func normalizePolicyDraftIndentation(path string, data []byte) ([]byte, error) {
 		return data, nil
 	}
 	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, ".conven-policy-format-*")
+	temporary, err := os.CreateTemp(directory, ".conven-workspace-format-*")
 	if err != nil {
-		return nil, fmt.Errorf("create formatted policy draft: %w", err)
+		return nil, fmt.Errorf("create formatted workspace draft: %w", err)
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
 	if err := temporary.Chmod(0600); err != nil {
 		temporary.Close()
-		return nil, fmt.Errorf("protect formatted policy draft: %w", err)
+		return nil, fmt.Errorf("protect formatted workspace draft: %w", err)
 	}
 	if _, err := temporary.Write(formatted); err != nil {
 		temporary.Close()
-		return nil, fmt.Errorf("write formatted policy draft: %w", err)
+		return nil, fmt.Errorf("write formatted workspace draft: %w", err)
 	}
 	if err := temporary.Sync(); err != nil {
 		temporary.Close()
-		return nil, fmt.Errorf("sync formatted policy draft: %w", err)
+		return nil, fmt.Errorf("sync formatted workspace draft: %w", err)
 	}
 	if err := temporary.Close(); err != nil {
-		return nil, fmt.Errorf("close formatted policy draft: %w", err)
+		return nil, fmt.Errorf("close formatted workspace draft: %w", err)
 	}
 	if err := os.Rename(temporaryName, path); err != nil {
-		return nil, fmt.Errorf("publish formatted policy draft: %w", err)
+		return nil, fmt.Errorf("publish formatted workspace draft: %w", err)
 	}
 	_ = syncDirectory(directory)
 	return formatted, nil
@@ -495,7 +495,7 @@ func savePolicySnapshot(boundary string, pattern string, data []byte) (string, e
 	}
 	file, err := os.CreateTemp(directory, pattern)
 	if err != nil {
-		return "", fmt.Errorf("create conven policy snapshot: %w", err)
+		return "", fmt.Errorf("create Conven workspace snapshot: %w", err)
 	}
 	path := file.Name()
 	remove := true
@@ -506,18 +506,18 @@ func savePolicySnapshot(boundary string, pattern string, data []byte) (string, e
 	}()
 	if err := file.Chmod(0600); err != nil {
 		file.Close()
-		return "", fmt.Errorf("protect conven policy snapshot: %w", err)
+		return "", fmt.Errorf("protect Conven workspace snapshot: %w", err)
 	}
 	if _, err := file.Write(data); err != nil {
 		file.Close()
-		return "", fmt.Errorf("write conven policy snapshot: %w", err)
+		return "", fmt.Errorf("write Conven workspace snapshot: %w", err)
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		return "", fmt.Errorf("sync conven policy snapshot: %w", err)
+		return "", fmt.Errorf("sync Conven workspace snapshot: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		return "", fmt.Errorf("close conven policy snapshot: %w", err)
+		return "", fmt.Errorf("close Conven workspace snapshot: %w", err)
 	}
 	if err := syncDirectory(directory); err != nil {
 		return "", err
@@ -532,18 +532,18 @@ func ensurePolicyBackupDirectory(boundary string) (string, error) {
 	info, err := os.Lstat(directory)
 	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return "", fmt.Errorf("conven policy backup directory %q must be a real directory, not a symbolic link", directory)
+			return "", fmt.Errorf("Conven workspace backup directory %q must be a real directory, not a symbolic link", directory)
 		}
 	} else if os.IsNotExist(err) {
 		if err := os.Mkdir(directory, 0700); err != nil {
-			return "", fmt.Errorf("create conven policy backup directory %q: %w", directory, err)
+			return "", fmt.Errorf("create Conven workspace backup directory %q: %w", directory, err)
 		}
 		created = true
 	} else {
-		return "", fmt.Errorf("inspect conven policy backup directory %q: %w", directory, err)
+		return "", fmt.Errorf("inspect Conven workspace backup directory %q: %w", directory, err)
 	}
 	if err := os.Chmod(directory, 0700); err != nil {
-		return "", fmt.Errorf("protect conven policy backup directory %q: %w", directory, err)
+		return "", fmt.Errorf("protect Conven workspace backup directory %q: %w", directory, err)
 	}
 	if created {
 		if err := syncDirectory(boundary); err != nil {

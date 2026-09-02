@@ -7,6 +7,10 @@
 
 ![Conven — Run changed services locally and keep cluster dependencies connected](assets/conven-banner-en.png)
 
+> **A verifiable local microservice orchestrator.**
+>
+> Run selected services locally, route the rest explicitly, and verify runtime isolation.
+
 Conven is a focused local microservice orchestrator. It runs a selected service
 group locally and keeps the rest reachable through configured endpoints or a
 development cluster. Generated configuration stays outside service repositories.
@@ -46,8 +50,9 @@ artifacts, logs, and session state live under the workspace's `.conven/runtime`.
 
 ## Safety by design
 
-For a classified service with `kind: http` or `kind: rpc`, Conven starts only
-when a trusted adapter can verify the final runtime plan:
+For a classified service with `kinds: [http]`, `kinds: [rpc]`, or multiple
+listeners, Conven starts only when a trusted adapter can verify the final
+runtime plan:
 
 - remote service registration is disabled, or registration is explicitly not
   applicable to that server kind;
@@ -55,12 +60,14 @@ when a trusted adapter can verify the final runtime plan:
 - the run argv points to Conven's guarded runtime configuration;
 - the connection creates no cluster-to-local inbound route.
 
-If any proof is missing or ambiguous, startup fails closed. The currently
-trusted typed-service contracts cover HTTP/RPC services using either
-`go-zero + Consul + yaml-overlay` or `Spring Boot + Consul + yaml-overlay`.
-Unknown framework, discovery, or materializer combinations are rejected instead
-of being assumed safe. Conven verifies generated files and argv; it cannot
-prove that an arbitrary binary actually honors its flags.
+If any proof is missing or ambiguous, startup fails closed. An analyzer extracts
+source facts, a certifier compiles them with the unique matching policy into a
+trusted runtime contract, and core orchestration consumes that contract without
+framework-specific branches. After startup, Conven also verifies listener
+ownership and registry changes. See the
+[typed-service support matrix](docs/typed-service-support.md) for supported
+frameworks, config delivery, and registries. Conven can verify the plan and
+observable results; it cannot prove that an arbitrary binary honors its flags.
 
 Typed services listen on loopback by default. To let another device on the
 same LAN reach one specific service, opt that service into all interfaces:
@@ -68,7 +75,7 @@ same LAN reach one specific service, opt that service into all interfaces:
 ```yaml
 services:
   portal-api-service:
-    kind: http
+    kinds: [http]
     network:
       listen: all-interfaces
 ```
@@ -101,9 +108,13 @@ the session and blocks the next fresh start.
 > **Local isolation is not data isolation.** Local services still use the
 > remote databases, Kafka brokers, unselected RPC clients, and background jobs
 > present in their runtime configuration. They may write data or consume
-> messages. Conven does not sandbox those effects.
+> messages. Conven does not sandbox those effects. Recognized Kafka consumers
+> must have a neutral guard. Until unified local routing for asynchronous
+> workloads is implemented, Conven temporarily injects
+> `SERVICE_KAFKA_CONSUMERS_ENABLED=true`; a service environment may explicitly
+> set it to `false` when consumer isolation is required.
 
-Runner-only services with no `kind` do not receive the same adapter-backed
+Runner-only services with no `kinds` do not receive the same adapter-backed
 isolation guarantee. Project-defined `prepare` and `build` commands also run
 with the user's normal authority and may modify their working directory.
 
@@ -137,14 +148,14 @@ Conven, and installs it to `~/.local/bin`. Add that directory to `PATH` if
 prompted. Run the command again to upgrade. To choose a version or destination:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=0.3.3 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.1 bash
 curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
-Conven supports macOS and Linux. `ktctl` is required only when the selected
-environment uses the `ktctl` connection driver; Python 3 is required only for
-Python plugins. A matching Homebrew bottle does not require Go on the client;
-building Conven from source requires Go 1.23 or later.
+Conven supports macOS and Linux. Homebrew and `install.sh` install Conven only;
+they do not install project language runtimes or package managers. `ktctl` is
+required only when the selected environment uses that connection driver. A
+matching Homebrew bottle does not require Go on the client.
 
 ## Quick start
 
@@ -163,8 +174,8 @@ Pass service names directly to start local services. Use `--with-dependencies`
 to include transitive local service dependencies:
 
 ```bash
-conven services --start portal-api-service
-conven services --start portal-api-service --with-dependencies
+conven services --start user-svc order-svc
+conven services --start order-svc --with-dependencies
 ```
 
 By default, only explicitly selected services start. Declare the addresses
@@ -182,10 +193,10 @@ environments:
         address: 127.0.0.1:5432
 
 services:
-  portal-api-service:
-    path: services/portal-api-service
+  order-svc:
+    path: services/order-svc
     runner:
-      run: [go, run, ./cmd/portal-api-service]
+      run: [go, run, ./cmd/order-svc]
     dependencies:
       postgres:
         env:
@@ -197,7 +208,7 @@ is selected automatically:
 
 ```bash
 conven doctor --env local
-conven services --start portal-api-service
+conven services --start user-svc order-svc
 conven status
 ```
 
@@ -216,10 +227,11 @@ conven doctor --test
 conven services --start --test portal-api-service partner-service visit-plan-mgr-service
 ```
 
-Version 0.3 accepts existing Manifest v1 workspaces without migration and keeps
-their 0.2.x `dev`, local dependency, and remote dependency behavior. Manifest
-v2 adds no-cluster environments, environment files, explicit endpoints, and
-dependency resolution rules.
+Version 1.0 uses Manifest v3. Stop any active session before running
+`conven workspace --migrate` for a v1 or v2 workspace. Conven backs up and fully
+validates the manifest before replacing it atomically. If registry identity,
+runtime, or policy cannot be proven, migration fails without replacing the
+original file.
 
 Replace the example names with values from `conven services --list`. In an
 interactive terminal you may omit the names and select services in the picker.
@@ -241,9 +253,9 @@ Run `init` from the directory containing the service repositories:
 cd /path/to/workspace
 
 conven init
-conven catalog --validate
+conven workspace --validate
 conven services --list
-conven policy --edit
+conven workspace --edit
 
 conven doctor --dev
 conven services --start --dev --dry-run portal-api-service partner-service
@@ -257,46 +269,25 @@ files:
 | File | Purpose |
 | --- | --- |
 | `.conven/conven.yaml` | Canonical workspace manifest for environments, services, policies, and runtime behavior. |
-| `.conven/catalog.yaml` | Declarative generator catalog for repository and RPC-binding identities, service kinds, unique local ports, and disabled bindings. |
 | `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` | AI-readable specification for implementing the workspace policy generator plugin. |
 | `README.md` | Workspace-local quick start for the generated files and Conven workflow. |
 
 Each file is created only when missing; an existing regular file is preserved.
-For supported Go main-module layouts and root Gradle Spring Boot executable-JAR
-projects, `init` records only verified paths, runners, service kinds, binding
-candidates, health checks, and unique local ports for identified HTTP/RPC
-services. Local ports use the lowest unclaimed value from `18080`; existing
-assignments are never renumbered. Spring detection is static: Conven never runs
-Gradle or accesses the network during registry scanning. It does **not** infer a
-complete business dependency graph, organization-specific policy, credentials,
-or cluster connection details. Review the generated manifest before starting.
+`.conven/conven.yaml` is the sole service inventory. `init` and later
+`services --registry` runs perform static analysis only: they do not build or
+access the network. They record proven runners, listeners, registration code,
+bindings, and health checks, and assign the lowest unused port from `18080` to
+new services without renumbering existing assignments. A known framework with
+insufficient evidence fails the registry update atomically; an unsupported
+repository is listed under skipped repositories with a concrete reason.
 
-Later runs of `services --registry` refresh repository entries and assign the
-same deterministic local ports to newly identified HTTP/RPC services without
-editing `.conven/catalog.yaml`. Catalog entries may use `repository`, one
-`rpcBinding`, multiple case-sensitive `rpcBindings`, or a combination, so a
-service does not require a local checkout. Use
-`conven catalog --edit` to update the catalog and `conven catalog --validate`
-to check it.
-
-The initial Java boundary is deliberately narrow: the repository root must
-contain `gradlew`, one `settings.gradle[.kts]`, one `build.gradle[.kts]`, the
-Spring Boot plugin, and exactly one `@SpringBootApplication` entry point. HTTP
-requires a Web starter plus a controller; gRPC requires a server starter plus
-`@GrpcService`. Mixed evidence is left untyped. The boot JAR name must come from
-an explicit `bootJar.archiveFileName`, or from literal `rootProject.name` and
-`version` values. Maven, WAR, nested Boot modules, and dynamic artifact names
-are not inferred. A typed Spring service is added only when exactly one
-`spring-boot + consul + repository + yaml-overlay` policy supports its kind;
-otherwise registry fails without changing the manifest.
-
-Standard Spring Cloud Consul registration is disabled by adapter arguments and
-needs no extra application annotation. If the analyzer finds a known manual
-Consul registration call, its class must use the trusted `@ConditionalOnProperty`
-contract. Missing, incorrect, or ambiguous ownership aborts the complete registry
-scan before the manifest is written and prints the source path plus a ready-to-use
-fix. Custom Go/go-zero registration must honor the final runtime `discovType`;
-unconditional manual registration is not a trusted integration.
+Conven supports common HTTP/RPC frameworks for Go, Spring Boot, Python, Node.js,
+and Bun, plus passive, Kubernetes DNS, Consul, Nacos, Eureka, and Etcd contracts.
+It does not infer a complete business dependency graph, organization policy,
+credentials, or cluster connection details. See the
+[typed-service support matrix](docs/typed-service-support.md) and
+[service runtime configuration contract](docs/service-runtime-config-contract.md)
+for exact boundaries and repair examples.
 
 If the project maintains a policy generator, install it and run the sole
 workspace plugin or name it explicitly. Complete the workspace-specific
@@ -306,10 +297,10 @@ first run; `init` does not guess environments or connection policy:
 ```bash
 conven plugins --install ./generate-workspace-policy.py
 conven plugins --run --output
-conven policy --import --edit
+conven workspace --import --edit
 ```
 
-Conven currently bundles no project-specific plugins. `policy --import`
+Conven currently bundles no project-specific plugins. `workspace --import`
 validates and replaces the complete manifest; it is not a YAML merge.
 
 ## How a start works
@@ -320,7 +311,8 @@ validates and replaces the complete manifest; it is not a YAML merge.
    and paths.
 4. Check the readiness of referenced external endpoints.
 5. Reuse or establish the environment connection and materialize runtime config.
-6. Run prepare, build, start, and health checks, then save state and logs.
+6. Run prepare, build, start, and health checks, verify listener ownership and
+   registry changes, then save state and logs.
 
 ### Configuration materialization order
 
@@ -391,14 +383,12 @@ integration API. See the [service runtime configuration contract](docs/service-r
 for complete implementations, invalid examples, and the canary-port behavioral
 test.
 
-The trusted Spring Boot adapter appends kind-specific server arguments after
-the common policy arguments. It requires the exact runtime config location,
-`service.registration.enabled=false`, Spring Cloud Consul registration disabled,
-the selected listener scope, and the declared local port. Missing, duplicate, or
-conflicting protected arguments are rejected before startup. Application code
-with manual Consul registration uses the neutral `service.registration.enabled`
-property with a default of `true`; it does not reference Conven-specific
-variables. Standard Spring Cloud Consul registration uses its native switch.
+Trusted adapters inject protected host, port, and registration-disable settings
+last. Missing, duplicate, or conflicting settings are rejected before startup.
+Application code with custom registration must expose a framework-native or
+neutral disable switch and must not depend on Conven-specific variables. See the
+[service runtime configuration contract](docs/service-runtime-config-contract.md)
+for language-specific contracts and repair examples.
 
 `services --start --dry-run` stops after static planning. It does not contact
 Apollo, establish a connection, materialize configuration, build code, start a
@@ -436,7 +426,7 @@ It has four main parts:
 A minimal runner-only workspace looks like this:
 
 ```yaml
-version: 2
+version: 3
 
 workspace:
   name: demo
@@ -447,21 +437,26 @@ environments:
       driver: none
 
 services:
-  portal-api-service:
-    path: services/portal-api-service
+  user-svc:
+    path: services/user-svc
     runner:
-      run: [go, run, ./cmd/portal-api-service]
+      run: [go, run, ./cmd/user-svc]
     ports:
       http: 18080
-    health:
-      type: process
+    healthChecks:
+      - type: process
 ```
 
-This intentionally omits `kind`, so it is a generic runner-only example. A
+This intentionally omits `kinds`, so it is a generic runner-only example. A
 typed HTTP/RPC service must reference a policy with a complete, verifiable
 isolation contract. See the [example manifest](examples/application.yaml) for
 multiple services, dependency environments, health checks, and a `ktctl`
 connection.
+
+Manifest v3 uses `kinds`, `healthChecks`, named registries, explicit discovery
+identity, `providerAliases`, and `consumerBindings`. Every kind needs a matching
+port, policy server route, and health check; one process may expose multiple
+listeners.
 
 Commands are argv arrays. Pipes, redirects, and `&&` are not interpreted unless
 you explicitly use a shell such as `[sh, -c, "..."]`.
@@ -471,8 +466,9 @@ you explicitly use a shell such as `[sh, -c, "..."]`.
 | Task | Command |
 | --- | --- |
 | Inspect the complete workspace state | `conven status` |
-| Edit the generator service catalog | `conven catalog --edit` |
-| Validate the generator service catalog | `conven catalog --validate` |
+| Edit the workspace manifest | `conven workspace --edit` |
+| Validate the workspace manifest | `conven workspace --validate` |
+| Migrate an older manifest | `conven workspace --migrate` |
 | List manifest services | `conven services --list` |
 | Refresh scanned repositories | `conven services --registry` |
 | Allow LAN access for selected services | `conven services --listen --on SERVICE...` |
@@ -529,7 +525,8 @@ conven services --logs --tail
 
 Interactive starts and restarts open the Dashboard by default; `--tail` selects
 Plain mode. The Dashboard supports wrapped logs, scrolling, and `/` search.
-Press `q` or `Ctrl-C` to detach without stopping services.
+Press `g` or `G` to jump to the newest log and continue following; Home jumps
+to the oldest log. Press `q` or `Ctrl-C` to detach without stopping services.
 
 ## Configuration and plugins
 
@@ -553,7 +550,7 @@ Manage local Python plugins with:
 conven plugins --install ./plugin.py
 conven plugins --list
 conven plugins --run --output
-conven policy --import
+conven workspace --import
 conven plugins --remove plugin
 
 # Use the user-global plugin scope explicitly.
@@ -571,7 +568,7 @@ workspace plugins open the single selector. If none exists locally, the same
 selector shows global candidates, including a sole candidate. An explicitly
 global run requires its name. `--output`
 without a filename is passed to the plugin, whose generator convention writes
-`application.yaml`; `policy --import` without a filename opens the single
+`application.yaml`; `workspace --import` without a filename opens the single
 selector for `.yaml` and `.yml` files in the workspace root. Plugins run with
 the canonical workspace as their working directory.
 Treat them as trusted local code and review generated policy candidates before
@@ -598,17 +595,18 @@ artifacts, runtime configuration, and service logs never leave the workspace.
 
 ## Scope
 
-- Service runners are language-agnostic; automatic repository analysis is
-  currently limited to supported Go module layouts.
-- Configuration can come from repository YAML or Apollo and can be materialized
-  with `yaml-overlay`.
+- Service runners are language-agnostic; automatic repository analysis covers
+  the Go, Java, Python, Node.js, and Bun frameworks in the support matrix.
+  Unknown repositories can still be declared explicitly as runner-only.
+- Configuration can come from a repository, Apollo, or environment variables
+  and use YAML, properties, or environment adapters.
 - `ktctl connect` provides local-to-cluster reachability. Conven does not use
   `ktctl exchange`, create a reverse route, provide a service mesh, or implement
   preview environments.
-- Health checks establish startup readiness only; Conven is not a monitoring
-  system.
-- External Consul preflight covers recognized client bindings only. It is not a
-  database, Kafka, background-job, or complete dependency readiness check.
+- Health checks and listener/registry observers prove only the current local
+  start; Conven is not a monitoring system.
+- External dependency checks cover recognized bindings only. They are not a
+  complete database, Kafka, background-job, or dependency readiness check.
 
 ## Help and development
 

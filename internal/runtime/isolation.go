@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -21,205 +21,28 @@ func validatePlannedIsolation(name string, kind string, config *PlannedConfig) e
 		}
 		return nil
 	}
-	if config.Framework == "spring-boot" {
-		return validateSpringBootIsolation(name, kind, config)
-	}
-	return validateGoZeroIsolation(name, kind, config)
-}
-
-func validateGoZeroIsolation(name string, kind string, config *PlannedConfig) error {
-	isolation := config.Isolation
-	if isolation.RegistrationMode == "" {
+	if config.Isolation.RegistrationMode == "" {
 		if kind != "" {
 			return fmt.Errorf("service %s kind %s has no local isolation contract", name, kind)
 		}
 		return nil
 	}
-	if kind == "rpc" && isolation.RegistrationMode != "config" {
-		return fmt.Errorf("service %s kind rpc must verify disabled registration through its final runtime config", name)
+	adapter, err := requireRuntimeContract(name, config)
+	if err != nil {
+		return err
 	}
-	if kind == "http" && isolation.RegistrationMode != "not-applicable" {
-		return fmt.Errorf("service %s kind http registration isolation must be not-applicable for the trusted go-zero Consul adapter", name)
-	}
-	if config.Framework != "go-zero" || config.Discovery != "consul" || config.Plan.Driver != materialize.DriverYAMLOverlay {
-		return fmt.Errorf("service %s has no trusted local isolation adapter for framework %q, discovery %q, and materializer %q", name, config.Framework, config.Discovery, config.Plan.Driver)
-	}
-	if kind != "rpc" && kind != "http" {
-		return fmt.Errorf("service %s kind %s has no trusted go-zero Consul local isolation contract", name, kind)
-	}
-	if isolation.RegistrationMode == "config" && isolation.RegistrationGuard == nil {
-		return fmt.Errorf("service %s registration isolation guard is missing", name)
-	}
-	if isolation.RegistrationMode == "config" {
-		guard := *isolation.RegistrationGuard
-		disabledValue, ok := guard.Value.(string)
-		if guard.File != config.Plan.Application || guard.Path != "discovType" || !ok || disabledValue != "" {
-			return fmt.Errorf("service %s go-zero Consul registration isolation must enforce %s:discovType to the empty string", name, config.Plan.Application)
-		}
-	}
-	listener, ok := isolation.ListenerGuard.Value.(string)
-	if !ok {
-		return fmt.Errorf("service %s listener isolation value must be a string", name)
-	}
-	wantListenerPath := "host"
-	if kind == "rpc" {
-		wantListenerPath = "listenOn"
-	}
-	if isolation.ListenerGuard.File != config.Plan.Application || isolation.ListenerGuard.Path != wantListenerPath {
-		return fmt.Errorf("service %s kind %s listener isolation must enforce %s:%s", name, kind, config.Plan.Application, wantListenerPath)
-	}
-	if err := validateServiceListener(listener, isolation.ListenerPort, isolationListenerMode(isolation)); err != nil {
-		return fmt.Errorf("service %s listener isolation: %w", name, err)
-	}
-	if kind == "rpc" {
-		if _, _, err := net.SplitHostPort(listener); err != nil {
-			return fmt.Errorf("service %s kind rpc listener isolation must include its declared port", name)
-		}
-	} else if net.ParseIP(listener) == nil {
-		return fmt.Errorf("service %s kind http listener isolation must be an IP without a port", name)
-	}
-	return nil
-}
-
-func validateSpringBootIsolation(name string, kind string, config *PlannedConfig) error {
-	if config.Discovery != "consul" || config.Plan.Driver != materialize.DriverYAMLOverlay {
-		return fmt.Errorf("service %s has no trusted local isolation adapter for framework %q, discovery %q, and materializer %q", name, config.Framework, config.Discovery, config.Plan.Driver)
-	}
-	if config.Plan.SourceDriver != materialize.SourceRepository || config.Plan.Application != "application.yml" {
-		return fmt.Errorf("service %s Spring Boot Consul isolation requires repository config source application.yml", name)
-	}
-	if kind != "rpc" && kind != "http" {
-		return fmt.Errorf("service %s kind %s has no trusted Spring Boot Consul local isolation contract", name, kind)
-	}
-	isolation := config.Isolation
-	if isolation.RegistrationMode != "config" || isolation.RegistrationGuard == nil {
-		return fmt.Errorf("service %s kind %s must verify disabled registration through its final Spring Boot runtime config", name, kind)
-	}
-	registration := *isolation.RegistrationGuard
-	disabled, ok := registration.Value.(bool)
-	if registration.File != config.Plan.Application || registration.Path != "service.registration.enabled" || !ok || disabled {
-		return fmt.Errorf("service %s Spring Boot Consul registration isolation must enforce %s:service.registration.enabled to false", name, config.Plan.Application)
-	}
-	wantListenerPath := "server.address"
-	if kind == "rpc" {
-		wantListenerPath = "grpc.server.address"
-	}
-	listener, ok := isolation.ListenerGuard.Value.(string)
-	if !ok || isolation.ListenerGuard.File != config.Plan.Application || isolation.ListenerGuard.Path != wantListenerPath {
-		return fmt.Errorf("service %s kind %s listener isolation must enforce %s:%s", name, kind, config.Plan.Application, wantListenerPath)
-	}
-	if err := validateServiceListener(listener, 0, isolationListenerMode(isolation)); err != nil {
-		return fmt.Errorf("service %s listener isolation: %w", name, err)
-	}
-	if net.ParseIP(listener) == nil {
-		return fmt.Errorf("service %s kind %s listener isolation must be an IP without a port", name, kind)
-	}
-	if isolation.ListenerPort < 1 {
-		return fmt.Errorf("service %s kind %s listener isolation has no declared local port", name, kind)
-	}
-	return nil
+	return adapter.ValidateIsolation(name, kind, config)
 }
 
 func validateRuntimeConfigConsumption(name string, config *PlannedConfig, run []string, environment map[string]string) error {
 	if config == nil || config.Isolation.RegistrationMode == "" {
 		return nil
 	}
-	if config.Framework == "spring-boot" {
-		return validateSpringBootRuntimeArguments(name, config, run)
+	adapter, err := requireRuntimeContract(name, config)
+	if err != nil {
+		return err
 	}
-	return validateGoZeroRuntimeArguments(name, config, run, environment)
-}
-
-func validateGoZeroRuntimeArguments(name string, config *PlannedConfig, run []string, environment map[string]string) error {
-	target := filepath.Clean(config.Plan.TargetDir)
-	accepted := false
-	if config.Isolation.RuntimeConfigDir && environment["PROFILE_ACTIVE"] == "local" {
-		accepted = true
-	}
-	config.Isolation.RuntimeConfigRef = ""
-	found := 0
-	for index := 1; index < len(run); index++ {
-		argument := run[index]
-		candidate := ""
-		if argument == "-f" {
-			if index+1 >= len(run) {
-				return fmt.Errorf("service %s run command has a go-zero -f flag without a value", name)
-			}
-			candidate = run[index+1]
-			index++
-		} else if strings.HasPrefix(argument, "-f=") {
-			candidate = strings.TrimPrefix(argument, "-f=")
-		} else {
-			return fmt.Errorf("service %s trusted go-zero adapter run command supports only its executable and one -f runtime config flag, got %q", name, argument)
-		}
-		found++
-		if found > 1 {
-			return fmt.Errorf("service %s trusted go-zero adapter run command must contain exactly one -f runtime config flag", name)
-		}
-		if accepted && filepath.IsAbs(candidate) && filepath.Clean(candidate) == target {
-			config.Isolation.RuntimeConfigRef = "guarded-bootstrap(" + config.Plan.RuntimeBootstrap + "->" + config.Plan.Application + ")"
-			continue
-		}
-		return fmt.Errorf("service %s run command has an unverified go-zero -f path %q", name, candidate)
-	}
-	if found == 1 {
-		return nil
-	}
-	return fmt.Errorf("service %s run command does not pass its verified runtime config directory through the go-zero -f flag", name)
-}
-
-func validateSpringBootRuntimeArguments(name string, config *PlannedConfig, run []string) error {
-	if len(run) < 3 || filepath.Base(run[0]) != "java" || run[1] != "-jar" {
-		return fmt.Errorf("service %s trusted Spring Boot adapter requires a java -jar run command", name)
-	}
-	kind := "http"
-	listenerKey := "server.address"
-	portKey := "server.port"
-	if config.Isolation.ListenerGuard.Path == "grpc.server.address" {
-		kind = "rpc"
-		listenerKey = "grpc.server.address"
-		portKey = "grpc.server.port"
-	}
-	listener, ok := config.Isolation.ListenerGuard.Value.(string)
-	if !ok {
-		return fmt.Errorf("service %s protected Spring Boot listener value must be a string", name)
-	}
-	expected := map[string]string{
-		"spring.config.location":                "file:" + filepath.Clean(config.Plan.TargetDir) + string(filepath.Separator),
-		"service.registration.enabled":          "false",
-		"spring.cloud.consul.discovery.register": "false",
-		listenerKey:                              listener,
-		portKey:                                  strconv.Itoa(config.Isolation.ListenerPort),
-	}
-	seen := make(map[string]bool, len(expected))
-	for index := 3; index < len(run); index++ {
-		argument := run[index]
-		if !strings.HasPrefix(argument, "--") {
-			continue
-		}
-		keyValue := strings.SplitN(strings.TrimPrefix(argument, "--"), "=", 2)
-		want, protected := expected[keyValue[0]]
-		if !protected {
-			continue
-		}
-		if len(keyValue) != 2 {
-			return fmt.Errorf("service %s protected Spring Boot argument --%s must use --key=value syntax", name, keyValue[0])
-		}
-		if seen[keyValue[0]] {
-			return fmt.Errorf("service %s protected Spring Boot argument --%s is duplicated", name, keyValue[0])
-		}
-		seen[keyValue[0]] = true
-		if keyValue[1] != want {
-			return fmt.Errorf("service %s protected Spring Boot argument --%s=%s conflicts with required value %q", name, keyValue[0], keyValue[1], want)
-		}
-	}
-	for _, key := range []string{"spring.config.location", "service.registration.enabled", "spring.cloud.consul.discovery.register", listenerKey, portKey} {
-		if !seen[key] {
-			return fmt.Errorf("service %s run command is missing protected Spring Boot argument --%s=%s for %s isolation", name, key, expected[key], kind)
-		}
-	}
-	config.Isolation.RuntimeConfigRef = "spring-config-location(" + config.Plan.Application + ")"
-	return nil
+	return adapter.ValidateRuntimeConfig(name, config, run, environment)
 }
 
 func validateLoopbackListener(value string, expectedPort int) error {
@@ -284,20 +107,6 @@ func isolationListenerMode(isolation PlannedIsolation) string {
 	return isolation.ListenerMode
 }
 
-func springServerArgumentsForListener(arguments []string, kind string, address string) []string {
-	key := "--server.address="
-	if kind == "rpc" {
-		key = "--grpc.server.address="
-	}
-	result := append([]string(nil), arguments...)
-	for index, argument := range result {
-		if strings.HasPrefix(argument, key) {
-			result[index] = key + address
-		}
-	}
-	return result
-}
-
 func validateInboundRouting(connection ConnectionConfig) error {
 	switch connection.Driver {
 	case "", "none", "ktctl":
@@ -313,23 +122,51 @@ func verifyServiceIsolation(service PlannedService) error {
 	if service.Config == nil || service.Config.Isolation.RegistrationMode == "" {
 		return nil
 	}
-	if err := materialize.VerifyGuards(service.Config.Plan.TargetDir, service.Config.Plan.Guards); err != nil {
+	if err := materialize.VerifyPlanGuards(service.Config.Plan.TargetDir, service.Config.Plan.Driver, service.Config.Plan.Guards); err != nil {
 		return fmt.Errorf("verify %s local isolation: %w", service.Name, err)
 	}
 	return nil
 }
 
 func printVerifiedIsolation(output io.Writer, service PlannedService) {
+	style := terminal.New(output)
+	if isolation := consumerIsolationDescription(service.ConsumerIsolation); isolation != "" {
+		fmt.Fprintf(output, "%s %s: %s\n", style.Warning("Warning: consumer guard"), style.Identifier(service.Name), isolation)
+	}
 	if service.Config == nil || service.Config.Isolation.RegistrationMode == "" {
 		return
 	}
-	style := terminal.New(output)
 	registration := "not applicable"
 	if service.Config.Isolation.RegistrationMode == "config" {
 		registration = "disabled via " + guardLocation(*service.Config.Isolation.RegistrationGuard)
 	}
 	listener := effectiveListener(service.Config)
 	fmt.Fprintf(output, "%s %s: registration %s; listener %s %s; runtime config %s\n", style.Success("✓ Local isolation"), style.Identifier(service.Name), registration, isolationListenerMode(service.Config.Isolation), style.Identifier(listener), runtimeConfigDescription(service.Config))
+}
+
+func consumerIsolationDescription(consumers map[string]ConsumerIsolationEvidence) string {
+	names := make([]string, 0, len(consumers))
+	for name := range consumers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	details := make([]string, 0, len(names))
+	for _, name := range names {
+		consumer := consumers[name]
+		details = append(details, fmt.Sprintf("%s=%s via %s (mode=%s)", name, consumer.Status, consumer.Env, consumer.Mode))
+	}
+	return strings.Join(details, ", ")
+}
+
+func copyConsumerIsolation(source map[string]ConsumerIsolationEvidence) map[string]ConsumerIsolationEvidence {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make(map[string]ConsumerIsolationEvidence, len(source))
+	for name, evidence := range source {
+		result[name] = evidence
+	}
+	return result
 }
 
 func plannedIsolationDescription(config *PlannedConfig) string {
@@ -345,10 +182,11 @@ func plannedIsolationDescription(config *PlannedConfig) string {
 }
 
 func effectiveListener(config *PlannedConfig) string {
-	listener := config.Isolation.ListenerGuard.Value.(string)
-	if config.Isolation.ListenerGuard.Path == "host" && config.Isolation.ListenerPort > 0 {
-		return net.JoinHostPort(listener, strconv.Itoa(config.Isolation.ListenerPort))
+	adapter, found, err := runtimeContractForConfig(config)
+	if err == nil && found {
+		return adapter.EffectiveListener(config)
 	}
+	listener, _ := config.Isolation.ListenerGuard.Value.(string)
 	return listener
 }
 

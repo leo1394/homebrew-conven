@@ -1,27 +1,28 @@
-version: 2
+version: 3
 
 workspace:
   name: local-services
+  disabledBindings: []
 
 environments:
   dev:
-    registry: nacos
+    registries:
+      nacos:
+        driver: nacos
+        address: http://nacos-headless.default:8848
+        namespace: dev
+        usernameEnv: NACOS_USERNAME
+        passwordEnv: NACOS_PASSWORD
+        observeFor: 5s
     env:
       PROFILE_ACTIVE: dev
       NACOS_ADDR: nacos-headless.default:8848
     connection:
       driver: ktctl
-      # 定制 ktctl 可执行文件：conven config ktctl.path /absolute/path/to/ktctl
-      # 也可用 KTCTL_KUBECONFIG，或执行 conven config ktctl.kubeconfig /secure/dev-kubeconfig
-      # sudo: true
       kubeconfigEnv: CONVEN_KUBECONFIG
       context: dev-cluster
       namespace: dev
-      args:
-        - --podCreationTimeout
-        - "120"
-        - --portForwardTimeout
-        - "30"
+      args: [--podCreationTimeout, "120", --portForwardTimeout, "30"]
       timeout: 240s
       readiness:
         - name: nacos
@@ -36,26 +37,57 @@ environments:
         payment-svc:
           mode: remote
 
+policies:
+  go-service:
+    drivers:
+      runtime: go-generic
+      framework: go
+      configSource: environment
+      discovery: passive
+      materializer: environment
+    routing:
+      servers:
+        http:
+          port: http
+          env:
+            PORT: "${port.http}"
+          isolation:
+            registration:
+              mode: not-applicable
+            listener:
+              path: HOST
+              value: 127.0.0.1
+        rpc:
+          port: rpc
+          env:
+            PORT: "${port.rpc}"
+          isolation:
+            registration:
+              mode: not-applicable
+            listener:
+              path: HOST
+              value: 127.0.0.1
+
 services:
   user-svc:
     path: services/user-svc
+    policy: go-service
+    kinds: [http]
+    discovery:
+      analyzer: go-module
+      certifier: go-generic
     runner:
       workdir: .
-      # runWorkdir 默认等于 workdir；若使用下列独立目录，prepare 必须创建它。
-      # runWorkdir: "${runDir}/configs/${service}/runtime"
       prepare: [go, mod, download]
       build: [go, build, -o, "${artifact}", ./cmd/server]
       run: ["${artifact}"]
     ports:
       http: 18080
-    env:
-      HTTP_ADDR: 127.0.0.1:18080
-    localEnv:
-      SERVICE_REGISTRATION_ENABLED: "false"
-    health:
-      type: http
-      url: "http://127.0.0.1:${port.http}/health"
-      timeout: 30s
+    healthChecks:
+      - server: http
+        type: http
+        url: "http://127.0.0.1:${port.http}/health"
+        timeout: 30s
     dependencies:
       order-svc:
         localEnv:
@@ -66,7 +98,7 @@ services:
           ORDER_SVC_DISCOVERY_ENABLED: "true"
       payment-svc:
         localEnv:
-          PAYMENT_SVC_ADDR: "127.0.0.1:${services.payment-svc.ports.tcp}"
+          PAYMENT_SVC_ADDR: "127.0.0.1:${services.payment-svc.ports.rpc}"
           PAYMENT_SVC_DISCOVERY_ENABLED: "false"
         remoteEnv:
           PAYMENT_SVC_NAME: payment-svc
@@ -74,26 +106,27 @@ services:
 
   order-svc:
     path: services/order-svc
+    policy: go-service
+    kinds: [http]
+    discovery:
+      analyzer: go-module
+      certifier: go-generic
     runner:
       workdir: .
-      artifact: "${serviceDir}/build/libs/order-svc.jar"
-      prepare: [./gradlew, dependencies]
-      build: [./gradlew, bootJar]
-      run: [java, -jar, "${artifact}"]
+      prepare: [go, mod, download]
+      build: [go, build, -o, "${artifact}", ./cmd/server]
+      run: ["${artifact}"]
     ports:
       http: 18081
-    env:
-      SERVER_PORT: "18081"
-    localEnv:
-      SERVICE_REGISTRATION_ENABLED: "false"
-    health:
-      type: http
-      url: "http://127.0.0.1:${port.http}/actuator/health"
-      timeout: 60s
+    healthChecks:
+      - server: http
+        type: tcp
+        address: "127.0.0.1:${port.http}"
+        timeout: 30s
     dependencies:
       payment-svc:
         localEnv:
-          PAYMENT_SVC_ADDR: "127.0.0.1:${services.payment-svc.ports.tcp}"
+          PAYMENT_SVC_ADDR: "127.0.0.1:${services.payment-svc.ports.rpc}"
           PAYMENT_SVC_DISCOVERY_ENABLED: "false"
         remoteEnv:
           PAYMENT_SVC_NAME: payment-svc
@@ -101,17 +134,20 @@ services:
 
   payment-svc:
     path: services/payment-svc
+    policy: go-service
+    kinds: [rpc]
+    discovery:
+      analyzer: go-module
+      certifier: go-generic
     runner:
       workdir: .
+      prepare: [go, mod, download]
       build: [go, build, -o, "${artifact}", ./cmd/server]
       run: ["${artifact}"]
     ports:
-      tcp: 18082
-    env:
-      LISTEN_ADDR: 127.0.0.1:18082
-    localEnv:
-      SERVICE_REGISTRATION_ENABLED: "false"
-    health:
-      type: tcp
-      address: "127.0.0.1:${port.tcp}"
-      timeout: 30s
+      rpc: 18082
+    healthChecks:
+      - server: rpc
+        type: tcp
+        address: "127.0.0.1:${port.rpc}"
+        timeout: 30s

@@ -45,11 +45,11 @@ func renderLocalManifest(path string) ([]byte, error) {
 	root := document.Content[0]
 	version := mappingValue(root, "version")
 	if version == nil {
-		setLocalMappingValue(root, "version", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: "2"})
+		setLocalMappingValue(root, "version", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: "3"})
 	} else {
 		version.Kind = yaml.ScalarNode
 		version.Tag = "!!int"
-		version.Value = "2"
+		version.Value = "3"
 	}
 	environments := mappingValue(root, "environments")
 	if environments == nil || environments.Kind != yaml.MappingNode {

@@ -13,7 +13,9 @@ import (
 type Driver string
 
 const (
-	DriverYAMLOverlay Driver = "yaml-overlay"
+	DriverYAMLOverlay       Driver = "yaml-overlay"
+	DriverPropertiesOverlay Driver = "properties-overlay"
+	DriverEnvironment       Driver = "environment"
 )
 
 type SourceDriver string
@@ -21,6 +23,7 @@ type SourceDriver string
 const (
 	SourceRepository SourceDriver = "repository"
 	SourceApollo     SourceDriver = "apollo"
+	SourceEnvironment SourceDriver = "environment"
 )
 
 type Apollo struct {
@@ -137,7 +140,7 @@ func Materialize(ctx context.Context, plan Plan) error {
 		if err != nil {
 			return fmt.Errorf("resolve guard %d file: %w", index, err)
 		}
-		if err := requireExistingYAMLGuard(path, guard.Path); err != nil {
+		if err := requireExistingGuard(validated.Driver, path, guard.Path); err != nil {
 			return fmt.Errorf("inspect guard %d target in %s: %w", index, guard.File, err)
 		}
 	}
@@ -149,7 +152,7 @@ func Materialize(ctx context.Context, plan Plan) error {
 		if err != nil {
 			return fmt.Errorf("resolve patch %d file: %w", index, err)
 		}
-		if err := applyYAMLPatch(path, patch.Path, patch.Value); err != nil {
+		if err := applyConfigPatch(validated.Driver, path, patch.Path, patch.Value); err != nil {
 			return fmt.Errorf("apply patch %d to %s: %w", index, patch.File, err)
 		}
 	}
@@ -161,18 +164,20 @@ func Materialize(ctx context.Context, plan Plan) error {
 		if err != nil {
 			return fmt.Errorf("resolve guard %d file: %w", index, err)
 		}
-		if err := applyYAMLGuard(path, guard.Path, guard.Value, guard.AllowCreate); err != nil {
+		if err := applyConfigGuard(validated.Driver, path, guard.Path, guard.Value, guard.AllowCreate); err != nil {
 			return fmt.Errorf("apply guard %d to %s: %w", index, guard.File, err)
 		}
 	}
-	if err := VerifyGuards(staging, validated.Guards); err != nil {
+	if err := VerifyPlanGuards(staging, validated.Driver, validated.Guards); err != nil {
 		return err
 	}
 	if err := protectTree(staging); err != nil {
 		return err
 	}
-	if err := validateYAMLTree(staging); err != nil {
-		return err
+	if validated.Driver == DriverYAMLOverlay {
+		if err := validateYAMLTree(staging); err != nil {
+			return err
+		}
 	}
 	if err := publishDirectory(staging, validated.TargetDir); err != nil {
 		return err
@@ -184,7 +189,7 @@ func validatePlan(plan Plan) (Plan, error) {
 	if strings.TrimSpace(plan.Service) == "" {
 		return Plan{}, errors.New("materialization service is empty")
 	}
-	if plan.Driver != DriverYAMLOverlay {
+	if plan.Driver != DriverYAMLOverlay && plan.Driver != DriverPropertiesOverlay {
 		return Plan{}, fmt.Errorf("unsupported materialization driver %q", plan.Driver)
 	}
 	if plan.SourceDriver != SourceRepository && plan.SourceDriver != SourceApollo {
@@ -296,6 +301,10 @@ func validateGuard(guard Guard) error {
 }
 
 func VerifyGuards(targetDir string, guards []Guard) error {
+	return VerifyPlanGuards(targetDir, DriverYAMLOverlay, guards)
+}
+
+func VerifyPlanGuards(targetDir string, driver Driver, guards []Guard) error {
 	if err := requireRealDirectory(targetDir, "guard target directory"); err != nil {
 		return err
 	}
@@ -307,7 +316,7 @@ func VerifyGuards(targetDir string, guards []Guard) error {
 		if err != nil {
 			return fmt.Errorf("resolve guard %d file: %w", index, err)
 		}
-		if err := verifyYAMLGuard(path, guard.Path, guard.Value); err != nil {
+		if err := verifyConfigGuard(driver, path, guard.Path, guard.Value); err != nil {
 			return fmt.Errorf("verify guard %d in %s: %w", index, guard.File, err)
 		}
 	}

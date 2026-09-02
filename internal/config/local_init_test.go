@@ -20,7 +20,7 @@ func TestInitLocalWorkspaceCreatesMinimalNoClusterFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Version != 2 || manifest.Environments["local"].Connection.Driver != "none" || manifest.Environments["local"].EnvFile != "" {
+	if manifest.Version != 3 || manifest.Environments["local"].Connection.Driver != "none" || manifest.Environments["local"].EnvFile != "" {
 		t.Fatalf("local environment = %#v", manifest.Environments["local"])
 	}
 	for _, name := range []string{"compose.yaml", "local.env", "local.env.example"} {

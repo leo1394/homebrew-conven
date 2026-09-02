@@ -41,9 +41,7 @@ func Resolve(manifest *model.Manifest, environmentName string, selected []string
 			declaration := service.Dependencies[alias]
 			localService := declaration.LocalService
 			if localService == "" {
-				if _, found := manifest.Services[alias]; found {
-					localService = alias
-				}
+				localService = model.ProviderService(manifest, alias, declaration.Binding)
 			}
 			resolution := Resolution{Owner: owner, Alias: alias, Env: copyValues(declaration.Env)}
 			if localService != "" && selectedSet[localService] {

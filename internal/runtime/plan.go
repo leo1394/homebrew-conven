@@ -44,9 +44,15 @@ type Plan struct {
 	Connection      ConnectionConfig
 }
 
-type PlannedService struct {
+type PlannedRuntime struct {
 	Name        string
 	Kind        string
+	Kinds       []string
+	Runtime     string
+	NetworkListen string
+	RegistryRef string
+	RegistryIdentity string
+	Registry    *model.Registry
 	Directory   string
 	Workdir     string
 	RunWorkdir  string
@@ -57,11 +63,32 @@ type PlannedService struct {
 	Build       []string
 	Run         []string
 	Environment []string
+	ConsumerIsolation map[string]ConsumerIsolationEvidence
 	Health      HealthCheck
+	HealthChecks []HealthCheck
 	LogPath     string
 }
 
+type ConsumerIsolationEvidence struct {
+	Driver string `json:"driver"`
+	Mode   string `json:"mode"`
+	Env    string `json:"env"`
+	Status string `json:"status"`
+}
+
+// PlannedService is retained as the orchestration-facing name for the unified
+// runtime contract compiled by RuntimeContractCompiler.
+type PlannedService = PlannedRuntime
+
 func OpenWorkspace(options CommonOptions) (*WorkspaceData, error) {
+	return openWorkspace(options, false)
+}
+
+func OpenWorkspaceForStopAll(options CommonOptions) (*WorkspaceData, error) {
+	return openWorkspace(options, true)
+}
+
+func openWorkspace(options CommonOptions, allowLegacy bool) (*WorkspaceData, error) {
 	configPath, workspace, err := config.ResolvePath(options.Cwd)
 	if err != nil {
 		return nil, err
@@ -69,6 +96,9 @@ func OpenWorkspace(options CommonOptions) (*WorkspaceData, error) {
 	manifest, err := config.Load(configPath)
 	if err != nil {
 		return nil, err
+	}
+	if manifest.Version < 3 && !allowLegacy {
+		return nil, fmt.Errorf("Conven manifest %q uses version %d; run conven workspace --migrate before using workspace commands", configPath, manifest.Version)
 	}
 	settings, err := config.EffectiveSettings(workspace, "")
 	if err != nil {
@@ -335,10 +365,32 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	if err != nil {
 		return PlannedService{}, err
 	}
-	if err := validatePlannedIsolation(name, service.Kind, plannedConfig); err != nil {
-		return PlannedService{}, err
+	kinds := service.EffectiveKinds()
+	for _, kind := range kinds {
+		if err := validatePlannedIsolation(name, kind, plannedConfig.ForKind(kind)); err != nil {
+			return PlannedService{}, err
+		}
 	}
 	_, policy, hasPolicy := policyForService(plan.Workspace.Manifest, service)
+	runtimeName := ""
+	if hasPolicy {
+		runtimeName = policy.Drivers.Runtime
+		if runtimeName == "" {
+			runtimeName = policy.Drivers.Framework
+		}
+	}
+	if err := validatePlannedConsumerIsolation(name, runtimeName, directory, workdir, service); err != nil {
+		return PlannedService{}, err
+	}
+	var registry *model.Registry
+	if service.Discovery.Registry != "" {
+		declaration, found := plan.Environment.Registries[service.Discovery.Registry]
+		if !found {
+			return PlannedService{}, fmt.Errorf("service %s registry %q is not declared in environment %s", name, service.Discovery.Registry, plan.EnvironmentName)
+		}
+		copy := declaration
+		registry = &copy
+	}
 	runWorkdir := workdir
 	if service.Runner.RunWorkdir != "" {
 		runWorkdir, err = config.Expand(service.Runner.RunWorkdir, baseContext)
@@ -364,12 +416,20 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	runCommand := append([]string(nil), service.Runner.Run...)
 	if hasPolicy {
 		runCommand = append(runCommand, policy.Process.Args...)
-		if server, found := policy.Routing.Servers[service.Kind]; found {
-			serverArguments := server.Args
-			if plannedConfig != nil && plannedConfig.Framework == "spring-boot" && plannedConfig.Isolation.ListenerMode == model.NetworkListenAllInterfaces {
-				serverArguments = springServerArgumentsForListener(serverArguments, service.Kind, "0.0.0.0")
+		for _, kind := range kinds {
+		if server, found := policy.Routing.Servers[kind]; found {
+			serverArguments, err := runtimeContractServerArguments(name, plannedConfig.ForKind(kind), kind, server.Args)
+			if err != nil {
+				return PlannedService{}, err
 			}
 			runCommand = append(runCommand, serverArguments...)
+		}
+		}
+		for _, kind := range kinds {
+			runCommand, err = runtimeContractProtectedArguments(name, plannedConfig.ForKind(kind), kind, runCommand)
+			if err != nil {
+				return PlannedService{}, err
+			}
 		}
 	}
 	run, err := expandCommand(runCommand, baseContext)
@@ -378,8 +438,18 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	}
 	environmentValues := make(map[string]string)
 	mergeValues(environmentValues, plan.Environment.Env)
+	protectedServerEnvironment := make(map[string]string)
 	if hasPolicy {
 		mergeValues(environmentValues, policy.Process.Env)
+		for _, kind := range kinds {
+			server := policy.Routing.Servers[kind]
+			for key, value := range server.Env {
+				if previous, found := protectedServerEnvironment[key]; found && previous != value {
+					return PlannedService{}, fmt.Errorf("service %s protected server environment key %q conflicts between %q and %q", name, key, previous, value)
+				}
+				protectedServerEnvironment[key] = value
+			}
+		}
 	}
 	mergeValues(environmentValues, service.Env)
 	mergeValues(environmentValues, service.LocalEnv)
@@ -439,16 +509,58 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	if err != nil {
 		return PlannedService{}, fmt.Errorf("expand %s environment: %w", name, err)
 	}
-	if err := validateRuntimeConfigConsumption(name, plannedConfig, run, expandedValues); err != nil {
+	expandedProtected, err := expandValues(protectedServerEnvironment, baseContext)
+	if err != nil {
+		return PlannedService{}, fmt.Errorf("expand %s protected server environment: %w", name, err)
+	}
+	for key, value := range expandedProtected {
+		if existing, found := expandedValues[key]; found && existing != value {
+			return PlannedService{}, fmt.Errorf("service %s protected server environment key %q conflicts with service value %q", name, key, existing)
+		}
+		expandedValues[key] = value
+	}
+	for _, kind := range kinds {
+		expandedValues, err = runtimeContractServerEnvironment(name, plannedConfig.ForKind(kind), kind, expandedValues)
+		if err != nil {
+			return PlannedService{}, fmt.Errorf("service %s kind %s environment isolation: %w", name, kind, err)
+		}
+	}
+	consumerIsolation, err := applyProtectedConsumerIsolation(name, service, expandedValues)
+	if err != nil {
 		return PlannedService{}, err
 	}
-	health, err := expandHealth(service.Health, baseContext, runWorkdir, CommandEnvironment(expandedValues))
-	if err != nil {
-		return PlannedService{}, fmt.Errorf("expand %s health check: %w", name, err)
+	for _, kind := range kinds {
+		if err := validateRuntimeConfigConsumption(name, plannedConfig.ForKind(kind), run, expandedValues); err != nil {
+			return PlannedService{}, err
+		}
+	}
+	declaredHealthChecks := HealthAdapter(declaredHealthAdapter{}).Checks(service)
+	healthChecks := make([]HealthCheck, 0, len(declaredHealthChecks))
+	for index, declaration := range declaredHealthChecks {
+		health, err := expandHealth(model.Health{Type: declaration.Type, Address: declaration.Address, URL: declaration.URL, Command: declaration.Command, Timeout: declaration.Timeout}, baseContext, runWorkdir, CommandEnvironment(expandedValues))
+		if err != nil {
+			return PlannedService{}, fmt.Errorf("expand %s health check %d: %w", name, index, err)
+		}
+		health.Server = declaration.Server
+		healthChecks = append(healthChecks, health)
+	}
+	health := HealthCheck{}
+	if len(healthChecks) > 0 {
+		health = healthChecks[0]
+	}
+	kind := ""
+	if len(kinds) > 0 {
+		kind = kinds[0]
 	}
 	return PlannedService{
 		Name:        name,
-		Kind:        service.Kind,
+		Kind:        kind,
+		Kinds:       append([]string(nil), kinds...),
+		Runtime:     runtimeName,
+		NetworkListen: service.Network.EffectiveListen(),
+		RegistryRef: service.Discovery.Registry,
+		RegistryIdentity: service.Discovery.Identity,
+		Registry:    registry,
 		Directory:   directory,
 		Workdir:     workdir,
 		RunWorkdir:  runWorkdir,
@@ -459,9 +571,69 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 		Build:       build,
 		Run:         run,
 		Environment: CommandEnvironment(expandedValues),
+		ConsumerIsolation: consumerIsolation,
 		Health:      health,
+		HealthChecks: healthChecks,
 		LogPath:     filepath.Join(plan.RunDir, "logs", name+".log"),
 	}, nil
+}
+
+func validatePlannedConsumerIsolation(name string, runtimeName string, directory string, workdir string, service model.Service) error {
+	evidence, err := config.InspectKafkaConsumerEvidence(directory, workdir)
+	if err != nil {
+		return fmt.Errorf("service %s Kafka consumer preflight: %w", name, err)
+	}
+	actual := make(map[string]bool)
+	for _, item := range evidence {
+		actual[item.Driver] = true
+	}
+	declared := make(map[string]bool)
+	for _, driver := range service.Discovery.Consumers {
+		declared[driver] = true
+	}
+	for driver := range actual {
+		if !declared[driver] {
+			return fmt.Errorf("service %s source contains a %s consumer but the manifest has no discovery.consumers entry; run conven services --registry after adding the neutral consumer guard", name, driver)
+		}
+	}
+	for driver := range declared {
+		if !actual[driver] {
+			return fmt.Errorf("service %s declares discovery.consumers=%s but current source no longer proves that consumer; run conven services --registry to refresh the manifest", name, driver)
+		}
+	}
+	if err := config.ValidateKafkaConsumerEvidence(name, runtimeName, evidence); err != nil {
+		return err
+	}
+	return nil
+}
+
+func applyProtectedConsumerIsolation(name string, service model.Service, environment map[string]string) (map[string]ConsumerIsolationEvidence, error) {
+	drivers := make([]string, 0, len(service.Isolation.Consumers))
+	for driver := range service.Isolation.Consumers {
+		drivers = append(drivers, driver)
+	}
+	sort.Strings(drivers)
+	evidence := make(map[string]ConsumerIsolationEvidence, len(drivers))
+	for _, driver := range drivers {
+		isolation := service.Isolation.Consumers[driver]
+		if driver != "kafka" || isolation.Mode != config.KafkaConsumerGuardMode || isolation.Env != config.KafkaConsumersEnabledEnv {
+			return nil, fmt.Errorf("service %s consumer guard %s is not a supported protected contract", name, driver)
+		}
+		value := config.KafkaConsumersDefaultValue
+		if existing, found := environment[isolation.Env]; found {
+			value = strings.ToLower(strings.TrimSpace(existing))
+		}
+		if value != "true" && value != "false" {
+			return nil, fmt.Errorf("service %s Kafka consumer guard environment %s=%q must be true or false", name, isolation.Env, value)
+		}
+		environment[isolation.Env] = value
+		status := "enabled"
+		if value == "false" {
+			status = "disabled"
+		}
+		evidence[driver] = ConsumerIsolationEvidence{Driver: driver, Mode: isolation.Mode, Env: isolation.Env, Status: status}
+	}
+	return evidence, nil
 }
 
 func copyPorts(ports map[string]int) map[string]int {
@@ -532,6 +704,7 @@ func planConnection(plan *Plan, options CommonOptions) (ConnectionConfig, error)
 	if connection.Driver == "" || connection.Driver == "none" {
 		return ConnectionConfig{Driver: connection.Driver}, nil
 	}
+	requirements := selectedConnectionRequirements(plan)
 	context := config.ExpandContext{
 		Workspace:   plan.Workspace.Root,
 		StateDir:    plan.Workspace.Store.Root,
@@ -599,6 +772,9 @@ func planConnection(plan *Plan, options CommonOptions) (ConnectionConfig, error)
 	}
 	readiness := make([]ConnectionEndpoint, 0, len(connection.Readiness))
 	for _, endpoint := range connection.Readiness {
+		if len(requirements) > 0 && !connectionEndpointRequired(endpoint.Name, requirements) {
+			continue
+		}
 		address, err := config.Expand(endpoint.Address, context)
 		if err != nil {
 			return ConnectionConfig{}, fmt.Errorf("expand connection readiness %q: %w", endpoint.Name, err)
@@ -628,6 +804,32 @@ func planConnection(plan *Plan, options CommonOptions) (ConnectionConfig, error)
 		return ConnectionConfig{}, err
 	}
 	return result, nil
+}
+
+func selectedConnectionRequirements(plan *Plan) map[string]bool {
+	required := make(map[string]bool)
+	for _, service := range plan.Services {
+		if service.Config != nil && service.Config.Plan.SourceDriver == "apollo" {
+			required["apollo"] = true
+		}
+		if service.RegistryRef != "" {
+			required[strings.ToLower(service.RegistryRef)] = true
+			if service.Registry != nil && service.Registry.Driver != "" {
+				required[strings.ToLower(service.Registry.Driver)] = true
+			}
+		}
+	}
+	return required
+}
+
+func connectionEndpointRequired(name string, required map[string]bool) bool {
+	lower := strings.ToLower(name)
+	for requirement := range required {
+		if strings.Contains(lower, requirement) {
+			return true
+		}
+	}
+	return false
 }
 
 func expandHealth(health model.Health, context config.ExpandContext, directory string, environment []string) (HealthCheck, error) {
@@ -888,8 +1090,5 @@ func localServiceForDependency(manifest *model.Manifest, alias string, declarati
 	if declaration.LocalService != "" {
 		return declaration.LocalService
 	}
-	if _, found := manifest.Services[alias]; found {
-		return alias
-	}
-	return ""
+	return model.ProviderService(manifest, alias, declaration.Binding)
 }

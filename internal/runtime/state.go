@@ -12,7 +12,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const stateVersion = 3
+const stateVersion = 4
 
 const runtimeIgnoreRule = "/runtime/"
 
@@ -42,6 +42,26 @@ type ServiceProcess struct {
 	Ports              map[string]int `json:"ports"`
 	SourceFingerprint string         `json:"sourceFingerprint,omitempty"`
 	PlanFingerprint   string         `json:"planFingerprint,omitempty"`
+	Verification      string         `json:"verification,omitempty"`
+	Listeners         map[string]ListenerEvidence `json:"listeners,omitempty"`
+	Registration      *RegistrationEvidence `json:"registration,omitempty"`
+	ConsumerIsolation map[string]ConsumerIsolationEvidence `json:"consumerIsolation,omitempty"`
+}
+
+type ListenerEvidence struct {
+	Address    string    `json:"address"`
+	Port       int       `json:"port"`
+	Mode       string    `json:"mode"`
+	OwnerPID   int       `json:"ownerPid"`
+	VerifiedAt time.Time `json:"verifiedAt"`
+}
+
+type RegistrationEvidence struct {
+	Registry   string    `json:"registry"`
+	Driver     string    `json:"driver"`
+	Identity   string    `json:"identity"`
+	Status     string    `json:"status"`
+	VerifiedAt time.Time `json:"verifiedAt"`
 }
 
 type ConnectionProcess struct {
@@ -365,6 +385,15 @@ func (store *Store) Load() (*Session, error) {
 	var session Session
 	if err := json.Unmarshal(data, &session); err != nil {
 		return nil, fmt.Errorf("decode session state: %w", err)
+	}
+	if session.Version > 0 && session.Version < stateVersion {
+		session.Version = stateVersion
+		for index := range session.Services {
+			if session.Services[index].Verification == "" {
+				session.Services[index].Verification = "unverified(legacy-state)"
+			}
+		}
+		return &session, nil
 	}
 	if session.Version != stateVersion {
 		return nil, fmt.Errorf("unsupported session state version %d", session.Version)

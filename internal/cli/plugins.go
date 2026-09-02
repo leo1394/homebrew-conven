@@ -39,6 +39,11 @@ func (app App) runPlugins(arguments []string) int {
 	}
 	action := arguments[0]
 	remaining := arguments[1:]
+	if action != "-h" && action != "--help" && action != "help" {
+		if err := app.requireWorkspaceManifestV3(); err != nil {
+			return app.fail(err)
+		}
+	}
 	switch action {
 	case "-h", "--help", "help":
 		app.printPluginsUsage(app.Output)

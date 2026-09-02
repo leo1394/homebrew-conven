@@ -544,6 +544,67 @@ func TestBuildPlanAppendsSpringServerArgsAfterCommonArgs(t *testing.T) {
 	}
 }
 
+func TestKafkaConsumerGuardDefaultsEnabledAndAllowsExplicitDisable(t *testing.T) {
+	service := model.Service{Isolation: model.ServiceIsolation{Consumers: map[string]model.ConsumerIsolation{
+		"kafka": {Mode: "guarded", Env: "SERVICE_KAFKA_CONSUMERS_ENABLED"},
+	}}}
+	environment := map[string]string{}
+	evidence, err := applyProtectedConsumerIsolation("visit-plan-mgr-service", service, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if environment["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "true" || evidence["kafka"].Status != "enabled" {
+		t.Fatalf("Kafka consumer guard environment=%#v evidence=%#v", environment, evidence)
+	}
+	disabled := map[string]string{"SERVICE_KAFKA_CONSUMERS_ENABLED": "false"}
+	evidence, err = applyProtectedConsumerIsolation("visit-plan-mgr-service", service, disabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "false" || evidence["kafka"].Status != "disabled" {
+		t.Fatalf("Kafka consumer guard override environment=%#v evidence=%#v", disabled, evidence)
+	}
+	_, err = applyProtectedConsumerIsolation("visit-plan-mgr-service", service, map[string]string{"SERVICE_KAFKA_CONSUMERS_ENABLED": "sometimes"})
+	if err == nil || !strings.Contains(err.Error(), "must be true or false") {
+		t.Fatalf("invalid Kafka consumer environment error = %v", err)
+	}
+}
+
+func TestPlannedKafkaConsumerGuardRescansCurrentSource(t *testing.T) {
+	repository := t.TempDir()
+	handler := filepath.Join(repository, "handler.go")
+	unguarded := `package main
+func startConsumers() {
+    kq.NewQueue(config, handler)
+}`
+	if err := os.WriteFile(handler, []byte(unguarded), 0600); err != nil {
+		t.Fatal(err)
+	}
+	service := model.Service{}
+	err := validatePlannedConsumerIsolation("events", "go-zero", repository, repository, service)
+	if err == nil || !strings.Contains(err.Error(), "manifest has no discovery.consumers entry") {
+		t.Fatalf("undeclared Kafka consumer error = %v", err)
+	}
+	service.Discovery.Consumers = []string{"kafka"}
+	err = validatePlannedConsumerIsolation("events", "go-zero", repository, repository, service)
+	if err == nil || !strings.Contains(err.Error(), "without a trusted runtime guard") {
+		t.Fatalf("unguarded Kafka consumer error = %v", err)
+	}
+	guarded := `package main
+func startConsumers() {
+    if strings.EqualFold(os.Getenv("SERVICE_KAFKA_CONSUMERS_ENABLED"), "false") {
+        return
+    }
+    kq.NewQueue(config, handler)
+}`
+	if err := os.WriteFile(handler, []byte(guarded), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePlannedConsumerIsolation("events", "go-zero", repository, repository, service); err != nil {
+		t.Fatalf("guarded Kafka consumer source rejected: %v", err)
+	}
+}
+
 func TestPlanServiceUsesPrepareCreatedRunWorkdir(t *testing.T) {
 	plan := dependencyEnvironmentPlan(t, "false", "false")
 	manifestService := plan.Workspace.Manifest.Services["api"]

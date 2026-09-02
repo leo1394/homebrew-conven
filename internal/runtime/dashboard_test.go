@@ -21,7 +21,7 @@ func TestRenderDashboardFrameKeepsBannerAndLatestLogs(t *testing.T) {
 		Address:     "192.168.1.42",
 		Interface:   "en0",
 		Cluster:     "dev-cluster-config",
-		DisabledRPCBindings: []string{"legacyRpc", "searchRpc"},
+		DisabledBindings: []string{"legacyRpc", "searchRpc"},
 		StartedAt:   time.Date(2026, time.August, 17, 9, 8, 7, 0, time.Local),
 		Color:       true,
 		Services: []dashboardService{
@@ -94,7 +94,7 @@ func TestDashboardBannerUsesWhiteLabelsGreenCountAndCenteredYellowHint(t *testin
 		Address:     "10.0.0.8",
 		Interface:   "en0",
 		Cluster:     "test-cluster",
-		DisabledRPCBindings: []string{"legacyRpc"},
+		DisabledBindings: []string{"legacyRpc"},
 		Color:       true,
 		Services: []dashboardService{
 			{Name: "api", Ports: map[string]int{"http": 18080}},
@@ -174,6 +174,28 @@ func TestDashboardTitleShowsEarliestSelectedServiceStartAtFarRight(t *testing.T)
 	}
 	if !strings.HasSuffix(plain, "STARTED  2026-08-17 10:45:00") {
 		t.Fatalf("dashboard title does not right-align start time: %q", plain)
+	}
+}
+
+func TestDashboardServiceLineShowsPerListenerVerification(t *testing.T) {
+	verifiedAt := time.Date(2026, time.September, 2, 12, 34, 56, 0, time.Local)
+	line := dashboardServiceLine(dashboardService{
+		Name: "gateway",
+		Ports: map[string]int{"http": 18080, "rpc": 18081},
+		Verification: "verified",
+		Listen: "loopback",
+		Listeners: map[string]ListenerEvidence{
+			"http": {Mode: "loopback", VerifiedAt: verifiedAt},
+		},
+		Consumers: map[string]ConsumerIsolationEvidence{
+			"kafka": {Driver: "kafka", Mode: "guarded", Status: "enabled"},
+		},
+	}, 20)
+	plain := plainDashboardText(renderDashboardLine(line, 160, false))
+	for _, expected := range []string{"http=verified/loopback/12:34:56", "rpc=verified/loopback", "kafka=guarded/enabled"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("dashboard listener status is missing %q: %q", expected, plain)
+		}
 	}
 }
 
@@ -584,6 +606,28 @@ func TestDashboardViewScrollSearchAndResumeFollow(t *testing.T) {
 	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputEnd}, history, &view, 80, 2)
 	if !view.Follow || view.Top != 3 || view.NewLines != 0 {
 		t.Fatalf("resumed view = %#v", view)
+	}
+}
+
+func TestDashboardLowercaseGResumesFollowAndTracksNewLogs(t *testing.T) {
+	history := newDashboardHistory(10)
+	for _, line := range []string{"zero", "one", "two", "three", "four"} {
+		history.Append(line)
+	}
+	view := dashboardView{Follow: false, Top: 0, NewLines: 3, SearchMatch: -1}
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputText, Text: "g"}, history, &view, 80, 2)
+	if !view.Follow || view.Top != 3 || view.NewLines != 0 {
+		t.Fatalf("lowercase g view = %#v", view)
+	}
+	history.Append("five")
+	view.RecordAppend(history, 0)
+	view.Clamp(history, 80, 2)
+	if !view.Follow || view.Top != 4 || view.NewLines != 0 {
+		t.Fatalf("followed append view = %#v", view)
+	}
+	visible := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, 80, 2)
+	if len(visible) != 2 || visible[1].Text != "five" {
+		t.Fatalf("followed append rows = %#v", visible)
 	}
 }
 

@@ -33,6 +33,9 @@ func TestStoreRoundTrip(t *testing.T) {
 			PGID:    123,
 			Command: []string{"user-svc"},
 			Ports:   map[string]int{"http": 8080, "metrics": 9090},
+			ConsumerIsolation: map[string]ConsumerIsolationEvidence{
+				"kafka": {Driver: "kafka", Mode: "guarded", Env: "SERVICE_KAFKA_CONSUMERS_ENABLED", Status: "enabled"},
+			},
 		}},
 		HotReload: &ServiceProcess{
 			Name:    hotReloadProcessName,
@@ -67,6 +70,9 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if loaded.Version != stateVersion {
 		t.Fatalf("session version = %d, want %d", loaded.Version, stateVersion)
+	}
+	if loaded.Services[0].ConsumerIsolation["kafka"].Status != "enabled" {
+		t.Fatalf("Kafka consumer guard was not preserved: %#v", loaded.Services[0].ConsumerIsolation)
 	}
 	if loaded.Cluster != "dev-cluster-config" {
 		t.Fatalf("session cluster = %q", loaded.Cluster)

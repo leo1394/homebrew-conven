@@ -12,7 +12,7 @@ import (
 func TestAnalyzeRepositoryMatchesRootGoModule(t *testing.T) {
 	repository := newAnalyzerRepository(t, "root-service")
 	writeAnalyzerFile(t, filepath.Join(repository, "go.mod"), "module example.com/root-service\n")
-	writeAnalyzerFile(t, filepath.Join(repository, "main.go"), "package main\n\nfunc main() {}\n")
+	writeAnalyzerFile(t, filepath.Join(repository, "main.go"), "package main\n\ntype Config struct { Server rest.RestConf }\nfunc main() {}\n")
 
 	analysis, matched, err := AnalyzeRepository(repository)
 	if err != nil {
@@ -33,7 +33,7 @@ func TestAnalyzeRepositoryMatchesRootGoModule(t *testing.T) {
 func TestAnalyzeRepositoryMatchesGoSubdirectoryModule(t *testing.T) {
 	repository := newAnalyzerRepository(t, "nested-service")
 	writeAnalyzerFile(t, filepath.Join(repository, "go", "go.mod"), "module example.com/nested-service\n")
-	writeAnalyzerFile(t, filepath.Join(repository, "go", "main.go"), "package main\n\nfunc main() {}\n")
+	writeAnalyzerFile(t, filepath.Join(repository, "go", "main.go"), "package main\n\ntype Config struct { Server rest.RestConf }\nfunc main() {}\n")
 
 	analysis, matched, err := AnalyzeRepository(repository)
 	if err != nil {
@@ -52,7 +52,7 @@ func TestAnalyzeRepositoryRejectsMultipleAnalyzerMatches(t *testing.T) {
 	repository := newAnalyzerRepository(t, "conflict-service")
 	for _, directory := range []string{repository, filepath.Join(repository, "go")} {
 		writeAnalyzerFile(t, filepath.Join(directory, "go.mod"), "module example.com/conflict-service\n")
-		writeAnalyzerFile(t, filepath.Join(directory, "main.go"), "package main\n\nfunc main() {}\n")
+		writeAnalyzerFile(t, filepath.Join(directory, "main.go"), "package main\n\ntype Config struct { Server rest.RestConf }\nfunc main() {}\n")
 	}
 
 	_, matched, err := AnalyzeRepository(repository)
@@ -137,7 +137,7 @@ type Config struct {
 func TestAnalyzeRepositoryDoesNotModifyRepository(t *testing.T) {
 	repository := newAnalyzerRepository(t, "read-only-service")
 	writeAnalyzerFile(t, filepath.Join(repository, "go.mod"), "module example.com/read-only-service\n")
-	writeAnalyzerFile(t, filepath.Join(repository, "main.go"), "package main\n\nfunc main() {}\n")
+	writeAnalyzerFile(t, filepath.Join(repository, "main.go"), "package main\n\ntype Config struct { Server rest.RestConf }\nfunc main() {}\n")
 	writeAnalyzerFile(t, filepath.Join(repository, "config", "config.go"), "package config\n")
 	before := analyzerRepositorySnapshot(t, repository)
 
@@ -185,7 +185,7 @@ public class DataMartGrpcServer {}
 	if !matched {
 		t.Fatal("Gradle Spring Boot repository was not matched")
 	}
-	if analysis.Analyzer != "java-gradle-spring-boot" || analysis.Framework != "spring-boot" || analysis.Discovery != "consul" || analysis.Kind != RepositoryKindRPC {
+	if analysis.Analyzer != "java-gradle-spring-boot" || analysis.Framework != "spring-boot" || analysis.Discovery != "passive" || analysis.Kind != RepositoryKindRPC {
 		t.Fatalf("analysis = %#v", analysis)
 	}
 	if analysis.Runner.Workdir != "." || analysis.Runner.Artifact != "${serviceDir}/build/libs/datamart-0.0.1-SNAPSHOT.jar" {
@@ -223,9 +223,52 @@ public class ConsulConfig {
 	if err != nil || !matched {
 		t.Fatalf("protected custom registration result = %#v, matched = %t, error = %v", analysis, matched, err)
 	}
+	want := []RepositoryRegistrationEvidence{{
+		Provider:  "consul",
+		File:      "src/main/java/ConsulConfig.java:13",
+		Protected: true,
+	}}
+	if !reflect.DeepEqual(analysis.Registrations, want) {
+		t.Fatalf("registration evidence = %#v, want %#v", analysis.Registrations, want)
+	}
 }
 
-func TestAnalyzeRepositoryRejectsUnprotectedSpringCustomConsulRegistrationWithExample(t *testing.T) {
+func TestGoRegistrationEvidenceIgnoresFrameworkAndDatabaseRegistration(t *testing.T) {
+	source := []byte(`package main
+func main() {
+    reflection.Register(grpcServer)
+    callbacks.Register("before_created", callback)
+    customer.RegisterCustomerServer(grpcServer, server)
+}
+`)
+	evidence, err := goRegistrationEvidenceInSource("main.go", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 0 {
+		t.Fatalf("non-registry registration evidence = %#v", evidence)
+	}
+}
+
+func TestGoRegistrationEvidenceReportsRegistryLocationAndGuard(t *testing.T) {
+	source := []byte(`package main
+func start() {
+    if !strings.EqualFold(os.Getenv("SERVICE_REGISTRATION_ENABLED"), "false") {
+        consulRegistry.Register(service)
+        consulRegistry.Deregister(service)
+    }
+}
+`)
+	evidence, err := goRegistrationEvidenceInSource("main.go", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 2 || evidence[0].Line != 4 || !evidence[0].Protected || evidence[1].Line != 5 || !evidence[1].Protected {
+		t.Fatalf("registry registration evidence = %#v", evidence)
+	}
+}
+
+func TestAnalyzeRepositoryReportsUnprotectedSpringCustomConsulRegistration(t *testing.T) {
 	tests := []struct {
 		name   string
 		source string
@@ -304,20 +347,16 @@ class ConsulConfig {
 			writeSpringAnalyzerRPCRepository(t, repository)
 			writeAnalyzerFile(t, filepath.Join(repository, "src", "main", "java", "ConsulConfig.java"), test.source)
 
-			_, matched, err := AnalyzeRepository(repository)
-			if err == nil || matched {
-				t.Fatalf("unprotected custom registration result = matched %t, error = %v", matched, err)
+			analysis, matched, err := AnalyzeRepository(repository)
+			if err != nil || !matched {
+				t.Fatalf("unprotected custom registration result = %#v, matched = %t, error = %v", analysis, matched, err)
 			}
-			for _, expected := range []string{
-				"custom Consul registration",
-				"src/main/java/ConsulConfig.java",
-				"@ConditionalOnProperty(",
-				`prefix = "service.registration"`,
-				"matchIfMissing = true",
-				"--service.registration.enabled=false",
-			} {
-				if !strings.Contains(err.Error(), expected) {
-					t.Fatalf("custom registration error is missing %q: %v", expected, err)
+			if len(analysis.Registrations) == 0 {
+				t.Fatal("unprotected custom registration evidence is missing")
+			}
+			for _, evidence := range analysis.Registrations {
+				if evidence.Provider != "consul" || !strings.HasPrefix(evidence.File, "src/main/java/ConsulConfig.java:") || evidence.Protected {
+					t.Fatalf("registration evidence = %#v", analysis.Registrations)
 				}
 			}
 		})
@@ -416,7 +455,7 @@ public class DynamicApplication {
 `)
 
 	_, matched, err := AnalyzeRepository(repository)
-	if err != nil || matched {
+	if err == nil || matched || !strings.Contains(err.Error(), "artifact cannot be determined") {
 		t.Fatalf("dynamic artifact result = matched %t, error %v", matched, err)
 	}
 }
@@ -435,12 +474,9 @@ public class CommentedApplication {
 }
 `)
 
-	analysis, matched, err := AnalyzeRepository(repository)
-	if err != nil || !matched {
-		t.Fatalf("analysis = %#v, matched = %t, error = %v", analysis, matched, err)
-	}
-	if analysis.Kind != RepositoryKindUnknown {
-		t.Fatalf("commented annotation inferred kind %q", analysis.Kind)
+	_, matched, err := AnalyzeRepository(repository)
+	if err == nil || matched || !strings.Contains(err.Error(), "no statically proven listener") {
+		t.Fatalf("commented annotation result = matched %t, error = %v", matched, err)
 	}
 }
 
@@ -454,7 +490,7 @@ func TestAnalyzeRepositorySkipsMultipleSpringBootMainClasses(t *testing.T) {
 	}
 
 	_, matched, err := AnalyzeRepository(repository)
-	if err != nil || matched {
+	if err == nil || matched || !strings.Contains(err.Error(), "exactly one @SpringBootApplication") {
 		t.Fatalf("multiple main result = matched %t, error %v", matched, err)
 	}
 }
@@ -484,11 +520,19 @@ func newAnalyzerRepository(t *testing.T, name string) string {
 
 func writeAnalyzerFile(t *testing.T, path string, contents string) {
 	t.Helper()
+	if filepath.Base(path) == "main.go" && strings.Contains(contents, "package main") {
+		contents += "\nvar _ = Getenv(\"HOST\")\nvar _ = Getenv(\"PORT\")\nvar _ = Getenv(\"HTTP_PORT\")\nvar _ = Getenv(\"RPC_PORT\")\n"
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 		t.Fatal(err)
+	}
+	if filepath.Base(path) == "go.mod" {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "go.sum"), []byte(""), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -527,4 +571,96 @@ func analyzerRepositorySnapshot(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return snapshot
+}
+
+func TestGoKafkaConsumerEvidenceRequiresNeutralGuard(t *testing.T) {
+	unguarded := []byte(`package handler
+func RegisterKQHandlers() {
+    kq.NewQueue(config, handler)
+}
+
+`)
+	evidence, err := goKafkaConsumerEvidenceInSource("handler/kq_routes.go", unguarded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 1 || evidence[0].File != "handler/kq_routes.go:3" || evidence[0].Protected {
+		t.Fatalf("unguarded Kafka evidence = %#v", evidence)
+	}
+
+	guarded := []byte(`package handler
+func RegisterKQHandlers() {
+    if strings.EqualFold(os.Getenv("SERVICE_KAFKA_CONSUMERS_ENABLED"), "false") {
+        return
+    }
+    kq.NewQueue(config, handler)
+}
+`)
+	evidence, err = goKafkaConsumerEvidenceInSource("handler/kq_routes.go", guarded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 1 || evidence[0].File != "handler/kq_routes.go:6" || !evidence[0].Protected {
+		t.Fatalf("guarded Kafka evidence = %#v", evidence)
+	}
+}
+
+func TestKafkaConsumerEvidenceRequiresTrustedLanguageGuard(t *testing.T) {
+	java := `@ConditionalOnProperty(
+    prefix = "service.kafka.consumers",
+    name = "enabled",
+    havingValue = "true",
+    matchIfMissing = true
+)
+class Events {
+    @KafkaListener(topics = "events")
+    void receive(String event) {}
+}`
+	evidence := javaKafkaConsumerEvidenceInSource("Events.java", java)
+	if len(evidence) != 1 || !evidence[0].Protected {
+		t.Fatalf("Spring Kafka evidence = %#v", evidence)
+	}
+	evidence = javaKafkaConsumerEvidenceInSource("Events.java", `class Events { @KafkaListener void receive() {} }`)
+	if len(evidence) != 1 || evidence[0].Protected {
+		t.Fatalf("unguarded Spring Kafka evidence = %#v", evidence)
+	}
+
+	node := `import { Kafka } from "kafkajs";
+if (process.env.SERVICE_KAFKA_CONSUMERS_ENABLED !== "false") {
+  await consumer.subscribe({ topic: "events" });
+}`
+	evidence = nodeKafkaConsumerEvidenceInSource("events.ts", node)
+	if len(evidence) != 1 || !evidence[0].Protected {
+		t.Fatalf("Node Kafka evidence = %#v", evidence)
+	}
+
+	python := `from kafka import KafkaConsumer
+if os.getenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "true").lower() != "false":
+    consumer = KafkaConsumer("events")
+`
+	evidence = pythonKafkaConsumerEvidenceInSource("events.py", python)
+	if len(evidence) != 1 || !evidence[0].Protected {
+		t.Fatalf("Python Kafka evidence = %#v", evidence)
+	}
+}
+
+func TestKafkaConsumerScanIgnoresNestedRepositoryImplementation(t *testing.T) {
+	repository := t.TempDir()
+	writeAnalyzerFile(t, filepath.Join(repository, "go", "handler", "events.go"), `package handler
+func events() {
+    if strings.EqualFold(os.Getenv("SERVICE_KAFKA_CONSUMERS_ENABLED"), "false") {
+        return
+    }
+    kq.NewQueue(config, handler)
+}`)
+	writeAnalyzerFile(t, filepath.Join(repository, "go", "internal", "go-zero", ".git"), "gitdir: elsewhere\n")
+	writeAnalyzerFile(t, filepath.Join(repository, "go", "internal", "go-zero", "kq", "queue.go"), `package kq
+func NewQueue() { kafka.NewReader(config) }`)
+	evidence, err := InspectKafkaConsumerEvidence(repository, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence) != 1 || evidence[0].File != "go/handler/events.go:6" || !evidence[0].Protected {
+		t.Fatalf("Kafka evidence = %#v", evidence)
+	}
 }

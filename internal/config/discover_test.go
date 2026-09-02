@@ -75,13 +75,13 @@ type Config struct {
 		t.Fatal(err)
 	}
 	service := manifest.Services["api-service"]
-	if service.Kind != "http" {
-		t.Fatalf("service kind = %q", service.Kind)
+	if !reflect.DeepEqual(service.Kinds, []string{"http"}) {
+		t.Fatalf("service kinds = %v", service.Kinds)
 	}
 	if !reflect.DeepEqual(service.Ports, map[string]int{"http": 18080}) {
 		t.Fatalf("service ports = %v", service.Ports)
 	}
-	if service.Discovery.Analyzer != "go-subdirectory-module" || !reflect.DeepEqual(service.Discovery.Bindings, []string{"partnerRpc"}) {
+	if service.Discovery.Analyzer != "go-subdirectory-module" || !reflect.DeepEqual(service.Discovery.ConsumerBindings, []string{"partnerRpc"}) {
 		t.Fatalf("service discovery = %#v", service.Discovery)
 	}
 	after := analyzerRepositorySnapshot(t, repository)
@@ -808,9 +808,26 @@ func TestDiscoveredPolicyRejectsMultipleCompatibleSpringPolicies(t *testing.T) {
 		Routing: model.PolicyRouting{Servers: map[string]model.ServerRoute{"rpc": {Port: "rpc"}}},
 	}
 	manifest := &model.Manifest{Policies: map[string]model.Policy{"spring-a": policy, "spring-b": policy}}
-	_, err := discoveredPolicy(manifest, DiscoveredService{Name: "data-mart-service", Framework: "spring-boot", DiscoveryDriver: "consul", Kind: "rpc"}, "")
+	_, _, err := certifyDiscoveredService(manifest, DiscoveredService{Name: "data-mart-service", Framework: "spring-boot", Runtime: "spring-boot", DiscoveryDriver: "consul", Kind: "rpc", Kinds: []string{"rpc"}}, "")
 	if err == nil || !strings.Contains(err.Error(), "candidates: spring-a, spring-b") {
 		t.Fatalf("multiple Spring policies error = %v", err)
+	}
+}
+
+func TestBackfillSynchronizesKafkaConsumerIsolationEvidence(t *testing.T) {
+	existing := model.Service{Discovery: model.ServiceDiscovery{Analyzer: "go-subdirectory-module"}}
+	discovered := DiscoveredService{Analyzer: "go-subdirectory-module", Consumers: []RepositoryConsumerEvidence{{Driver: "kafka", Protected: true}}}
+	updated, changed := backfillDiscoveredDescription(existing, discovered, 3)
+	if !changed || !reflect.DeepEqual(updated.Discovery.Consumers, []string{"kafka"}) {
+		t.Fatalf("added consumer evidence = %#v, changed=%t", updated, changed)
+	}
+	if isolation := updated.Isolation.Consumers["kafka"]; isolation.Mode != KafkaConsumerGuardMode || isolation.Env != KafkaConsumersEnabledEnv {
+		t.Fatalf("added Kafka isolation = %#v", updated.Isolation)
+	}
+
+	removed, changed := backfillDiscoveredDescription(updated, DiscoveredService{Analyzer: "go-subdirectory-module"}, 3)
+	if !changed || len(removed.Discovery.Consumers) != 0 || len(removed.Isolation.Consumers) != 0 {
+		t.Fatalf("removed consumer evidence = %#v, changed=%t", removed, changed)
 	}
 }
 
@@ -820,7 +837,8 @@ func writeSpringBootServiceRepository(t *testing.T, workspace string, name strin
 	mustMkdirAll(t, filepath.Join(repository, ".git"))
 	writeDiscoveryFile(t, filepath.Join(repository, "gradlew"), "#!/bin/sh\n")
 	writeDiscoveryFile(t, filepath.Join(repository, "settings.gradle"), "rootProject.name = 'datamart'\n")
-	writeDiscoveryFile(t, filepath.Join(repository, "build.gradle"), "plugins { id 'org.springframework.boot' version '2.6.5' }\nversion = '0.0.1-SNAPSHOT'\ndependencies { implementation 'net.devh:grpc-server-spring-boot-starter:2.13.1.RELEASE' }\n")
+	writeDiscoveryFile(t, filepath.Join(repository, "build.gradle"), "plugins { id 'org.springframework.boot' version '2.6.5' }\nversion = '0.0.1-SNAPSHOT'\ndependencies { implementation 'net.devh:grpc-server-spring-boot-starter:2.13.1.RELEASE'; implementation 'org.springframework.cloud:spring-cloud-starter-consul-discovery' }\n")
+	writeDiscoveryFile(t, filepath.Join(repository, "src", "main", "resources", "application.yml"), "spring:\n  application:\n    name: datamart.rpc\n")
 	writeDiscoveryFile(t, filepath.Join(repository, "src", "main", "java", "Application.java"), "@SpringBootApplication public class Application { public static void main(String[] args) { SpringApplication.run(Application.class, args); } }\n")
 	writeDiscoveryFile(t, filepath.Join(repository, "src", "main", "java", "GrpcServer.java"), "@GrpcService public class GrpcServer {}\n")
 }
@@ -835,7 +853,16 @@ func writeGoServiceRepository(t *testing.T, workspace string, name string, gitFi
 		mustMkdirAll(t, filepath.Join(repository, ".git"))
 	}
 	writeDiscoveryFile(t, filepath.Join(repository, "go", "go.mod"), "module "+module+"\n")
-	writeDiscoveryFile(t, filepath.Join(repository, "go", "main.go"), "package "+packageName+"\n")
+	mainSource := "package "+packageName+"\n"
+	if packageName == "main" {
+		serverType := "rest.RestConf"
+		if strings.Contains(name, "customer") {
+			serverType = "zrpc.RpcServerConf"
+		}
+		mainSource += "type Config struct { Server "+serverType+" }\n"
+		mainSource += "var _ = Getenv(\"HOST\")\nvar _ = Getenv(\"PORT\")\nvar _ = Getenv(\"HTTP_PORT\")\nvar _ = Getenv(\"RPC_PORT\")\n"
+	}
+	writeDiscoveryFile(t, filepath.Join(repository, "go", "main.go"), mainSource)
 }
 
 func writeDiscoveryFile(t *testing.T, path string, contents string) {
@@ -843,5 +870,10 @@ func writeDiscoveryFile(t *testing.T, path string, contents string) {
 	mustMkdirAll(t, filepath.Dir(path))
 	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 		t.Fatalf("write %q: %v", path, err)
+	}
+	if filepath.Base(path) == "go.mod" {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "go.sum"), []byte(""), 0600); err != nil {
+			t.Fatalf("write go.sum: %v", err)
+		}
 	}
 }

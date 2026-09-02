@@ -43,8 +43,9 @@ func SetServiceListenerScope(path string, services []string, listen string) (Ser
 	for _, name := range names {
 		service := candidate.Services[name]
 		if listen == model.NetworkListenAllInterfaces {
-			if service.Kind != "http" && service.Kind != "rpc" {
-				return ServiceListenerUpdateResult{}, fmt.Errorf("service %s must declare kind http or rpc before enabling all-interfaces listening", name)
+			kinds := service.EffectiveKinds()
+			if len(kinds) == 0 {
+				return ServiceListenerUpdateResult{}, fmt.Errorf("service %s must declare at least one http or rpc kind before enabling all-interfaces listening", name)
 			}
 			policyName := service.Policy
 			if policyName == "" {
@@ -54,8 +55,13 @@ func SetServiceListenerScope(path string, services []string, listen string) (Ser
 			if policyName == "" || !found {
 				return ServiceListenerUpdateResult{}, fmt.Errorf("service %s has no policy-backed listener adapter", name)
 			}
-			if _, found := policy.Routing.Servers[service.Kind]; !found {
-				return ServiceListenerUpdateResult{}, fmt.Errorf("service %s policy %s has no %s listener adapter", name, policyName, service.Kind)
+			for _, kind := range kinds {
+				if kind != "http" && kind != "rpc" {
+					return ServiceListenerUpdateResult{}, fmt.Errorf("service %s kind %s cannot use all-interfaces listening", name, kind)
+				}
+				if _, found := policy.Routing.Servers[kind]; !found {
+					return ServiceListenerUpdateResult{}, fmt.Errorf("service %s policy %s has no %s listener adapter", name, policyName, kind)
+				}
 			}
 			if service.Network.Listen == model.NetworkListenAllInterfaces {
 				result.Unchanged = append(result.Unchanged, name)

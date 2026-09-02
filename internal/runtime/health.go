@@ -14,6 +14,7 @@ import (
 )
 
 type HealthCheck struct {
+	Server      string
 	Type        string
 	Address     string
 	URL         string
@@ -60,6 +61,21 @@ func WaitHealthy(ctx context.Context, process ServiceProcess, check HealthCheck)
 		case <-timer.C:
 		}
 	}
+}
+
+func WaitHealthyChecks(ctx context.Context, process ServiceProcess, checks []HealthCheck) error {
+	if len(checks) == 0 {
+		checks = []HealthCheck{{Type: "process"}}
+	}
+	for _, check := range checks {
+		if err := WaitHealthy(ctx, process, check); err != nil {
+			if check.Server != "" {
+				return fmt.Errorf("%s listener %s: %w", process.Name, check.Server, err)
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 func checkHealth(ctx context.Context, check HealthCheck) error {

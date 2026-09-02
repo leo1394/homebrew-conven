@@ -9,8 +9,9 @@ type Manifest struct {
 }
 
 type Workspace struct {
-	Name   string `yaml:"name"`
-	Policy string `yaml:"policy"`
+	Name             string   `yaml:"name"`
+	Policy           string   `yaml:"policy"`
+	DisabledBindings []string `yaml:"disabledBindings"`
 }
 
 type Policy struct {
@@ -21,6 +22,7 @@ type Policy struct {
 }
 
 type PolicyDrivers struct {
+	Runtime      string `yaml:"runtime"`
 	Framework    string `yaml:"framework"`
 	ConfigSource string `yaml:"configSource"`
 	Discovery    string `yaml:"discovery"`
@@ -57,6 +59,7 @@ type ServerRoute struct {
 	Port      string          `yaml:"port"`
 	Patches   []ConfigPatch   `yaml:"patches"`
 	Args      []string        `yaml:"args"`
+	Env       map[string]string `yaml:"env"`
 	Isolation ServerIsolation `yaml:"isolation"`
 }
 
@@ -92,11 +95,34 @@ type ConfigPatch struct {
 
 type Environment struct {
 	Registry    string                                         `yaml:"registry"`
+	Registries  map[string]Registry                            `yaml:"registries"`
 	EnvFile     string                                         `yaml:"envFile"`
 	Env         map[string]string                              `yaml:"env"`
 	Connection  Connection                                     `yaml:"connection"`
 	Endpoints   map[string]EnvironmentEndpoint                 `yaml:"endpoints"`
 	Resolutions map[string]map[string]DependencyResolution     `yaml:"resolutions"`
+}
+
+type Registry struct {
+	Driver      string      `yaml:"driver"`
+	Address     string      `yaml:"address"`
+	Namespace   string      `yaml:"namespace"`
+	Group       string      `yaml:"group"`
+	Datacenter  string      `yaml:"datacenter"`
+	Prefix      string      `yaml:"prefix"`
+	TokenEnv    string      `yaml:"tokenEnv"`
+	UsernameEnv string      `yaml:"usernameEnv"`
+	PasswordEnv string      `yaml:"passwordEnv"`
+	ObserveFor  string      `yaml:"observeFor"`
+	TLS         RegistryTLS `yaml:"tls"`
+}
+
+type RegistryTLS struct {
+	CAFile             string `yaml:"caFile"`
+	CertFile           string `yaml:"certFile"`
+	KeyFile            string `yaml:"keyFile"`
+	ServerName         string `yaml:"serverName"`
+	InsecureSkipVerify bool   `yaml:"insecureSkipVerify"`
 }
 
 type EnvironmentEndpoint struct {
@@ -133,7 +159,9 @@ type Service struct {
 	Path         string                `yaml:"path"`
 	Policy       string                `yaml:"policy"`
 	Kind         string                `yaml:"kind"`
+	Kinds        []string              `yaml:"kinds"`
 	Network      ServiceNetwork        `yaml:"network"`
+	Isolation    ServiceIsolation      `yaml:"isolation"`
 	Discovery    ServiceDiscovery      `yaml:"discovery"`
 	Runner       Runner                `yaml:"runner"`
 	Ports        map[string]int        `yaml:"ports"`
@@ -141,7 +169,17 @@ type Service struct {
 	LocalEnv     map[string]string     `yaml:"localEnv"`
 	Config       ServiceConfig         `yaml:"config"`
 	Health       Health                `yaml:"health"`
+	HealthChecks []ServiceHealthCheck  `yaml:"healthChecks"`
 	Dependencies map[string]Dependency `yaml:"dependencies"`
+}
+
+type ServiceIsolation struct {
+	Consumers map[string]ConsumerIsolation `yaml:"consumers"`
+}
+
+type ConsumerIsolation struct {
+	Mode string `yaml:"mode"`
+	Env  string `yaml:"env"`
 }
 
 const (
@@ -161,8 +199,14 @@ func (network ServiceNetwork) EffectiveListen() string {
 }
 
 type ServiceDiscovery struct {
-	Analyzer string   `yaml:"analyzer"`
-	Bindings []string `yaml:"bindings"`
+	Analyzer         string   `yaml:"analyzer"`
+	Certifier        string   `yaml:"certifier"`
+	Registry         string   `yaml:"registry"`
+	Identity         string   `yaml:"identity"`
+	ProviderAliases  []string `yaml:"providerAliases"`
+	ConsumerBindings []string `yaml:"consumerBindings"`
+	Consumers        []string `yaml:"consumers"`
+	Bindings         []string `yaml:"bindings"`
 }
 
 type ServiceConfig struct {
@@ -184,6 +228,74 @@ type Health struct {
 	URL     string   `yaml:"url"`
 	Command []string `yaml:"command"`
 	Timeout string   `yaml:"timeout"`
+}
+
+type ServiceHealthCheck struct {
+	Server  string   `yaml:"server"`
+	Type    string   `yaml:"type"`
+	Address string   `yaml:"address"`
+	URL     string   `yaml:"url"`
+	Command []string `yaml:"command"`
+	Timeout string   `yaml:"timeout"`
+}
+
+func (service Service) EffectiveKinds() []string {
+	if len(service.Kinds) > 0 {
+		return append([]string(nil), service.Kinds...)
+	}
+	if service.Kind != "" {
+		return []string{service.Kind}
+	}
+	return nil
+}
+
+func (service Service) EffectiveHealthChecks() []ServiceHealthCheck {
+	if len(service.HealthChecks) > 0 {
+		result := make([]ServiceHealthCheck, len(service.HealthChecks))
+		copy(result, service.HealthChecks)
+		return result
+	}
+	if service.Health.Type == "" {
+		return nil
+	}
+	server := service.Kind
+	return []ServiceHealthCheck{{
+		Server:  server,
+		Type:    service.Health.Type,
+		Address: service.Health.Address,
+		URL:     service.Health.URL,
+		Command: append([]string(nil), service.Health.Command...),
+		Timeout: service.Health.Timeout,
+	}}
+}
+
+func (discovery ServiceDiscovery) EffectiveConsumerBindings() []string {
+	if len(discovery.ConsumerBindings) > 0 {
+		return append([]string(nil), discovery.ConsumerBindings...)
+	}
+	return append([]string(nil), discovery.Bindings...)
+}
+
+func ProviderService(manifest *Manifest, alias string, binding string) string {
+	if manifest == nil {
+		return ""
+	}
+	for _, reference := range []string{alias, binding} {
+		if reference == "" {
+			continue
+		}
+		if _, found := manifest.Services[reference]; found {
+			return reference
+		}
+		for name, service := range manifest.Services {
+			for _, providerAlias := range service.Discovery.ProviderAliases {
+				if providerAlias == reference {
+					return name
+				}
+			}
+		}
+	}
+	return ""
 }
 
 type Dependency struct {

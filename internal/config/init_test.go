@@ -116,7 +116,7 @@ func TestInitWorkspaceCreatesAndPreservesWorkspaceFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	missing := ".conven/catalog.yaml"
+	missing := "README.md"
 	if err := os.Remove(filepath.Join(workspace, missing)); err != nil {
 		t.Fatal(err)
 	}
@@ -146,27 +146,16 @@ func TestInitWorkspaceCreatesAndPreservesWorkspaceFiles(t *testing.T) {
 	}
 }
 
-func TestInitWorkspaceFilesContainDocumentedCatalogHeaders(t *testing.T) {
-	for _, expected := range []string{
-		"version: 1",
-		"services: []",
-		"repository: catalog-api",
-		"rpcBinding: catalogRpc",
-		"disabledRpcBindings: []",
-	} {
-		if !strings.Contains(string(examples.CatalogYAML), expected) {
-			t.Fatalf("embedded catalog.yaml is missing %q", expected)
-		}
-	}
+func TestInitWorkspaceFilesContainDocumentedGeneratorHeaders(t *testing.T) {
 	for _, expected := range []string{
 		"spec: conven-workspace-policy-generator",
 		"pluginInvocation: \"conven plugins --run [NAME] [plugin-args...]\"",
 		"repository: \"https://github.com/leo1394/homebrew-conven\"",
 		"# Conven 工作区 Policy 生成器：AI 实现规范",
 		"go-zero-apollo-consul-v1",
-		".conven/catalog.yaml",
-		"rpcBinding",
-		"disabledRpcBindings",
+		".conven/conven.yaml",
+		"bindingProviders",
+		"disabledBindings",
 		"conven plugins --run [NAME]",
 		"--output [FILE]",
 		"--disable-bindings",
@@ -181,9 +170,9 @@ func TestInitWorkspaceFilesContainDocumentedCatalogHeaders(t *testing.T) {
 		"repository: \"https://github.com/leo1394/homebrew-conven\"",
 		"# Conven Workspace Policy Generator: AI Implementation Specification",
 		"go-zero-apollo-consul-v1",
-		".conven/catalog.yaml",
-		"rpcBinding",
-		"disabledRpcBindings",
+		".conven/conven.yaml",
+		"bindingProviders",
+		"disabledBindings",
 		"conven plugins --run [NAME]",
 		"--output [FILE]",
 		"--disable-bindings",
@@ -196,7 +185,7 @@ func TestInitWorkspaceFilesContainDocumentedCatalogHeaders(t *testing.T) {
 		"# Conven Workspace Quick Start",
 		"conven-generator.json",
 		"conven plugins --run --output",
-		"conven policy --import --edit",
+		"conven workspace --import --edit",
 	} {
 		if !strings.Contains(string(examples.WorkspaceREADME), expected) {
 			t.Fatalf("embedded workspace README is missing %q", expected)
@@ -282,7 +271,7 @@ func TestInitWorkspaceRejectsUnsafeWorkspaceFiles(t *testing.T) {
 			if err := os.Mkdir(boundary, 0700); err != nil {
 				t.Fatal(err)
 			}
-			unsafePath := filepath.Join(boundary, "catalog.yaml")
+			unsafePath := filepath.Join(workspace, "README.md")
 			target := test.prepare(t, unsafePath)
 			_, _, err := InitWorkspace(workspace, []byte("version: 1\n"))
 			if err == nil || !strings.Contains(err.Error(), test.want) {

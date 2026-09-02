@@ -74,7 +74,7 @@ func TestValidatePlannedIsolationFailsClosedForRPC(t *testing.T) {
 	if err := validatePlannedIsolation("portal", "http", nil); err == nil || !strings.Contains(err.Error(), "no policy-backed") {
 		t.Fatalf("missing HTTP policy error = %v", err)
 	}
-	config := &PlannedConfig{Isolation: PlannedIsolation{
+	config := &PlannedConfig{Contract: "go-zero-consul-yaml-overlay", Isolation: PlannedIsolation{
 		RegistrationMode: "not-applicable",
 		ListenerGuard:    materialize.Guard{File: "application.yaml", Path: "listenOn", Value: "127.0.0.1:18081"},
 		ListenerPort:     18081,
@@ -150,6 +150,7 @@ func TestValidatePlannedIsolationEnforcesTrustedListenerFieldsAndShape(t *testin
 func TestValidateRuntimeConfigConsumptionRequiresVerifiedRuntimePath(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "configs", "api")
 	config := &PlannedConfig{
+		Contract: "go-zero-consul-yaml-overlay",
 		Plan: materialize.Plan{
 			TargetDir:        target,
 			Application:      "application.yaml",

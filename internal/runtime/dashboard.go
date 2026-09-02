@@ -49,9 +49,13 @@ type dashboardLine struct {
 }
 
 type dashboardService struct {
-	Name      string
-	Ports     map[string]int
-	StartedAt time.Time
+	Name         string
+	Ports        map[string]int
+	Verification string
+	Listen       string
+	Listeners    map[string]ListenerEvidence
+	Consumers    map[string]ConsumerIsolationEvidence
+	StartedAt    time.Time
 }
 
 type dashboardInfo struct {
@@ -62,7 +66,7 @@ type dashboardInfo struct {
 	Interface           string
 	Cluster             string
 	Services            []dashboardService
-	DisabledRPCBindings []string
+	DisabledBindings    []string
 	StartedAt           time.Time
 	Color               bool
 }
@@ -70,7 +74,7 @@ type dashboardInfo struct {
 type TailOptions struct {
 	Names               []string
 	Version             string
-	DisabledRPCBindings []string
+	DisabledBindings    []string
 }
 
 type dashboardHistory struct {
@@ -177,7 +181,7 @@ func TailLogs(ctx context.Context, workspace *WorkspaceData, session *Session, o
 		Interface:           interfaceName,
 		Cluster:             dashboardSessionCluster(session),
 		Services:            services,
-		DisabledRPCBindings: append([]string(nil), options.DisabledRPCBindings...),
+		DisabledBindings:    append([]string(nil), options.DisabledBindings...),
 		StartedAt:           dashboardServicesStartedAt(services),
 		Color:               dashboardColorEnabled(),
 	}
@@ -517,12 +521,7 @@ func handleDashboardInput(event dashboardInputEvent, history *dashboardHistory, 
 			view.SearchMode = true
 			view.SearchDraft = ""
 			view.SearchMessage = ""
-		case "g":
-			view.Pause(history, width, rows)
-			view.Top = 0
-			view.TopOffset = 0
-			view.Clamp(history, width, rows)
-		case "G":
+		case "g", "G":
 			view.Resume()
 			view.Clamp(history, width, rows)
 		case "n":
@@ -1014,7 +1013,7 @@ func dashboardViewHint(view *dashboardView, history *dashboardHistory, rows int,
 	if width < 60 {
 		return fmt.Sprintf("q: detach · PAUSED · %s%s · End follow", position, newLines)
 	}
-	return fmt.Sprintf("q / Ctrl-C: detach · PAUSED · %s%s · End/G: follow · / search", position, newLines)
+	return fmt.Sprintf("q / Ctrl-C: detach · PAUSED · %s%s · End/g: follow · / search", position, newLines)
 }
 
 func dashboardBanner(info dashboardInfo, width int, height int) []dashboardLine {
@@ -1084,7 +1083,7 @@ func dashboardBannerWithHint(info dashboardInfo, width int, height int, hint str
 		lines = append(lines, dashboardFieldLine("CLUSTER", info.Cluster, dashboardGreen))
 	}
 	if showDisabled {
-		lines = append(lines, dashboardDisabledLine(info.DisabledRPCBindings))
+		lines = append(lines, dashboardDisabledLine(info.DisabledBindings))
 	}
 	if showServices {
 		lines = append(lines, dashboardServicesTitleLine(len(info.Services)))
@@ -1281,6 +1280,49 @@ func dashboardServiceLine(service dashboardService, nameWidth int) dashboardLine
 		{Text: strings.Repeat(" ", nameWidth-dashboardDisplayWidth(name)) + "  "},
 	}
 	segments = append(segments, dashboardPortSegments(service.Ports)...)
+	if service.Verification != "" {
+		style := dashboardGreen
+		if service.Verification != "verified" {
+			style = dashboardYellow
+		}
+		segments = append(segments,
+			dashboardSegment{Text: "  ·  ", Style: dashboardDim},
+			dashboardSegment{Text: service.Verification, Style: style},
+		)
+	}
+	listenerNames := make([]string, 0, len(service.Ports))
+	for name := range service.Ports {
+		listenerNames = append(listenerNames, name)
+	}
+	sort.Strings(listenerNames)
+	for _, name := range listenerNames {
+		state := service.Verification
+		if state == "" {
+			state = "planned"
+		}
+		detail := name + "=" + state
+		if listener, found := service.Listeners[name]; found {
+			detail = fmt.Sprintf("%s=verified/%s/%s", name, listener.Mode, listener.VerifiedAt.Format("15:04:05"))
+		} else if service.Listen != "" {
+			detail += "/" + service.Listen
+		}
+		segments = append(segments,
+			dashboardSegment{Text: "  ·  ", Style: dashboardDim},
+			dashboardSegment{Text: detail, Style: dashboardDim},
+		)
+	}
+	consumerNames := make([]string, 0, len(service.Consumers))
+	for name := range service.Consumers {
+		consumerNames = append(consumerNames, name)
+	}
+	sort.Strings(consumerNames)
+	for _, name := range consumerNames {
+		consumer := service.Consumers[name]
+		segments = append(segments,
+			dashboardSegment{Text: "  ·  ", Style: dashboardDim},
+			dashboardSegment{Text: name + "=" + consumer.Mode + "/" + consumer.Status, Style: dashboardDim},
+		)
+	}
 	return dashboardLine{Segments: segments}
 }
 
@@ -1622,7 +1664,7 @@ func dashboardServices(workspace *WorkspaceData, session *Session, names []strin
 		if ports == nil {
 			ports = workspace.Manifest.Services[name].Ports
 		}
-		services = append(services, dashboardService{Name: name, Ports: ports, StartedAt: process.StartedAt})
+		services = append(services, dashboardService{Name: name, Ports: ports, Verification: process.Verification, Listen: workspace.Manifest.Services[name].Network.EffectiveListen(), Listeners: process.Listeners, Consumers: process.ConsumerIsolation, StartedAt: process.StartedAt})
 	}
 	if len(names) == 0 {
 		for _, process := range session.Services {
@@ -1633,7 +1675,7 @@ func dashboardServices(workspace *WorkspaceData, session *Session, names []strin
 			if ports == nil {
 				ports = workspace.Manifest.Services[process.Name].Ports
 			}
-			services = append(services, dashboardService{Name: process.Name, Ports: ports, StartedAt: process.StartedAt})
+			services = append(services, dashboardService{Name: process.Name, Ports: ports, Verification: process.Verification, Listen: workspace.Manifest.Services[process.Name].Network.EffectiveListen(), Listeners: process.Listeners, Consumers: process.ConsumerIsolation, StartedAt: process.StartedAt})
 		}
 	}
 	return services

@@ -266,8 +266,8 @@ func TestLoadValidatesManifest(t *testing.T) {
 	}{
 		{
 			name:      "future version",
-			yaml:      strings.Replace(validManifestYAML, "version: 2", "version: 3", 1),
-			wantError: "version must be 1 or 2",
+			yaml:      strings.Replace(validManifestYAML, "version: 2", "version: 4", 1),
+			wantError: "version must be 1, 2, or 3",
 		},
 		{
 			name:      "workspace name",
@@ -313,6 +313,16 @@ func TestLoadValidatesManifest(t *testing.T) {
 			name:      "unknown workspace policy",
 			yaml:      strings.Replace(policyManifestYAML, "policy: retail", "policy: missing", 1),
 			wantError: "workspace.policy references unknown policy",
+		},
+		{
+			name:      "invalid disabled binding",
+			yaml:      strings.Replace(validManifestYAML, "  name: sample", "  name: sample\n  disabledBindings: [\"bad binding\"]", 1),
+			wantError: "workspace.disabledBindings[0]",
+		},
+		{
+			name:      "duplicate disabled binding",
+			yaml:      strings.Replace(validManifestYAML, "  name: sample", "  name: sample\n  disabledBindings: [legacyRpc, legacyRpc]", 1),
+			wantError: "duplicates \"legacyRpc\"",
 		},
 		{
 			name:      "dependency binding without port",
@@ -394,4 +404,38 @@ func writeManifest(t *testing.T, contents string) string {
 		t.Fatalf("write manifest: %v", err)
 	}
 	return path
+}
+
+func TestManifestKafkaConsumerRequiresDisabledIsolation(t *testing.T) {
+	manifest := &model.Manifest{
+		Version: 3,
+		Workspace: model.Workspace{Name: "sample"},
+		Policies: map[string]model.Policy{
+			"go-passive": {
+				Drivers: model.PolicyDrivers{Runtime: "go-generic", Framework: "go", ConfigSource: "environment", Discovery: "passive", Materializer: "environment"},
+				Routing: model.PolicyRouting{Servers: map[string]model.ServerRoute{"http": {
+					Port: "http", Env: map[string]string{"HOST": "127.0.0.1", "PORT": "${port.http}"},
+					Isolation: model.ServerIsolation{Registration: model.RegistrationGuard{Mode: "not-applicable"}, Listener: model.ListenerGuard{Path: "HOST", Value: "127.0.0.1"}},
+				}}},
+			},
+		},
+		Services: map[string]model.Service{
+			"api": {
+				Path: "api", Policy: "go-passive", Kinds: []string{"http"},
+				Discovery: model.ServiceDiscovery{Analyzer: "go-root-module", Certifier: "go-generic", Consumers: []string{"kafka"}},
+				Runner: model.Runner{Run: []string{"api"}}, Ports: map[string]int{"http": 18080},
+				HealthChecks: []model.ServiceHealthCheck{{Server: "http", Type: "tcp", Address: "127.0.0.1:18080"}},
+			},
+		},
+	}
+	err := validateManifest(manifest)
+	if err == nil || !strings.Contains(err.Error(), "isolation.consumers.kafka") {
+		t.Fatalf("missing Kafka isolation error = %v", err)
+	}
+	service := manifest.Services["api"]
+	service.Isolation.Consumers = map[string]model.ConsumerIsolation{"kafka": {Mode: "guarded", Env: "SERVICE_KAFKA_CONSUMERS_ENABLED"}}
+	manifest.Services["api"] = service
+	if err := validateManifest(manifest); err != nil {
+		t.Fatalf("valid Kafka isolation rejected: %v", err)
+	}
 }

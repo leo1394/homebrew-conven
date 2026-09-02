@@ -23,13 +23,21 @@ type DiscoveredService struct {
 	Path            string
 	Analyzer        string
 	Framework       string
+	Runtime         string
 	DiscoveryDriver string
 	Policy          string
+	Certifier       string
 	Kind            string
+	Kinds           []string
 	Bindings        []string
 	Runner          model.Runner
 	Ports           map[string]int
 	Health          model.Health
+	HealthChecks    []model.ServiceHealthCheck
+	Registry        string
+	Identity        string
+	Registrations   []RepositoryRegistrationEvidence
+	Consumers       []RepositoryConsumerEvidence
 }
 
 const firstDiscoveredLocalPort = 18080
@@ -42,37 +50,49 @@ type DiscoveryResult struct {
 	Missing    []string
 	Pruned     []string
 	Skipped    []string
+	SkippedDetails []string
 	Assigned   []string
 }
 
 type discoveredManifest struct {
 	Version   int                          `yaml:"version"`
 	Workspace discoveredManifestWorkspace `yaml:"workspace"`
+	Policies  map[string]model.Policy      `yaml:"policies,omitempty"`
 	Services  map[string]discoveredEntry   `yaml:"services"`
 }
 
 type discoveredManifestWorkspace struct {
-	Name string `yaml:"name"`
+	Name             string   `yaml:"name"`
+	DisabledBindings []string `yaml:"disabledBindings"`
 }
 
 type discoveredEntry struct {
-	Path      string              `yaml:"path"`
-	Policy    string              `yaml:"policy,omitempty"`
-	Kind      string              `yaml:"kind,omitempty"`
-	Discovery discoveredDiscovery `yaml:"discovery"`
-	Runner    discoveredRunner    `yaml:"runner"`
-	Ports     map[string]int      `yaml:"ports,omitempty"`
-	Health    discoveredHealth    `yaml:"health,omitempty"`
+	Path         string                     `yaml:"path"`
+	Policy       string                     `yaml:"policy,omitempty"`
+	Kind         string                     `yaml:"kind,omitempty"`
+	Kinds        []string                   `yaml:"kinds,omitempty"`
+	Discovery    discoveredDiscovery        `yaml:"discovery"`
+	Runner       discoveredRunner           `yaml:"runner"`
+	Ports        map[string]int             `yaml:"ports,omitempty"`
+	Health       discoveredHealth           `yaml:"health,omitempty"`
+	HealthChecks []model.ServiceHealthCheck `yaml:"healthChecks,omitempty"`
+	Isolation    *model.ServiceIsolation    `yaml:"isolation,omitempty"`
 }
 
 type discoveredDiscovery struct {
-	Analyzer string   `yaml:"analyzer"`
-	Bindings []string `yaml:"bindings,omitempty"`
+	Analyzer         string   `yaml:"analyzer"`
+	Certifier        string   `yaml:"certifier,omitempty"`
+	Registry         string   `yaml:"registry,omitempty"`
+	Identity         string   `yaml:"identity,omitempty"`
+	ConsumerBindings []string `yaml:"consumerBindings,omitempty"`
+	Consumers        []string `yaml:"consumers,omitempty"`
+	Bindings         []string `yaml:"bindings,omitempty"`
 }
 
 type discoveredRunner struct {
 	Workdir  string   `yaml:"workdir"`
 	Artifact string   `yaml:"artifact,omitempty"`
+	Prepare  []string `yaml:"prepare,omitempty"`
 	Build    []string `yaml:"build"`
 	Run      []string `yaml:"run"`
 }
@@ -132,16 +152,40 @@ func ScanServices(workspace string) ([]DiscoveredService, []string, error) {
 			bindings = append(bindings, binding.YAMLKey)
 		}
 		sort.Strings(bindings)
+		identity := ""
+		if analysis.Discovery != "" && analysis.Discovery != "passive" && analysis.Discovery != "kubernetes-dns" {
+			identity, err = inferRegistryIdentity(workspace, model.Service{Path: name})
+			if err != nil {
+				return nil, nil, fmt.Errorf("discover %s registry identity: %w", name, err)
+			}
+			if identity == "" && analysis.Discovery == "nacos" {
+				identity = springNacosImportIdentity(filepath.Join(repository, "src", "main", "resources"))
+			}
+			if identity == "" && (containsDiscoveredKind(analysis.EffectiveKinds(), RepositoryKindRPC) || len(analysis.Registrations) > 0) {
+				return nil, nil, fmt.Errorf("discover %s registry identity: %s provider identity could not be proven; add the framework-native service name to repository configuration, or declare services.%s.discovery.identity and registry in the manifest", name, analysis.Discovery, analysis.ServiceName)
+			}
+		}
+		registry := ""
+		if identity != "" {
+			registry = analysis.Discovery
+		}
 		discovered = append(discovered, DiscoveredService{
 			Name:            analysis.ServiceName,
 			Path:            name,
 			Analyzer:        analysis.Analyzer,
 			Framework:       analysis.Framework,
+			Runtime:         analysis.Runtime,
 			DiscoveryDriver: analysis.Discovery,
 			Kind:            kind,
+			Kinds:           analysis.EffectiveKinds(),
 			Bindings:        bindings,
 			Runner:          analysis.Runner,
 			Health:          analysis.Health,
+			HealthChecks:    append([]model.ServiceHealthCheck(nil), analysis.HealthChecks...),
+			Registry:        registry,
+			Identity:        identity,
+			Registrations:   append([]RepositoryRegistrationEvidence(nil), analysis.Registrations...),
+			Consumers:       append([]RepositoryConsumerEvidence(nil), analysis.Consumers...),
 		})
 	}
 	sort.Slice(discovered, func(left int, right int) bool {
@@ -151,8 +195,49 @@ func ScanServices(workspace string) ([]DiscoveredService, []string, error) {
 	return discovered, skipped, nil
 }
 
+func containsDiscoveredKind(kinds []string, want string) bool {
+	for _, kind := range kinds {
+		if kind == want {
+			return true
+		}
+	}
+	return false
+}
+
+func discoveredConsumerDrivers(evidence []RepositoryConsumerEvidence) []string {
+	seen := make(map[string]bool)
+	for _, item := range evidence {
+		if item.Driver != "" {
+			seen[item.Driver] = true
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(seen))
+	for driver := range seen {
+		result = append(result, driver)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func discoveredConsumerIsolation(evidence []RepositoryConsumerEvidence) *model.ServiceIsolation {
+	drivers := discoveredConsumerDrivers(evidence)
+	if len(drivers) == 0 {
+		return nil
+	}
+	isolation := &model.ServiceIsolation{Consumers: make(map[string]model.ConsumerIsolation, len(drivers))}
+	for _, driver := range drivers {
+		if driver == "kafka" {
+			isolation.Consumers[driver] = model.ConsumerIsolation{Mode: KafkaConsumerGuardMode, Env: KafkaConsumersEnabledEnv}
+		}
+	}
+	return isolation
+}
+
 func RenderDiscoveredManifest(workspace string, services []DiscoveredService) ([]byte, error) {
-	return renderDiscoveredManifest(workspace, services, 2)
+	return renderDiscoveredManifest(workspace, services, 3)
 }
 
 func renderDiscoveredManifest(workspace string, services []DiscoveredService, version int) ([]byte, error) {
@@ -165,34 +250,65 @@ func renderDiscoveredManifest(workspace string, services []DiscoveredService, ve
 		return services[left].Name < services[right].Name
 	})
 	usedPorts := make(map[int]bool)
+	policies := make(map[string]model.Policy)
 	for index := range services {
-		ports, changed, err := assignDiscoveredPort(services[index].Kind, services[index].Ports, usedPorts)
+		if version >= 3 && services[index].Policy == "" && services[index].Runtime != "" {
+			if services[index].DiscoveryDriver != "passive" {
+				return nil, fmt.Errorf("discovered service %q uses %s discovery; initialize a manifest with an environment registry and a matching runtime policy, then run services --registry", services[index].Name, services[index].DiscoveryDriver)
+			}
+			policyName := services[index].Runtime + "-passive"
+			policy, found := policies[policyName]
+			if !found {
+				policy = discoveredEnvironmentPolicy(services[index])
+			}
+			for _, kind := range services[index].Kinds {
+				policy.Routing.Servers[kind] = discoveredEnvironmentServerRoute(services[index].Runtime, kind, len(services[index].Kinds))
+			}
+			policies[policyName] = policy
+			services[index].Policy = policyName
+			services[index].Certifier = services[index].Runtime
+		}
+		ports, assigned, err := assignDiscoveredPorts(services[index].Kinds, services[index].Kind, services[index].Ports, usedPorts)
 		if err != nil {
 			return nil, err
 		}
-		if changed {
+		if len(assigned) > 0 {
 			services[index].Ports = ports
 		}
 	}
 	entries := make(map[string]discoveredEntry, len(services))
 	for _, service := range services {
-		entries[service.Name] = discoveredEntry{
+		entry := discoveredEntry{
 			Path:   service.Path,
 			Policy: service.Policy,
-			Kind:   service.Kind,
 			Discovery: discoveredDiscovery{
-				Analyzer: service.Analyzer,
-				Bindings: append([]string(nil), service.Bindings...),
+				Analyzer:  service.Analyzer,
+				Certifier: service.Certifier,
+				Registry:  service.Registry,
+				Identity:  service.Identity,
 			},
 			Runner: discoveredRunner{
 				Workdir:  service.Runner.Workdir,
 				Artifact: service.Runner.Artifact,
+				Prepare:  append([]string(nil), service.Runner.Prepare...),
 				Build:    append([]string(nil), service.Runner.Build...),
 				Run:      append([]string(nil), service.Runner.Run...),
 			},
-			Ports: copyDiscoveredPorts(service.Ports),
-			Health: discoveredHealthFor(service.Health),
+			Ports:        copyDiscoveredPorts(service.Ports),
+			HealthChecks: append([]model.ServiceHealthCheck(nil), service.HealthChecks...),
 		}
+		if version >= 3 {
+			entry.Kinds = append([]string(nil), service.Kinds...)
+			entry.Discovery.ConsumerBindings = append([]string(nil), service.Bindings...)
+			entry.Discovery.Consumers = discoveredConsumerDrivers(service.Consumers)
+			entry.Isolation = discoveredConsumerIsolation(service.Consumers)
+		} else {
+			entry.Kind = service.Kind
+			entry.Discovery.Bindings = append([]string(nil), service.Bindings...)
+			entry.Health = discoveredHealthFor(service.Health)
+			entry.HealthChecks = nil
+		}
+		entries[service.Name] = entry
 	}
 	var data bytes.Buffer
 	encoder := yaml.NewEncoder(&data)
@@ -200,8 +316,10 @@ func renderDiscoveredManifest(workspace string, services []DiscoveredService, ve
 	err = encoder.Encode(discoveredManifest{
 		Version: version,
 		Workspace: discoveredManifestWorkspace{
-			Name: filepath.Base(workspace),
+			Name:             filepath.Base(workspace),
+			DisabledBindings: []string{},
 		},
+		Policies: policies,
 		Services: entries,
 	})
 	if err != nil {
@@ -211,6 +329,44 @@ func renderDiscoveredManifest(workspace string, services []DiscoveredService, ve
 		return nil, fmt.Errorf("close discovered manifest encoder: %w", err)
 	}
 	return data.Bytes(), nil
+}
+
+func discoveredEnvironmentPolicy(service DiscoveredService) model.Policy {
+	policy := model.Policy{
+		Drivers: model.PolicyDrivers{
+			Runtime: service.Runtime,
+			Framework: service.Framework,
+			ConfigSource: "environment",
+			Discovery: "passive",
+			Materializer: "environment",
+		},
+		Routing: model.PolicyRouting{Servers: make(map[string]model.ServerRoute)},
+	}
+	policy.Routing.Servers[RepositoryKindHTTP] = discoveredEnvironmentServerRoute(service.Runtime, RepositoryKindHTTP, 1)
+	policy.Routing.Servers[RepositoryKindRPC] = discoveredEnvironmentServerRoute(service.Runtime, RepositoryKindRPC, 1)
+	return policy
+}
+
+func discoveredEnvironmentServerRoute(runtimeName string, kind string, listenerCount int) model.ServerRoute {
+	listenerEnv := "HOST"
+	portEnv := ""
+	if runtimeName == "quarkus" {
+		if kind == RepositoryKindRPC { listenerEnv, portEnv = "QUARKUS_GRPC_SERVER_HOST", "QUARKUS_GRPC_SERVER_PORT" } else { listenerEnv, portEnv = "QUARKUS_HTTP_HOST", "QUARKUS_HTTP_PORT" }
+	}
+	if runtimeName == "micronaut" {
+		if kind == RepositoryKindRPC { listenerEnv, portEnv = "GRPC_SERVER_HOST", "GRPC_SERVER_PORT" } else { listenerEnv, portEnv = "MICRONAUT_SERVER_HOST", "MICRONAUT_SERVER_PORT" }
+	}
+	server := model.ServerRoute{
+		Port: kind,
+		Isolation: model.ServerIsolation{
+			Registration: model.RegistrationGuard{Mode: "not-applicable"},
+			Listener: model.ListenerGuard{Path: listenerEnv, Value: "127.0.0.1"},
+		},
+	}
+	if portEnv != "" {
+		server.Env = map[string]string{portEnv: "${port." + kind + "}"}
+	}
+	return server
 }
 
 func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (DiscoveryResult, error) {
@@ -228,6 +384,9 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 		return result, err
 	}
 	result.Skipped = skipped
+	for _, name := range skipped {
+		result.SkippedDetails = append(result.SkippedDetails, name+": no registered Analyzer recognized a supported framework and deterministic build contract")
+	}
 	for _, service := range discovered {
 		result.Discovered = append(result.Discovered, service.Name)
 	}
@@ -259,20 +418,20 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 			matched[existingName] = true
 			result.Existing = append(result.Existing, existingName)
 			existing := existingByName[existingName]
-			service.Policy, err = discoveredPolicy(manifest, service, existing.Policy)
+			service.Policy, service.Certifier, err = certifyDiscoveredService(manifest, service, existing.Policy)
 			if err != nil {
 				return result, err
 			}
-			updated, changed := backfillDiscoveredDescription(existing, service)
+			updated, changed := backfillDiscoveredDescription(existing, service, manifest.Version)
 			if updated.Discovery.Analyzer == service.Analyzer {
-				ports, portsChanged, err := assignDiscoveredPort(updated.Kind, updated.Ports, usedPorts)
+				ports, assignedKinds, err := assignDiscoveredPorts(updated.EffectiveKinds(), updated.Kind, updated.Ports, usedPorts)
 				if err != nil {
 					return result, err
 				}
-				if portsChanged {
+				if len(assignedKinds) > 0 {
 					updated.Ports = ports
 					changed = true
-					result.Assigned = append(result.Assigned, discoveredPortAssignment(existingName, updated.Kind, ports))
+					for _, kind := range assignedKinds { result.Assigned = append(result.Assigned, discoveredPortAssignment(existingName, kind, ports)) }
 				}
 			}
 			if changed {
@@ -281,18 +440,16 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 			}
 			continue
 		}
-		service.Policy, err = discoveredPolicy(manifest, service, "")
+		service.Policy, service.Certifier, err = certifyDiscoveredService(manifest, service, "")
 		if err != nil {
 			return result, err
 		}
-		ports, _, err := assignDiscoveredPort(service.Kind, service.Ports, usedPorts)
+		ports, assignedKinds, err := assignDiscoveredPorts(service.Kinds, service.Kind, service.Ports, usedPorts)
 		if err != nil {
 			return result, err
 		}
 		service.Ports = ports
-		if service.Kind != "" {
-			result.Assigned = append(result.Assigned, discoveredPortAssignment(service.Name, service.Kind, ports))
-		}
+		for _, kind := range assignedKinds { result.Assigned = append(result.Assigned, discoveredPortAssignment(service.Name, kind, ports)) }
 		additions = append(additions, service)
 		result.Added = append(result.Added, service.Name)
 	}
@@ -305,7 +462,7 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 		services[name] = service
 	}
 	for _, service := range additions {
-		services[service.Name] = discoveredModelService(service)
+		services[service.Name] = discoveredModelService(service, manifest.Version)
 	}
 	for _, name := range ServiceNames(manifest) {
 		if matched[name] || !isMissingDirectChildServicePath(workspace, manifest.Services[name].Path) {
@@ -352,7 +509,7 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 		appendDiscoveredDescription(value, updates[name])
 	}
 	for _, service := range additions {
-		value, err := discoveredServiceNode(service)
+		value, err := discoveredServiceNode(service, manifest.Version)
 		if err != nil {
 			return result, err
 		}
@@ -367,53 +524,54 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 	return result, nil
 }
 
-func discoveredModelService(service DiscoveredService) model.Service {
-	return model.Service{
+func discoveredModelService(service DiscoveredService, version int) model.Service {
+	result := model.Service{
 		Path:   service.Path,
 		Policy: service.Policy,
-		Kind:   service.Kind,
 		Discovery: model.ServiceDiscovery{
-			Analyzer: service.Analyzer,
-			Bindings: append([]string(nil), service.Bindings...),
+			Analyzer:         service.Analyzer,
 		},
 		Runner: service.Runner,
 		Ports:  copyDiscoveredPorts(service.Ports),
-		Health: service.Health,
 	}
+	if version >= 3 {
+		result.Kinds = append([]string(nil), service.Kinds...)
+		result.Discovery.Certifier = service.Certifier
+		result.Discovery.Registry = service.Registry
+		result.Discovery.Identity = service.Identity
+		result.Discovery.ConsumerBindings = append([]string(nil), service.Bindings...)
+		result.Discovery.Consumers = discoveredConsumerDrivers(service.Consumers)
+		if isolation := discoveredConsumerIsolation(service.Consumers); isolation != nil {
+			result.Isolation = *isolation
+		}
+		result.HealthChecks = normalizedDiscoveredHealthChecks(service.HealthChecks)
+	} else {
+		result.Kind = service.Kind
+		result.Discovery.Bindings = append([]string(nil), service.Bindings...)
+		result.Health = service.Health
+	}
+	return result
 }
 
-func discoveredPolicy(manifest *model.Manifest, service DiscoveredService, explicit string) (string, error) {
-	if service.Framework == "" || service.DiscoveryDriver == "" || service.Kind == "" {
-		return explicit, nil
+func certifyDiscoveredService(manifest *model.Manifest, service DiscoveredService, explicit string) (string, string, error) {
+	if manifest.Version < 3 && service.Runtime != "spring-boot" {
+		return explicit, "", nil
 	}
-	compatible := func(policy model.Policy) bool {
-		if policy.Drivers.Framework != service.Framework || policy.Drivers.Discovery != service.DiscoveryDriver || policy.Drivers.ConfigSource != "repository" || policy.Drivers.Materializer != "yaml-overlay" {
-			return false
-		}
-		_, found := policy.Routing.Servers[service.Kind]
-		return found
+	certification, _, err := CertifyRepository(manifest, RepositoryCertificationRequest{
+		Name:           service.Name,
+		Framework:      service.Framework,
+		Runtime:        service.Runtime,
+		Discovery:      service.DiscoveryDriver,
+		Kind:           service.Kind,
+		Kinds:          append([]string(nil), service.Kinds...),
+		ExplicitPolicy: explicit,
+		Registrations:  append([]RepositoryRegistrationEvidence(nil), service.Registrations...),
+		Consumers:      append([]RepositoryConsumerEvidence(nil), service.Consumers...),
+	})
+	if err != nil {
+		return "", "", err
 	}
-	if explicit != "" {
-		policy, found := manifest.Policies[explicit]
-		if found && compatible(policy) {
-			return explicit, nil
-		}
-		return "", fmt.Errorf("discovered %s service %q has incompatible policy %q; configure a %s/%s/repository/yaml-overlay policy with a %s server route", service.Framework, service.Name, explicit, service.Framework, service.DiscoveryDriver, service.Kind)
-	}
-	candidates := make([]string, 0)
-	for _, name := range sortedPolicyNames(manifest) {
-		if compatible(manifest.Policies[name]) {
-			candidates = append(candidates, name)
-		}
-	}
-	if len(candidates) != 1 {
-		detail := "none"
-		if len(candidates) > 0 {
-			detail = strings.Join(candidates, ", ")
-		}
-		return "", fmt.Errorf("discovered %s service %q requires exactly one compatible %s/%s/repository/yaml-overlay policy with a %s server route; candidates: %s", service.Framework, service.Name, service.Framework, service.DiscoveryDriver, service.Kind, detail)
-	}
-	return candidates[0], nil
+	return certification.Policy, certification.Certifier, nil
 }
 
 func discoveredPortAssignment(name string, kind string, ports map[string]int) string {
@@ -435,6 +593,8 @@ func copyDiscoveredServices(services []DiscoveredService) []DiscoveredService {
 	for index, service := range services {
 		copied[index] = service
 		copied[index].Ports = copyDiscoveredPorts(service.Ports)
+		copied[index].Registrations = append([]RepositoryRegistrationEvidence(nil), service.Registrations...)
+		copied[index].Consumers = append([]RepositoryConsumerEvidence(nil), service.Consumers...)
 	}
 	return copied
 }
@@ -450,6 +610,19 @@ func copyDiscoveredPorts(ports map[string]int) map[string]int {
 	return copied
 }
 
+func normalizedDiscoveredHealthChecks(checks []model.ServiceHealthCheck) []model.ServiceHealthCheck {
+	if len(checks) == 0 {
+		return nil
+	}
+	result := append([]model.ServiceHealthCheck(nil), checks...)
+	for index := range result {
+		if result[index].Command == nil {
+			result[index].Command = []string{}
+		}
+	}
+	return result
+}
+
 func claimDiscoveredPorts(used map[int]bool, ports map[string]int) {
 	for _, port := range ports {
 		used[port] = true
@@ -457,46 +630,90 @@ func claimDiscoveredPorts(used map[int]bool, ports map[string]int) {
 }
 
 func assignDiscoveredPort(kind string, ports map[string]int, used map[int]bool) (map[string]int, bool, error) {
+	assigned, kinds, err := assignDiscoveredPorts(nil, kind, ports, used)
+	return assigned, len(kinds) > 0, err
+}
+
+func assignDiscoveredPorts(kinds []string, legacyKind string, ports map[string]int, used map[int]bool) (map[string]int, []string, error) {
 	claimDiscoveredPorts(used, ports)
-	if kind != RepositoryKindHTTP && kind != RepositoryKindRPC {
-		return ports, false, nil
+	if len(kinds) == 0 && legacyKind != "" {
+		kinds = []string{legacyKind}
 	}
-	if _, found := ports[kind]; found {
-		return ports, false, nil
-	}
-	for port := firstDiscoveredLocalPort; port <= 65535; port++ {
-		if used[port] {
+	kinds = append([]string(nil), kinds...)
+	sort.Strings(kinds)
+	assigned := copyDiscoveredPorts(ports)
+	assignedKinds := make([]string, 0)
+	for _, kind := range kinds {
+		if kind != RepositoryKindHTTP && kind != RepositoryKindRPC {
 			continue
 		}
-		assigned := copyDiscoveredPorts(ports)
+		if _, found := assigned[kind]; found {
+			continue
+		}
+		port := firstDiscoveredLocalPort
+		for ; port <= 65535 && used[port]; port++ {
+		}
+		if port > 65535 {
+			return nil, nil, errors.New("no local port is available for a discovered HTTP/RPC listener")
+		}
 		if assigned == nil {
-			assigned = make(map[string]int, 1)
+			assigned = make(map[string]int, len(kinds))
 		}
 		assigned[kind] = port
 		used[port] = true
-		return assigned, true, nil
+		assignedKinds = append(assignedKinds, kind)
 	}
-	return nil, false, errors.New("no local port is available for a discovered HTTP/RPC service")
+	return assigned, assignedKinds, nil
 }
 
-func backfillDiscoveredDescription(existing model.Service, discovered DiscoveredService) (model.Service, bool) {
+func backfillDiscoveredDescription(existing model.Service, discovered DiscoveredService, version int) (model.Service, bool) {
 	changed := false
 	if existing.Policy == "" && discovered.Policy != "" {
 		existing.Policy = discovered.Policy
 		changed = true
 	}
-	if existing.Kind == "" && discovered.Kind != "" {
+	if version < 3 && existing.Kind == "" && discovered.Kind != "" {
 		existing.Kind = discovered.Kind
 		changed = true
 	}
+	if version >= 3 && len(existing.Kinds) == 0 && len(discovered.Kinds) > 0 {
+		existing.Kinds = append([]string(nil), discovered.Kinds...)
+		changed = true
+	}
 	if existing.Discovery.Analyzer == "" {
-		existing.Discovery = model.ServiceDiscovery{
-			Analyzer: discovered.Analyzer,
-			Bindings: append([]string(nil), discovered.Bindings...),
+		existing.Discovery.Analyzer = discovered.Analyzer
+		if version >= 3 {
+			existing.Discovery.Certifier = discovered.Certifier
+			existing.Discovery.Registry = discovered.Registry
+			existing.Discovery.Identity = discovered.Identity
+			existing.Discovery.ConsumerBindings = append([]string(nil), discovered.Bindings...)
+		} else {
+			existing.Discovery.Bindings = append([]string(nil), discovered.Bindings...)
 		}
 		changed = true
 	}
-	if existing.Health.Type == "" && discovered.Health.Type != "" {
+	if version >= 3 {
+		consumerDrivers := discoveredConsumerDrivers(discovered.Consumers)
+		if !reflect.DeepEqual(existing.Discovery.Consumers, consumerDrivers) {
+			existing.Discovery.Consumers = consumerDrivers
+			isolation := discoveredConsumerIsolation(discovered.Consumers)
+			if isolation == nil {
+				existing.Isolation = model.ServiceIsolation{}
+			} else {
+				existing.Isolation = *isolation
+			}
+			changed = true
+		}
+	}
+	if len(existing.Runner.Prepare) == 0 && len(discovered.Runner.Prepare) > 0 {
+		existing.Runner.Prepare = append([]string(nil), discovered.Runner.Prepare...)
+		changed = true
+	}
+	if version >= 3 && len(existing.HealthChecks) == 0 && len(discovered.HealthChecks) > 0 {
+		existing.HealthChecks = normalizedDiscoveredHealthChecks(discovered.HealthChecks)
+		changed = true
+	}
+	if version < 3 && existing.Health.Type == "" && discovered.Health.Type != "" {
 		existing.Health = discovered.Health
 		changed = true
 	}
@@ -516,16 +733,57 @@ func appendDiscoveredDescription(mapping *yaml.Node, service model.Service) {
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: service.Kind},
 		)
 	}
+	if mappingValue(mapping, "kinds") == nil && len(service.Kinds) > 0 {
+		value := &yaml.Node{}
+		value.Encode(service.Kinds)
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kinds"},
+			value,
+		)
+	}
 	if mappingValue(mapping, "discovery") == nil && service.Discovery.Analyzer != "" {
 		value := &yaml.Node{}
 		value.Encode(discoveredDiscovery{
-			Analyzer: service.Discovery.Analyzer,
-			Bindings: append([]string(nil), service.Discovery.Bindings...),
+			Analyzer:         service.Discovery.Analyzer,
+			Certifier:        service.Discovery.Certifier,
+			Registry:         service.Discovery.Registry,
+			Identity:         service.Discovery.Identity,
+			ConsumerBindings: append([]string(nil), service.Discovery.ConsumerBindings...),
+			Consumers:        append([]string(nil), service.Discovery.Consumers...),
+			Bindings:         append([]string(nil), service.Discovery.Bindings...),
 		})
 		mapping.Content = append(mapping.Content,
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "discovery"},
 			value,
 		)
+	}
+	discovery := mappingValue(mapping, "discovery")
+	if discovery != nil && discovery.Kind == yaml.MappingNode {
+		if len(service.Discovery.Consumers) > 0 {
+			value := &yaml.Node{}
+			value.Encode(service.Discovery.Consumers)
+			setMappingValue(discovery, "consumers", value)
+		} else {
+			removeMappingEntries(discovery, []string{"consumers"})
+		}
+	}
+	if len(service.Isolation.Consumers) > 0 {
+		value := &yaml.Node{}
+		value.Encode(service.Isolation)
+		setMappingValue(mapping, "isolation", value)
+	} else {
+		removeMappingEntries(mapping, []string{"isolation"})
+	}
+	if len(service.Runner.Prepare) > 0 {
+		runner := mappingValue(mapping, "runner")
+		if runner != nil && runner.Kind == yaml.MappingNode && mappingValue(runner, "prepare") == nil {
+			value := &yaml.Node{}
+			value.Encode(service.Runner.Prepare)
+			runner.Content = append(runner.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "prepare"},
+				value,
+			)
+		}
 	}
 	if len(service.Ports) > 0 {
 		value := mappingValue(mapping, "ports")
@@ -558,6 +816,14 @@ func appendDiscoveredDescription(mapping *yaml.Node, service model.Service) {
 		value.Encode(service.Health)
 		mapping.Content = append(mapping.Content,
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "health"},
+			value,
+		)
+	}
+	if mappingValue(mapping, "healthChecks") == nil && len(service.HealthChecks) > 0 {
+		value := &yaml.Node{}
+		value.Encode(service.HealthChecks)
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "healthChecks"},
 			value,
 		)
 	}
@@ -689,6 +955,19 @@ func mappingValue(mapping *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
+func setMappingValue(mapping *yaml.Node, key string, value *yaml.Node) {
+	for index := 0; index+1 < len(mapping.Content); index += 2 {
+		if mapping.Content[index].Value == key {
+			mapping.Content[index+1] = value
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		value,
+	)
+}
+
 func removeMappingEntries(mapping *yaml.Node, names []string) {
 	remove := make(map[string]bool, len(names))
 	for _, name := range names {
@@ -704,25 +983,38 @@ func removeMappingEntries(mapping *yaml.Node, names []string) {
 	mapping.Content = content
 }
 
-func discoveredServiceNode(service DiscoveredService) (*yaml.Node, error) {
+func discoveredServiceNode(service DiscoveredService, version int) (*yaml.Node, error) {
 	value := &yaml.Node{}
-	err := value.Encode(discoveredEntry{
+	entry := discoveredEntry{
 		Path:   service.Path,
 		Policy: service.Policy,
-		Kind:   service.Kind,
 		Discovery: discoveredDiscovery{
 			Analyzer: service.Analyzer,
-			Bindings: append([]string(nil), service.Bindings...),
 		},
 		Runner: discoveredRunner{
 			Workdir:  service.Runner.Workdir,
 			Artifact: service.Runner.Artifact,
+			Prepare:  append([]string(nil), service.Runner.Prepare...),
 			Build:    append([]string(nil), service.Runner.Build...),
 			Run:      append([]string(nil), service.Runner.Run...),
 		},
-		Ports: copyDiscoveredPorts(service.Ports),
-		Health: discoveredHealthFor(service.Health),
-	})
+		Ports:        copyDiscoveredPorts(service.Ports),
+	}
+	if version >= 3 {
+		entry.Kinds = append([]string(nil), service.Kinds...)
+		entry.Discovery.Certifier = service.Certifier
+		entry.Discovery.Registry = service.Registry
+		entry.Discovery.Identity = service.Identity
+		entry.Discovery.ConsumerBindings = append([]string(nil), service.Bindings...)
+		entry.Discovery.Consumers = discoveredConsumerDrivers(service.Consumers)
+		entry.Isolation = discoveredConsumerIsolation(service.Consumers)
+		entry.HealthChecks = append([]model.ServiceHealthCheck(nil), service.HealthChecks...)
+	} else {
+		entry.Kind = service.Kind
+		entry.Discovery.Bindings = append([]string(nil), service.Bindings...)
+		entry.Health = discoveredHealthFor(service.Health)
+	}
+	err := value.Encode(entry)
 	if err != nil {
 		return nil, fmt.Errorf("encode discovered service %q: %w", service.Name, err)
 	}

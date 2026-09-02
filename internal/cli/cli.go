@@ -26,8 +26,7 @@ type App struct {
 	Executable                string
 	Version                   string
 	VersionDate               string
-	PolicyEditor              func(context.Context, string) error
-	CatalogEditor             func(context.Context, string) error
+	WorkspaceEditor           func(context.Context, string) error
 	StartReplacementConfirmer func(context.Context, []string) (bool, error)
 	SingleSelector            func(context.Context, *os.File, io.Writer, selector.Prompt, []selector.Candidate) (selector.Candidate, bool, error)
 }
@@ -75,10 +74,8 @@ func (app App) Run(arguments []string) int {
 		return app.runInit(arguments[1:])
 	case "config":
 		return app.runConfig(arguments[1:])
-	case "catalog":
-		return app.runCatalog(arguments[1:])
-	case "policy":
-		return app.runPolicy(arguments[1:])
+	case "workspace":
+		return app.runWorkspaceManifest(arguments[1:])
 	case "plugins":
 		return app.runPlugins(arguments[1:])
 	case "services":
@@ -144,10 +141,8 @@ func (app App) runHelp(arguments []string) int {
 		return app.runInit([]string{"--help"})
 	case "config":
 		return app.runConfig([]string{"--help"})
-	case "catalog":
-		return app.runCatalog([]string{"--help"})
-	case "policy":
-		return app.runPolicy([]string{"--help"})
+	case "workspace":
+		return app.runWorkspaceManifest([]string{"--help"})
 	case "plugins":
 		return app.runPlugins([]string{"--help"})
 	case "services":
@@ -211,7 +206,7 @@ func (app App) runStart(arguments []string) int {
 	tail := flags.Bool("tail", false, "stream plain-text logs after startup")
 	withDependencies := flags.Bool("with-dependencies", false, "include transitive local service dependencies")
 	skipBuild := flags.Bool("skip-build", false, "skip build; artifacts under current runtime cannot be reused after a fresh start")
-	skipVerify := flags.Bool("skip-verify", false, "skip service health checks")
+	skipVerify := flags.Bool("skip-verify", false, "skip health, listener, and registry verification")
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --start [flags] [service...]")
 		flags.PrintDefaults()
@@ -354,7 +349,13 @@ func (app App) runStop(arguments []string) int {
 	if *all && len(flags.Args()) > 0 {
 		return app.fail(errors.New("services --stop --all cannot be combined with service names"))
 	}
-	workspace, err := convenruntime.OpenWorkspace(common.options(app.Cwd))
+	var workspace *convenruntime.WorkspaceData
+	var err error
+	if *all {
+		workspace, err = convenruntime.OpenWorkspaceForStopAll(common.options(app.Cwd))
+	} else {
+		workspace, err = convenruntime.OpenWorkspace(common.options(app.Cwd))
+	}
 	if err != nil {
 		return app.fail(err)
 	}
@@ -794,20 +795,12 @@ func (app App) withDefaults() App {
 	if app.VersionDate == "" {
 		app.VersionDate = "unknown"
 	}
-	if app.PolicyEditor == nil {
+	if app.WorkspaceEditor == nil {
 		input := app.Input
 		output := app.Output
 		errorOutput := app.Error
-		app.PolicyEditor = func(ctx context.Context, path string) error {
-			return launchPolicyEditor(ctx, input, output, errorOutput, path)
-		}
-	}
-	if app.CatalogEditor == nil {
-		input := app.Input
-		output := app.Output
-		errorOutput := app.Error
-		app.CatalogEditor = func(ctx context.Context, path string) error {
-			return launchCatalogEditor(ctx, input, output, errorOutput, path)
+		app.WorkspaceEditor = func(ctx context.Context, path string) error {
+			return launchWorkspaceEditor(ctx, input, output, errorOutput, path)
 		}
 	}
 	if app.StartReplacementConfirmer == nil {
@@ -837,8 +830,7 @@ These are common Conven commands:
 set up and configure a workspace
    init       Initialize a Conven workspace
    config     View or change Conven settings
-   catalog    Edit or validate the workspace service catalog
-   policy     Edit, import, or reset the workspace manifest
+   workspace  Edit, validate, import, or reset the workspace manifest
    plugins    Install, list, remove, or run plugins
 
 run and inspect local services
@@ -869,16 +861,15 @@ func (app App) printUnknownCommand(command string) {
 	style := terminal.New(app.Error)
 	fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: %s is not a conven command. See 'conven --help'.", quoteCommand(command))))
 	suggestions := similarCommands(command, []string{
-		"catalog",
 		"config",
 		"doctor",
 		"help",
 		"init",
 		"plugins",
-		"policy",
 		"services",
 		"status",
 		"version",
+		"workspace",
 	})
 	if len(suggestions) == 0 {
 		return

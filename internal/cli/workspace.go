@@ -25,10 +25,13 @@ func (app App) runInit(arguments []string) int {
 	if len(flags.Args()) != 0 {
 		return app.fail(errors.New("init does not accept arguments"))
 	}
+	if err := app.requireWorkspaceManifestV3(); err != nil {
+		return app.fail(err)
+	}
 	var result config.InitResult
 	var err error
 	if *local {
-		application := []byte("version: 2\nworkspace:\n  name: local-services\nenvironments: {}\nservices: {}\n")
+		application := []byte("version: 3\nworkspace:\n  name: local-services\n  disabledBindings: []\nenvironments: {}\nservices: {}\n")
 		result, err = config.InitLocalWorkspaceDetailsWithPolicySpecification(app.Cwd, application, workspacePolicySpecification())
 	} else {
 		result, err = config.InitWorkspaceDetailsWithPolicySpecification(app.Cwd, examples.ApplicationYAML, workspacePolicySpecification())
@@ -115,6 +118,13 @@ func (app App) runDiscover(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
+	manifest, err := config.Load(manifestPath)
+	if err != nil {
+		return app.fail(fmt.Errorf("services --registry aborted before Conven updated the manifest: %w", err))
+	}
+	if manifest.Version < 3 {
+		return app.fail(fmt.Errorf("Conven manifest %q uses version %d; run conven workspace --migrate before services --registry", manifestPath, manifest.Version))
+	}
 	result, err := config.DiscoverWorkspace(manifestPath, workspace, *prune)
 	if err != nil {
 		return app.fail(fmt.Errorf("services --registry aborted before Conven updated the manifest: %w", err))
@@ -154,7 +164,12 @@ func (app App) runDiscover(arguments []string) int {
 			details = append(details, "Missing repositories kept: "+strings.Join(result.Missing, ", "))
 			actions = append(actions, "conven services --registry --prune")
 		}
-		if len(result.Skipped) > 0 {
+		if len(result.SkippedDetails) > 0 {
+			details = append(details, "Skipped repositories:")
+			for _, detail := range result.SkippedDetails {
+				details = append(details, "  "+detail)
+			}
+		} else if len(result.Skipped) > 0 {
 			details = append(details, "Skipped repositories: "+strings.Join(result.Skipped, ", "))
 		}
 		printWarningBlock(app.Error, "Service registry scan requires review.", details, actions)
@@ -255,6 +270,9 @@ func (app App) runConfig(arguments []string) int {
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
 	}
+	if err := app.requireWorkspaceManifestV3(); err != nil {
+		return app.fail(err)
+	}
 	values := flags.Args()
 	if *list {
 		if *unset || len(values) != 0 {
@@ -331,7 +349,7 @@ func (app App) runRestart(arguments []string) int {
 	tail := flags.Bool("tail", false, "stream plain-text logs after restart")
 	dashboard := flags.Bool("dashboard", false, "open the interactive log dashboard after restart")
 	skipBuild := flags.Bool("skip-build", false, "skip build and reuse artifacts from the fixed current runtime")
-	skipVerify := flags.Bool("skip-verify", false, "skip service health checks")
+	skipVerify := flags.Bool("skip-verify", false, "skip health, listener, and registry verification")
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --restart [flags] [service...]")
 		flags.PrintDefaults()

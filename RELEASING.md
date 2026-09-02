@@ -207,9 +207,12 @@ go vet ./...
 go build -o /tmp/conven-release ./cmd/conven
 /tmp/conven-release --version
 test -f examples/application.yaml
+grep -Eq '^version:[[:space:]]+3$' examples/application.yaml
+grep -Fq 'adapter-smoke:' .github/workflows/ci.yml
+for runtime in jdk17 node22 python bun; do grep -Fq "$runtime" .github/workflows/ci.yml; done
 test ! -e examples/loom.yaml
 test ! -e examples/conven.yaml
-test -f examples/workspace/catalog.yaml
+test ! -e examples/workspace/catalog.yaml
 test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
 test -f examples/workspace/README.md
@@ -237,10 +240,10 @@ https://github.com/leo1394/homebrew-conven
 
 For a release that changes workspace onboarding or plugins, smoke-test the
 built binary in an isolated workspace. The first `init` must create the
-manifest plus all three workspace guidance files, and a repeated `init` must
+manifest plus both workspace guidance files, and a repeated `init` must
 preserve every existing byte.
-`services --registry` may update `.conven/conven.yaml`, but must not modify the
-catalog. Omitting the source from `policy --import` must select the
+`services --registry` may update `.conven/conven.yaml`. Omitting the source from
+`workspace --import` must select the
 workspace-root YAML candidates interactively; automated checks must pass the
 source explicitly:
 
@@ -258,10 +261,9 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   tee "$CONVEN_SMOKE_INIT_OUTPUT"
 grep -Fq '==> Initialized Conven workspace' "$CONVEN_SMOKE_INIT_OUTPUT"
 grep -Fq '  - Manifest: ' "$CONVEN_SMOKE_INIT_OUTPUT"
-/tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" catalog --validate
+/tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" workspace --validate
 /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" status
 for CONVEN_SMOKE_ASSET in \
-  .conven/catalog.yaml \
   CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
   README.md
 do
@@ -281,7 +283,6 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
 grep -Fq 'language: zh-CN' \
   "$CONVEN_SMOKE_CHINESE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
 CONVEN_ASSET_SHA_BEFORE="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
 CONVEN_SMOKE_REINIT_OUTPUT="$CONVEN_SMOKE_ROOT/reinit-output.txt"
@@ -289,31 +290,24 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init | \
   tee "$CONVEN_SMOKE_REINIT_OUTPUT"
 for CONVEN_SMOKE_ASSET in \
-  .conven/catalog.yaml \
   CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
   README.md
 do
   grep -Fq "  - $CONVEN_SMOKE_ASSET Skipped" "$CONVEN_SMOKE_REINIT_OUTPUT"
 done
 CONVEN_ASSET_SHA_AFTER="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
 test "$CONVEN_ASSET_SHA_BEFORE" = "$CONVEN_ASSET_SHA_AFTER"
 
-CONVEN_CATALOG_SHA_BEFORE="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml")"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" services --registry
-CONVEN_CATALOG_SHA_AFTER="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml")"
-test "$CONVEN_CATALOG_SHA_BEFORE" = "$CONVEN_CATALOG_SHA_AFTER"
 
 cp "$CONVEN_SMOKE_WORKSPACE/.conven/conven.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/application.yaml"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" \
-  policy --import "$CONVEN_SMOKE_WORKSPACE/application.yaml"
+  workspace --import "$CONVEN_SMOKE_WORKSPACE/application.yaml"
 ```
 
 The plugin regression gate must additionally prove all of these contracts:
@@ -714,10 +708,15 @@ test. Do not run connection or process-recovery tests against production
 infrastructure.
 
 Before running the commands below, prepare
-`.acceptance/import-candidate.yaml` as a complete valid Conven v1 manifest for the
+`.acceptance/import-candidate.yaml` as a complete valid Conven Manifest v3 for the
 same disposable service repositories. Make it differ from the `init` result in
 at least `workspace.name`; it must contain no credentials. This exercises a real
 replacement and backup rather than the byte-identical no-op path.
+
+Also keep one disposable v1/v2 fixture. All commands except help, version,
+`workspace --migrate`, and the recovery-only `services --stop-all` must reject
+it. Migration must create a backup, preserve runner/health semantics, and be
+byte-identical on a second invocation.
 
 At minimum, verify:
 
@@ -733,7 +732,7 @@ test "$CONVEN_MANIFEST_SHA" = "$(shasum -a 256 .conven/conven.yaml | awk '{print
 mkdir -p .acceptance/descendant
 CONVEN_IMPORT_SOURCE=.acceptance/import-candidate.yaml
 CONVEN_IMPORT_SOURCE_SHA=$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')
-(cd .acceptance/descendant && "$CONVEN_BIN" policy --import ../import-candidate.yaml)
+(cd .acceptance/descendant && "$CONVEN_BIN" workspace --import ../import-candidate.yaml)
 test "$CONVEN_IMPORT_SOURCE_SHA" = "$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')"
 cmp "$CONVEN_IMPORT_SOURCE" .conven/conven.yaml
 test -n "$(find .conven/backups -type f -name 'conven.yaml-before-import-*.bak' -print -quit)"

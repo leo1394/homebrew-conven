@@ -17,37 +17,92 @@ import (
 	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
-func (app App) runPolicy(arguments []string) int {
+func (app App) runWorkspaceManifest(arguments []string) int {
 	if len(arguments) == 0 {
-		app.printPolicyUsage(app.Error)
+		app.printWorkspaceManifestUsage(app.Error)
 		return 2
 	}
 	action := arguments[0]
 	remaining := arguments[1:]
+	if action != "-h" && action != "--help" && action != "help" && action != "--migrate" {
+		if err := app.requireWorkspaceManifestV3(); err != nil {
+			return app.fail(err)
+		}
+	}
 	switch action {
 	case "-h", "--help", "help":
-		app.printPolicyUsage(app.Output)
+		app.printWorkspaceManifestUsage(app.Output)
 		return 0
 	case "--edit":
-		return app.runPolicyEdit(remaining)
+		return app.runWorkspaceManifestEdit(remaining)
+	case "--validate":
+		return app.runWorkspaceManifestValidate(remaining)
+	case "--migrate":
+		return app.runWorkspaceManifestMigrate(remaining)
 	case "--import":
-		return app.runPolicyImport(remaining)
+		return app.runWorkspaceManifestImport(remaining)
 	case "--reset":
-		return app.runPolicyReset(remaining)
+		return app.runWorkspaceManifestReset(remaining)
 	default:
 		style := terminal.New(app.Error)
-		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: unknown policy action %q", action)))
-		app.printPolicyUsage(app.Error)
+		fmt.Fprintln(app.Error, style.Failure(fmt.Sprintf("conven: unknown workspace action %q", action)))
+		app.printWorkspaceManifestUsage(app.Error)
 		return 2
 	}
 }
 
-func (app App) runPolicyImport(arguments []string) int {
-	flags := flag.NewFlagSet("policy --import", flag.ContinueOnError)
+func (app App) requireWorkspaceManifestV3() error {
+	path, _, err := config.ResolvePath(app.Cwd)
+	if err != nil {
+		return nil
+	}
+	manifest, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	if manifest.Version < 3 {
+		return fmt.Errorf("Conven manifest %q uses version %d; run conven workspace --migrate before using this command", path, manifest.Version)
+	}
+	return nil
+}
+
+func (app App) runWorkspaceManifestMigrate(arguments []string) int {
+	flags := flag.NewFlagSet("workspace --migrate", flag.ContinueOnError)
+	flags.SetOutput(app.Error)
+	flags.Usage = func() {
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven workspace --migrate")
+		flags.PrintDefaults()
+		fmt.Fprintln(flags.Output(), "\nAtomically migrates a version 1 or 2 manifest to version 3 after verifying that no workspace services are running.")
+	}
+	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
+		return code
+	}
+	if len(flags.Args()) != 0 {
+		return app.fail(errors.New("workspace --migrate does not accept arguments"))
+	}
+	result, err := config.MigrateWorkspaceManifest(app.Cwd)
+	if err != nil {
+		return app.fail(err)
+	}
+	style := terminal.New(app.Output)
+	if !result.Changed {
+		fmt.Fprintln(app.Output, style.Stage("Conven workspace manifest already uses version 3"))
+	} else {
+		fmt.Fprintln(app.Output, style.Stage(fmt.Sprintf("Migrated Conven workspace manifest from version %d to version 3", result.From)))
+	}
+	fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(result.Path)))
+	if result.BackupPath != "" {
+		fmt.Fprintln(app.Output, style.Detail("Backup: "+style.Identifier(result.BackupPath)))
+	}
+	return 0
+}
+
+func (app App) runWorkspaceManifestImport(arguments []string) int {
+	flags := flag.NewFlagSet("workspace --import", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
 	edit := flags.Bool("edit", false, "edit a private import draft before validation and publication")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --import [yaml-file] [--edit]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven workspace --import [yaml-file] [--edit]")
 		flags.PrintDefaults()
 		fmt.Fprintln(flags.Output(), "\nImports the YAML file as the entire .conven/conven.yaml for the workspace resolved from cwd.")
 		fmt.Fprintln(flags.Output(), "When yaml-file is omitted, selects a YAML file from the workspace root interactively.")
@@ -58,7 +113,7 @@ func (app App) runPolicyImport(arguments []string) int {
 		return code
 	}
 	if len(flags.Args()) > 1 {
-		return app.fail(errors.New("policy --import accepts at most one YAML file"))
+		return app.fail(errors.New("workspace --import accepts at most one YAML file"))
 	}
 	importPath := ""
 	if len(flags.Args()) == 1 {
@@ -73,23 +128,23 @@ func (app App) runPolicyImport(arguments []string) int {
 			return app.fail(err)
 		}
 		if len(candidates) == 0 {
-			return app.fail(errors.New("no YAML policy files were found in the workspace root; specify a YAML filename"))
+			return app.fail(errors.New("no YAML manifest files were found in the workspace root; specify a YAML filename"))
 		}
 		selected, confirmed, err := app.SingleSelector(app.Context, app.Input, app.Output, selector.Prompt{
-			Title:                "Select a policy file",
-			ConfirmationLabel:    "Importing policy file",
-			EmptySelectionNotice: "Select one policy file before confirming.",
+			Title:                "Select a workspace manifest",
+			ConfirmationLabel:    "Importing workspace manifest",
+			EmptySelectionNotice: "Select one manifest file before confirming.",
 		}, candidates)
 		if err != nil {
 			if errors.Is(err, selector.ErrNotTerminal) {
-				return app.fail(errors.New("policy import selection requires an interactive terminal; specify a YAML filename explicitly"))
+				return app.fail(errors.New("workspace import selection requires an interactive terminal; specify a YAML filename explicitly"))
 			}
 			return app.fail(err)
 		}
 		if !confirmed {
 			style := terminal.New(app.Output)
-			fmt.Fprintln(app.Output, style.Stage("Policy import cancelled"))
-			fmt.Fprintln(app.Output, style.Detail("Conven policy manifest was not changed."))
+			fmt.Fprintln(app.Output, style.Stage("Workspace import cancelled"))
+			fmt.Fprintln(app.Output, style.Detail("Conven workspace manifest was not changed."))
 			return 0
 		}
 		importPath = filepath.Join(workspace, selected.Name)
@@ -97,7 +152,7 @@ func (app App) runPolicyImport(arguments []string) int {
 	var editImport func(string) error
 	if *edit {
 		editImport = func(path string) error {
-			return app.PolicyEditor(app.Context, path)
+			return app.WorkspaceEditor(app.Context, path)
 		}
 	}
 	result, err := config.ImportWorkspacePolicy(app.Cwd, importPath, editImport)
@@ -105,11 +160,11 @@ func (app App) runPolicyImport(arguments []string) int {
 		return app.fail(err)
 	}
 	style := terminal.New(app.Output)
-	stage := "Replaced Conven policy manifest"
+	stage := "Replaced Conven workspace manifest"
 	if !result.Changed {
-		stage = "Conven policy manifest already matches import"
+		stage = "Conven workspace manifest already matches import"
 	} else if result.Created {
-		stage = "Imported Conven policy manifest"
+		stage = "Imported Conven workspace manifest"
 	}
 	fmt.Fprintln(app.Output, style.Stage(stage))
 	fmt.Fprintln(app.Output, style.Detail("Source: "+style.Identifier(result.SourcePath)))
@@ -117,7 +172,7 @@ func (app App) runPolicyImport(arguments []string) int {
 	if result.BackupPath != "" {
 		fmt.Fprintln(app.Output, style.Detail("Backup: "+style.Identifier(result.BackupPath)))
 	}
-	printWarningBlock(app.Error, "Policy import treats the source as the complete workspace manifest.", []string{
+	printWarningBlock(app.Error, "Workspace import treats the source as the complete workspace manifest.", []string{
 		"Repository scan results were not merged.",
 	}, []string{
 		"conven doctor",
@@ -129,7 +184,7 @@ func (app App) runPolicyImport(arguments []string) int {
 func workspaceYAMLCandidates(workspace string) ([]selector.Candidate, error) {
 	entries, err := os.ReadDir(workspace)
 	if err != nil {
-		return nil, fmt.Errorf("read workspace root %q for policy import: %w", workspace, err)
+		return nil, fmt.Errorf("read workspace root %q for manifest import: %w", workspace, err)
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -142,7 +197,7 @@ func workspaceYAMLCandidates(workspace string) ([]selector.Candidate, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return nil, fmt.Errorf("inspect policy import candidate %q: %w", filepath.Join(workspace, entry.Name()), err)
+			return nil, fmt.Errorf("inspect manifest import candidate %q: %w", filepath.Join(workspace, entry.Name()), err)
 		}
 		if !info.Mode().IsRegular() {
 			continue
@@ -157,11 +212,11 @@ func workspaceYAMLCandidates(workspace string) ([]selector.Candidate, error) {
 	return candidates, nil
 }
 
-func (app App) runPolicyEdit(arguments []string) int {
-	flags := flag.NewFlagSet("policy --edit", flag.ContinueOnError)
+func (app App) runWorkspaceManifestEdit(arguments []string) int {
+	flags := flag.NewFlagSet("workspace --edit", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --edit")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven workspace --edit")
 		flags.PrintDefaults()
 		fmt.Fprintln(flags.Output(), "\nvi, vim, and nvim use two-space YAML indentation with expandtab. Leading indentation tabs are normalized to the same two-column stops before validation; other YAML formatting is preserved exactly.")
 	}
@@ -169,29 +224,61 @@ func (app App) runPolicyEdit(arguments []string) int {
 		return code
 	}
 	if len(flags.Args()) != 0 {
-		return app.fail(errors.New("policy --edit does not accept arguments"))
+		return app.fail(errors.New("workspace --edit does not accept arguments"))
 	}
 	result, err := config.EditWorkspacePolicy(app.Cwd, func(path string) error {
-		return app.PolicyEditor(app.Context, path)
+		return app.WorkspaceEditor(app.Context, path)
 	})
 	if err != nil {
 		return app.fail(err)
 	}
 	style := terminal.New(app.Output)
 	if result.Changed {
-		fmt.Fprintln(app.Output, style.Stage("Updated Conven policy manifest"))
+		fmt.Fprintln(app.Output, style.Stage("Updated Conven workspace manifest"))
 	} else {
-		fmt.Fprintln(app.Output, style.Stage("Conven policy manifest unchanged"))
+		fmt.Fprintln(app.Output, style.Stage("Conven workspace manifest unchanged"))
 	}
 	fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(result.Path)))
 	return 0
 }
 
-func (app App) runPolicyReset(arguments []string) int {
-	flags := flag.NewFlagSet("policy --reset", flag.ContinueOnError)
+func (app App) runWorkspaceManifestValidate(arguments []string) int {
+	flags := flag.NewFlagSet("workspace --validate", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  conven policy --reset")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven workspace --validate")
+		flags.PrintDefaults()
+	}
+	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
+		return code
+	}
+	if len(flags.Args()) != 0 {
+		return app.fail(errors.New("workspace --validate does not accept arguments"))
+	}
+	workspace, err := config.FindWorkspace(app.Cwd)
+	if err != nil {
+		return app.fail(err)
+	}
+	path := config.ManifestPath(workspace)
+	manifest, err := config.Load(path)
+	if err != nil {
+		return app.fail(err)
+	}
+	style := terminal.New(app.Output)
+	fmt.Fprintln(app.Output, style.Success("✓ Conven workspace manifest is valid."))
+	fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(path)))
+	fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("Services: %d", len(manifest.Services))))
+	fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("Policies: %d", len(manifest.Policies))))
+	fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("Environments: %d", len(manifest.Environments))))
+	fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("Disabled bindings: %d", len(manifest.Workspace.DisabledBindings))))
+	return 0
+}
+
+func (app App) runWorkspaceManifestReset(arguments []string) int {
+	flags := flag.NewFlagSet("workspace --reset", flag.ContinueOnError)
+	flags.SetOutput(app.Error)
+	flags.Usage = func() {
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven workspace --reset")
 		flags.PrintDefaults()
 		fmt.Fprintln(flags.Output(), "\nDestructive: rebuilds the entire conven.yaml from read-only repository analysis.")
 		fmt.Fprintln(flags.Output(), "Company policies, environments, ports, dependencies, patches, manual runner changes, and comments cannot be recovered by scanning.")
@@ -200,7 +287,7 @@ func (app App) runPolicyReset(arguments []string) int {
 		return code
 	}
 	if len(flags.Args()) != 0 {
-		return app.fail(errors.New("policy --reset does not accept arguments"))
+		return app.fail(errors.New("workspace --reset does not accept arguments"))
 	}
 	result, err := config.ResetWorkspacePolicyFromScan(app.Cwd)
 	if err != nil {
@@ -208,11 +295,11 @@ func (app App) runPolicyReset(arguments []string) int {
 	}
 	style := terminal.New(app.Output)
 	if !result.Changed {
-		fmt.Fprintln(app.Output, style.Stage("Conven policy manifest already matches scan baseline"))
+		fmt.Fprintln(app.Output, style.Stage("Conven workspace manifest already matches scan baseline"))
 	} else if result.Created {
-		fmt.Fprintln(app.Output, style.Stage("Created Conven policy manifest from scan baseline"))
+		fmt.Fprintln(app.Output, style.Stage("Created Conven workspace manifest from scan baseline"))
 	} else {
-		fmt.Fprintln(app.Output, style.Stage("Reset Conven policy manifest to scan baseline"))
+		fmt.Fprintln(app.Output, style.Stage("Reset Conven workspace manifest to scan baseline"))
 	}
 	if len(result.Discovered) == 0 {
 		fmt.Fprintln(app.Output, style.Detail("Discovered services: none"))
@@ -228,7 +315,7 @@ func (app App) runPolicyReset(arguments []string) int {
 		if len(result.Skipped) > 0 {
 			warningDetails = append(warningDetails, "Skipped repositories: "+strings.Join(result.Skipped, ", "))
 		}
-		printWarningBlock(app.Error, "Policy reset rebuilds the complete workspace manifest.", warningDetails, []string{
+		printWarningBlock(app.Error, "Workspace reset rebuilds the complete workspace manifest.", warningDetails, []string{
 			"conven doctor",
 			"conven services --start --dry-run",
 		})
@@ -236,31 +323,31 @@ func (app App) runPolicyReset(arguments []string) int {
 	return 0
 }
 
-func (app App) printPolicyUsage(output io.Writer) {
+func (app App) printWorkspaceManifestUsage(output io.Writer) {
 	fmt.Fprint(output, `usage:
-  conven policy --edit
-  conven policy --import [yaml-file] [--edit]
-  conven policy --reset
+  conven workspace --edit
+  conven workspace --validate
+  conven workspace --migrate
+  conven workspace --import [yaml-file] [--edit]
+  conven workspace --reset
 
 --edit opens a temporary copy of the workspace's sole .conven/conven.yaml and
 publishes it only after strict validation. vi, vim, and nvim use two-space YAML
 indentation with expandtab; leading indentation tabs are normalized before
-validation without re-encoding the rest of the YAML. --import installs a local YAML file,
+validation without re-encoding the rest of the YAML. --validate checks the
+current manifest without changing it. --import installs a local YAML file,
 or interactively selects a .yaml/.yml file from the workspace root when omitted,
 as that entire manifest without merging repository scan results. Non-interactive
 use must specify the YAML filename. Schema validation does not prove that its
 service paths or infrastructure work.
+--migrate atomically upgrades a stopped version 1 or 2 workspace to version 3.
 --reset destructively rebuilds the manifest from repository facts that analyzers
 can prove.
 `)
 }
 
-func launchPolicyEditor(ctx context.Context, input *os.File, output io.Writer, errorOutput io.Writer, path string) error {
-	return launchEditor(ctx, input, output, errorOutput, path, "conven-policy-editor", "policy")
-}
-
-func launchCatalogEditor(ctx context.Context, input *os.File, output io.Writer, errorOutput io.Writer, path string) error {
-	return launchEditor(ctx, input, output, errorOutput, path, "conven-catalog-editor", "catalog")
+func launchWorkspaceEditor(ctx context.Context, input *os.File, output io.Writer, errorOutput io.Writer, path string) error {
+	return launchEditor(ctx, input, output, errorOutput, path, "conven-workspace-editor", "workspace")
 }
 
 func launchEditor(ctx context.Context, input *os.File, output io.Writer, errorOutput io.Writer, path string, commandName string, label string) error {

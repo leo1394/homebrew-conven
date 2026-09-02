@@ -264,7 +264,25 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		return nil, fail(err)
 	}
 	started := make(map[string]ServiceProcess, len(plan.Order))
+	observeRuntime := !options.SkipVerify && workspace.Manifest.Version >= 3
 	for _, group := range plan.Groups {
+		registryBaselines := make(map[string]*RegistrySnapshot, len(group))
+		for _, name := range group {
+			service := plan.Services[name]
+			if err := preflightServicePorts(service); err != nil {
+				return nil, fail(err)
+			}
+			if observeRuntime {
+				baseline, err := snapshotServiceRegistry(ctx, workspace.Root, service)
+				if err != nil {
+					return nil, fail(err)
+				}
+				if err := rejectLocalRegistryEntries(service, baseline); err != nil {
+					return nil, fail(err)
+				}
+				registryBaselines[name] = baseline
+			}
+		}
 		if len(group) > 1 {
 			fmt.Fprintf(output, "%s: %s\n", style.Stage("Starting dependency cycle together"), style.Identifier(strings.Join(group, ", ")))
 		}
@@ -282,6 +300,12 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 				return nil, fail(err)
 			}
 			process.Ports = copyPorts(service.Ports)
+			process.ConsumerIsolation = copyConsumerIsolation(service.ConsumerIsolation)
+			if options.SkipVerify {
+				process.Verification = "unverified(skip-verify)"
+			} else {
+				process.Verification = "started"
+			}
 			started[name] = process
 			session.Services = append(session.Services, process)
 			if err := workspace.Store.Save(session); err != nil {
@@ -292,12 +316,54 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 			for _, name := range group {
 				service := plan.Services[name]
 				process := started[name]
-				if err := WaitHealthy(ctx, process, service.Health); err != nil {
+				if err := WaitHealthyChecks(ctx, process, service.HealthChecks); err != nil {
 					fmt.Fprintf(output, "%s %s; last log lines:\n", style.Failure("✗ Health check failed:"), style.Identifier(name))
 					ShowLogs(context.Background(), session, []string{name}, false, output)
 					return nil, fail(err)
 				}
+				process.Verification = "healthy"
+				replaceSessionProcess(session, process)
+				started[name] = process
+				if err := workspace.Store.Save(session); err != nil {
+					return nil, fail(err)
+				}
 				fmt.Fprintf(output, "%s %s\n", style.Success("✓ Healthy:"), style.Identifier(name))
+				if observeRuntime {
+					listeners, err := verifyServiceListeners(ctx, service, process)
+					if err != nil {
+						return nil, fail(err)
+					}
+					process.Listeners = listeners
+					process.Verification = "listener-verified"
+					replaceSessionProcess(session, process)
+					started[name] = process
+					if err := workspace.Store.Save(session); err != nil {
+						return nil, fail(err)
+					}
+					registration, err := verifyServiceRegistry(ctx, workspace.Root, service, registryBaselines[name])
+					if err != nil {
+						return nil, fail(err)
+					}
+					process.Registration = registration
+					if registration != nil {
+						process.Verification = "registry-verified"
+						replaceSessionProcess(session, process)
+						started[name] = process
+						if err := workspace.Store.Save(session); err != nil {
+							return nil, fail(err)
+						}
+					}
+					if service.Runtime == "generic-runner" || len(service.Kinds) == 0 {
+						process.Verification = "runner-only"
+					} else {
+						process.Verification = "verified"
+					}
+				} else {
+					process.Verification = "verified"
+				}
+				replaceSessionProcess(session, process)
+				started[name] = process
+				fmt.Fprintf(output, "%s %s\n", style.Success("✓ Runtime contract verified:"), style.Identifier(name))
 			}
 		}
 		if err := ctx.Err(); err != nil {
@@ -567,7 +633,47 @@ func Status(ctx context.Context, workspace *WorkspaceData, output io.Writer) err
 		} else if ProcessGroupAlive(process.PGID) {
 			state = "unverified"
 		}
-		fmt.Fprintln(output, style.Detail(fmt.Sprintf("%s: %s, pid=%d pgid=%d log=%s", style.Identifier(process.Name), styledProcessState(style, state, 0), process.PID, process.PGID, process.LogPath)))
+		verification := process.Verification
+		if verification == "" {
+			verification = "unverified"
+		}
+		fmt.Fprintln(output, style.Detail(fmt.Sprintf("%s: %s, verification=%s, pid=%d pgid=%d log=%s", style.Identifier(process.Name), styledProcessState(style, state, 0), verification, process.PID, process.PGID, process.LogPath)))
+		listenerNames := make([]string, 0, len(process.Listeners))
+		for name := range process.Listeners {
+			listenerNames = append(listenerNames, name)
+		}
+		sort.Strings(listenerNames)
+		for _, name := range listenerNames {
+			listener := process.Listeners[name]
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("  listener %s: verified, address=%s, port=%d, scope=%s, owner-pid=%d, verified-at=%s", style.Identifier(name), listener.Address, listener.Port, listener.Mode, listener.OwnerPID, listener.VerifiedAt.Format(time.RFC3339))))
+		}
+		service, declared := workspace.Manifest.Services[process.Name]
+		if declared {
+			kinds := service.EffectiveKinds()
+			for _, name := range kinds {
+				if _, found := process.Listeners[name]; found {
+					continue
+				}
+				listenerState := process.Verification
+				if listenerState == "" || listenerState == "runner-only" {
+					listenerState = "unverified"
+				}
+				fmt.Fprintln(output, style.Detail(fmt.Sprintf("  listener %s: %s, port=%d, scope=%s, verified-at=-", style.Identifier(name), listenerState, service.Ports[name], service.Network.EffectiveListen())))
+			}
+		}
+		if process.Registration != nil {
+			registration := process.Registration
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("  registry %s: %s, identity=%s, verified-at=%s", style.Identifier(registration.Registry), registration.Status, registration.Identity, registration.VerifiedAt.Format(time.RFC3339))))
+		}
+		consumerNames := make([]string, 0, len(process.ConsumerIsolation))
+		for name := range process.ConsumerIsolation {
+			consumerNames = append(consumerNames, name)
+		}
+		sort.Strings(consumerNames)
+		for _, name := range consumerNames {
+			consumer := process.ConsumerIsolation[name]
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("  consumer %s: %s, mode=%s, env=%s", style.Identifier(name), consumer.Status, consumer.Mode, consumer.Env)))
+		}
 	}
 	if session.Connection != nil {
 		state := "reused"
@@ -609,7 +715,7 @@ func styledProcessState(style terminal.Style, state string, width int) string {
 		return style.Success(display)
 	case "stopped":
 		return style.Failure(display)
-	case "unverified":
+	case "unverified", "unverified(skip-verify)":
 		return style.Warning(display)
 	default:
 		return style.Identifier(display)
@@ -704,9 +810,11 @@ func validatePlanCommands(workspace *WorkspaceData, plan *Plan) error {
 				return fmt.Errorf("%s run command: %w", name, err)
 			}
 		}
-		if service.Health.Type == "command" && len(service.Health.Command) > 0 {
-			if err := commandAvailableForRun(service.Health.Command[0], service, plan); err != nil {
-				return fmt.Errorf("%s health command: %w", name, err)
+		for _, health := range service.HealthChecks {
+			if health.Type == "command" && len(health.Command) > 0 {
+				if err := commandAvailableForRun(health.Command[0], service, plan); err != nil {
+					return fmt.Errorf("%s health command: %w", name, err)
+				}
 			}
 		}
 	}
@@ -785,6 +893,9 @@ func printPlan(output io.Writer, plan *Plan, dryRun bool) {
 		fmt.Fprintln(output, style.Detail("Output: "+service.Config.Plan.TargetDir))
 		if isolation := plannedIsolationDescription(service.Config); isolation != "" {
 			fmt.Fprintln(output, style.Detail("Local isolation: "+isolation))
+		}
+		if isolation := consumerIsolationDescription(service.ConsumerIsolation); isolation != "" {
+			fmt.Fprintln(output, style.Detail("Consumer guard: "+isolation))
 		}
 		if service.Config.Isolation.ListenerMode == model.NetworkListenAllInterfaces {
 			fmt.Fprintln(output, style.Warning("Warning: "+name+" listens on 0.0.0.0 across all network interfaces; LAN access is still controlled by the host firewall."))

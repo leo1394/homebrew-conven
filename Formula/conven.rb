@@ -28,11 +28,13 @@ class Conven < Formula
     new_cli = build.head? || version >= "0.2.9"
     scoped_plugins = build.head? || version >= "0.2.11"
     plugin_selector = build.head? || version >= "0.2.12"
-    workspace_catalog = build.head? || version >= "0.2.13"
+    unified_workspace_manifest = build.head? || version >= "0.4.0"
+    workspace_catalog = !unified_workspace_manifest && version >= "0.2.13"
+    workspace_status = workspace_catalog || unified_workspace_manifest
     generalized_bindings = build.head? || version >= "0.3.0"
     if build.head?
       expected_version = <<~EOS
-        conven version 0.3.3 (2026-09-01)
+        conven version 1.0.1 (2026-09-02)
         https://github.com/leo1394/homebrew-conven
       EOS
       expected_version = Regexp.new("#{Regexp.escape(expected_version)}\\z")
@@ -56,7 +58,14 @@ class Conven < Formula
       manifest = workspace_state/"conven.yaml"
       system bin/"conven", "init"
       assert_path_exists manifest
-      if workspace_catalog
+      if unified_workspace_manifest
+        refute_path_exists workspace_state/"catalog.yaml"
+        system bin/"conven", "workspace", "--validate"
+        status = shell_output("#{bin}/conven status")
+        assert_includes status, "Workspace"
+        assert_includes status, "Disabled bindings"
+        assert_includes status, "No Conven session found."
+      elsif workspace_catalog
         system bin/"conven", "catalog", "--validate"
         status = shell_output("#{bin}/conven status")
         assert_includes status, "Workspace"
@@ -154,7 +163,8 @@ class Conven < Formula
       imported_manifest = expected_manifest.sub(/^  name: .+$/, "  name: formula-import")
       refute_equal expected_manifest, imported_manifest
       imported_policy.write(imported_manifest)
-      system bin/"conven", "policy", "--import", imported_policy
+      manifest_command = unified_workspace_manifest ? "workspace" : "policy"
+      system bin/"conven", manifest_command, "--import", imported_policy
       assert_equal imported_manifest, manifest.read
       assert_predicate workspace_state/"backups", :directory?
       import_backups = (workspace_state/"backups").children
@@ -168,18 +178,24 @@ class Conven < Formula
     assert_path_exists zsh_completion/"_conven"
     assert_path_exists fish_completion/"conven.fish"
     top_level_commands = %w[init services config policy plugins doctor help version]
+    if unified_workspace_manifest
+      top_level_commands.delete("policy")
+      top_level_commands.insert(3, "workspace")
+    end
     top_level_commands.insert(3, "catalog") if workspace_catalog
-    top_level_commands.insert(6, "status") if workspace_catalog
+    top_level_commands.insert(6, "status") if workspace_status
     service_actions = %w[list registry status logs start restart stop stop-all]
     service_actions.insert(4, "dashboard") if build.head? || version >= "0.2.5"
     service_actions << "cleanup" if build.head? || version >= "0.2.7"
     service_actions << "listen" if build.head? || version >= "0.3.3"
-    policy_actions = %w[edit import reset]
+    policy_actions = unified_workspace_manifest ? [] : %w[edit import reset]
+    workspace_actions = unified_workspace_manifest ? %w[edit validate migrate import reset] : []
     catalog_actions = workspace_catalog ? %w[edit validate] : []
     plugin_actions = %w[install list run]
     plugin_actions.insert(2, "remove") if build.head? || version >= "0.2.2"
     removed_top_level_commands = %w[discover list logs start restart stop]
-    removed_top_level_commands.insert(2, "status") unless workspace_catalog
+    removed_top_level_commands.push("catalog", "policy") if unified_workspace_manifest
+    removed_top_level_commands.insert(2, "status") unless workspace_status
     %w[bash zsh fish].each do |shell|
       completion = shell_output("#{bin}/conven __completion #{shell}")
       case shell
@@ -218,6 +234,13 @@ class Conven < Formula
         end
       end
       policy_actions.each do |action|
+        if shell == "fish"
+          assert_includes completion, "-l #{action}"
+        else
+          assert_includes completion, "--#{action}"
+        end
+      end
+      workspace_actions.each do |action|
         if shell == "fish"
           assert_includes completion, "-l #{action}"
         else

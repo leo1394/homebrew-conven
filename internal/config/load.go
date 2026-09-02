@@ -99,12 +99,22 @@ func ValidateSelection(manifest *model.Manifest, selected []string) error {
 
 func validateManifest(manifest *model.Manifest) error {
 	switch manifest.Version {
-	case 1, 2:
+	case 1, 2, 3:
 	default:
-		return fmt.Errorf("version must be 1 or 2, got %d", manifest.Version)
+		return fmt.Errorf("version must be 1, 2, or 3, got %d", manifest.Version)
 	}
 	if strings.TrimSpace(manifest.Workspace.Name) == "" {
 		return fmt.Errorf("workspace.name is required")
+	}
+	seenDisabledBindings := make(map[string]bool, len(manifest.Workspace.DisabledBindings))
+	for index, binding := range manifest.Workspace.DisabledBindings {
+		if !validBindingName(binding) {
+			return fmt.Errorf("workspace.disabledBindings[%d] must start with a letter or '_' and contain only letters, digits, '_' or '-'", index)
+		}
+		if seenDisabledBindings[binding] {
+			return fmt.Errorf("workspace.disabledBindings[%d] duplicates %q", index, binding)
+		}
+		seenDisabledBindings[binding] = true
 	}
 	if manifest.Version == 1 && len(manifest.Services) == 0 {
 		return fmt.Errorf("services must contain at least one service")
@@ -114,8 +124,11 @@ func validateManifest(manifest *model.Manifest) error {
 		if invalidName(environmentName) {
 			return fmt.Errorf("environment name %q must be non-empty and contain no whitespace", environmentName)
 		}
-		if manifest.Version == 2 {
+		if manifest.Version >= 2 {
 			environment := manifest.Environments[environmentName]
+			if manifest.Version == 3 && environment.Registry != "" {
+				return fmt.Errorf("environments.%s.registry is a legacy field; use registries", environmentName)
+			}
 			if environment.EnvFile != "" {
 				if err := validateWorkspaceRelativePath(environment.EnvFile, fmt.Sprintf("environments.%s.envFile", environmentName)); err != nil {
 					return err
@@ -144,19 +157,36 @@ func validateManifest(manifest *model.Manifest) error {
 					return err
 				}
 			}
+			if manifest.Version == 3 {
+				if err := validateRegistries(environmentName, environment.Registries); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	for _, name := range sortedPolicyNames(manifest) {
 		if !validServiceName(name) {
 			return fmt.Errorf("policy name %q must start with a letter or digit and contain only letters, digits, '.', '_' or '-'", name)
 		}
-		if err := validatePolicy(name, manifest.Policies[name]); err != nil {
+		if err := validatePolicy(name, manifest.Policies[name], manifest.Version); err != nil {
 			return err
 		}
 	}
 	if manifest.Workspace.Policy != "" {
 		if _, found := manifest.Policies[manifest.Workspace.Policy]; !found {
 			return fmt.Errorf("workspace.policy references unknown policy %q", manifest.Workspace.Policy)
+		}
+	}
+	providerOwners := make(map[string]string)
+	for _, name := range ServiceNames(manifest) {
+		providerOwners[name] = name
+	}
+	for _, name := range ServiceNames(manifest) {
+		for _, alias := range manifest.Services[name].Discovery.ProviderAliases {
+			if owner, found := providerOwners[alias]; found && owner != name {
+				return fmt.Errorf("services.%s.discovery.providerAliases contains %q already owned by service %s", name, alias, owner)
+			}
+			providerOwners[alias] = name
 		}
 	}
 	for _, name := range ServiceNames(manifest) {
@@ -179,22 +209,52 @@ func validateManifest(manifest *model.Manifest) error {
 		if service.Kind != "" && invalidName(service.Kind) {
 			return fmt.Errorf("services.%s.kind must contain no whitespace", name)
 		}
+		if manifest.Version == 3 && service.Kind != "" {
+			return fmt.Errorf("services.%s.kind is a legacy field; use kinds", name)
+		}
+		kinds := service.EffectiveKinds()
+		if manifest.Version == 3 && len(kinds) > 0 {
+			if policyName == "" {
+				return fmt.Errorf("services.%s.kinds requires a certified policy", name)
+			}
+			policy := manifest.Policies[policyName]
+			if policy.Drivers.Runtime == "generic-runner" {
+				return fmt.Errorf("services.%s is runner-only and must not declare kinds", name)
+			}
+			if service.Discovery.Analyzer == "" || service.Discovery.Certifier == "" {
+				return fmt.Errorf("services.%s.kinds requires discovery.analyzer and discovery.certifier evidence", name)
+			}
+		}
+		seenKinds := make(map[string]bool, len(kinds))
+		for index, kind := range kinds {
+			if invalidName(kind) {
+				return fmt.Errorf("services.%s.kinds[%d] must contain no whitespace", name, index)
+			}
+			if seenKinds[kind] {
+				return fmt.Errorf("services.%s.kinds[%d] duplicates %q", name, index, kind)
+			}
+			seenKinds[kind] = true
+		}
 		switch service.Network.Listen {
 		case "", model.NetworkListenLoopback, model.NetworkListenAllInterfaces:
 		default:
 			return fmt.Errorf("services.%s.network.listen must be loopback or all-interfaces, got %q", name, service.Network.Listen)
 		}
-		if service.Network.Listen != "" && service.Kind == "" {
+		if service.Network.Listen != "" && len(kinds) == 0 {
 			return fmt.Errorf("services.%s.network.listen requires a typed service kind", name)
 		}
-		if service.Discovery.Analyzer == "" && len(service.Discovery.Bindings) > 0 {
+		consumerBindings := service.Discovery.EffectiveConsumerBindings()
+		if manifest.Version == 3 && len(service.Discovery.Bindings) > 0 {
+			return fmt.Errorf("services.%s.discovery.bindings is a legacy field; use consumerBindings", name)
+		}
+		if service.Discovery.Analyzer == "" && len(consumerBindings) > 0 {
 			return fmt.Errorf("services.%s.discovery.analyzer is required when bindings are declared", name)
 		}
 		if service.Discovery.Analyzer != "" && invalidName(service.Discovery.Analyzer) {
 			return fmt.Errorf("services.%s.discovery.analyzer must contain no whitespace", name)
 		}
-		seenBindings := make(map[string]bool, len(service.Discovery.Bindings))
-		for _, binding := range service.Discovery.Bindings {
+		seenBindings := make(map[string]bool, len(consumerBindings))
+		for _, binding := range consumerBindings {
 			if invalidName(binding) {
 				return fmt.Errorf("services.%s.discovery.bindings contains invalid binding %q", name, binding)
 			}
@@ -202,6 +262,9 @@ func validateManifest(manifest *model.Manifest) error {
 				return fmt.Errorf("services.%s.discovery.bindings contains duplicate binding %q", name, binding)
 			}
 			seenBindings[binding] = true
+		}
+		if err := validateServiceDiscovery(manifest, name, service); err != nil {
+			return err
 		}
 		for index, patch := range service.Config.Patches {
 			if err := validateConfigPatch(patch, fmt.Sprintf("services.%s.config.patches[%d]", name, index)); err != nil {
@@ -232,6 +295,11 @@ func validateManifest(manifest *model.Manifest) error {
 				return fmt.Errorf("services.%s.ports.%s must be between 1 and 65535, got %d", name, portName, port)
 			}
 		}
+		if manifest.Version == 3 {
+			if err := validateServiceHealthChecks(name, service, seenKinds); err != nil {
+				return err
+			}
+		}
 
 		dependencies := make([]string, 0, len(service.Dependencies))
 		for dependency := range service.Dependencies {
@@ -240,7 +308,10 @@ func validateManifest(manifest *model.Manifest) error {
 		sort.Strings(dependencies)
 		for _, dependencyName := range dependencies {
 			declaration := service.Dependencies[dependencyName]
-			localServiceName := dependencyName
+			localServiceName := declaration.LocalService
+			if localServiceName == "" {
+				localServiceName = model.ProviderService(manifest, dependencyName, declaration.Binding)
+			}
 			if manifest.Version == 2 {
 				localServiceName = declaration.LocalService
 				if localServiceName == "" {
@@ -278,21 +349,23 @@ func validateManifest(manifest *model.Manifest) error {
 				}
 			}
 		}
-		if policyName != "" && service.Kind != "" {
+		if policyName != "" && len(kinds) > 0 {
 			policy := manifest.Policies[policyName]
-			if server, found := policy.Routing.Servers[service.Kind]; found {
+			for _, kind := range kinds {
+			if server, found := policy.Routing.Servers[kind]; found {
 				if _, found := service.Ports[server.Port]; !found {
-					return fmt.Errorf("services.%s kind %q requires policy %q server port %q", name, service.Kind, policyName, server.Port)
+					return fmt.Errorf("services.%s kind %q requires policy %q server port %q", name, kind, policyName, server.Port)
 				}
-				if service.Kind == "rpc" && server.Isolation.Registration.Mode != "config" {
-					return fmt.Errorf("services.%s kind %q requires policy %q registration isolation mode config", name, service.Kind, policyName)
+				if manifest.Version < 3 && kind == "rpc" && server.Isolation.Registration.Mode != "config" {
+					return fmt.Errorf("services.%s kind %q requires policy %q registration isolation mode config", name, kind, policyName)
 				}
 			} else {
-				return fmt.Errorf("services.%s kind %q requires policy %q to declare a matching server route", name, service.Kind, policyName)
+				return fmt.Errorf("services.%s kind %q requires policy %q to declare a matching server route", name, kind, policyName)
+			}
 			}
 		}
 	}
-	if manifest.Version == 2 {
+	if manifest.Version >= 2 {
 		if err := validateEnvironmentResolutions(manifest); err != nil {
 			return err
 		}
@@ -313,6 +386,26 @@ func sortedPolicyNames(manifest *model.Manifest) []string {
 	return names
 }
 
+func validBindingName(value string) bool {
+	for index, character := range value {
+		if index == 0 && !asciiLetter(character) && character != '_' {
+			return false
+		}
+		if !asciiLetterOrDigit(character) && character != '_' && character != '-' {
+			return false
+		}
+	}
+	return value != ""
+}
+
+func asciiLetter(character rune) bool {
+	return character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z'
+}
+
+func asciiLetterOrDigit(character rune) bool {
+	return asciiLetter(character) || character >= '0' && character <= '9'
+}
+
 func validateWorkspaceRelativePath(value string, field string) error {
 	path := strings.TrimSpace(value)
 	if path == "" || filepath.IsAbs(path) {
@@ -330,6 +423,7 @@ func validateHealth(health model.Health, field string) error {
 		return nil
 	}
 	switch health.Type {
+	case "process":
 	case "tcp":
 		if strings.TrimSpace(health.Address) == "" {
 			return fmt.Errorf("%s.address is required for tcp readiness", field)
@@ -343,12 +437,147 @@ func validateHealth(health model.Health, field string) error {
 			return err
 		}
 	default:
-		return fmt.Errorf("%s.type must be tcp, http, or command", field)
+		return fmt.Errorf("%s.type must be process, tcp, http, or command", field)
 	}
 	if health.Timeout != "" {
 		duration, err := time.ParseDuration(health.Timeout)
 		if err != nil || duration <= 0 {
 			return fmt.Errorf("%s.timeout must be a positive duration", field)
+		}
+	}
+	return nil
+}
+
+func validateServiceHealthChecks(name string, service model.Service, kinds map[string]bool) error {
+	if service.Health.Type != "" {
+		return fmt.Errorf("services.%s.health is a legacy field; use healthChecks", name)
+	}
+	seenServers := make(map[string]bool, len(service.HealthChecks))
+	for index, check := range service.HealthChecks {
+		field := fmt.Sprintf("services.%s.healthChecks[%d]", name, index)
+		if check.Server != "" {
+			if !kinds[check.Server] {
+				return fmt.Errorf("%s.server references unknown kind %q", field, check.Server)
+			}
+			if seenServers[check.Server] {
+				return fmt.Errorf("%s.server duplicates health check for %q", field, check.Server)
+			}
+			seenServers[check.Server] = true
+		}
+		health := model.Health{Type: check.Type, Address: check.Address, URL: check.URL, Command: check.Command, Timeout: check.Timeout}
+		if err := validateHealth(health, field); err != nil {
+			return err
+		}
+	}
+	for kind := range kinds {
+		if !seenServers[kind] {
+			return fmt.Errorf("services.%s kind %q requires exactly one healthChecks entry", name, kind)
+		}
+	}
+	return nil
+}
+
+func validateRegistries(environmentName string, registries map[string]model.Registry) error {
+	for name, registry := range registries {
+		field := fmt.Sprintf("environments.%s.registries.%s", environmentName, name)
+		if !validServiceName(name) {
+			return fmt.Errorf("environments.%s.registries contains invalid name %q", environmentName, name)
+		}
+		switch registry.Driver {
+		case "consul", "nacos", "eureka", "etcd":
+		default:
+			return fmt.Errorf("%s.driver must be consul, nacos, eureka, or etcd", field)
+		}
+		if strings.TrimSpace(registry.Address) == "" {
+			return fmt.Errorf("%s.address is required", field)
+		}
+		if registry.ObserveFor != "" {
+			duration, err := time.ParseDuration(registry.ObserveFor)
+			if err != nil || duration <= 0 {
+				return fmt.Errorf("%s.observeFor must be a positive duration", field)
+			}
+		}
+		for key, value := range map[string]string{
+			"tokenEnv": registry.TokenEnv,
+			"usernameEnv": registry.UsernameEnv,
+			"passwordEnv": registry.PasswordEnv,
+		} {
+			if value != "" && !validEnvironmentKey(value) {
+				return fmt.Errorf("%s.%s must be an environment variable name", field, key)
+			}
+		}
+		if (registry.UsernameEnv == "") != (registry.PasswordEnv == "") {
+			return fmt.Errorf("%s.usernameEnv and passwordEnv must be declared together", field)
+		}
+		if (registry.TLS.CertFile == "") != (registry.TLS.KeyFile == "") {
+			return fmt.Errorf("%s.tls.certFile and keyFile must be declared together", field)
+		}
+		for key, value := range map[string]string{
+			"tls.caFile": registry.TLS.CAFile,
+			"tls.certFile": registry.TLS.CertFile,
+			"tls.keyFile": registry.TLS.KeyFile,
+		} {
+			if value != "" {
+				if err := validateWorkspaceRelativePath(value, field+"."+key); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateServiceDiscovery(manifest *model.Manifest, name string, service model.Service) error {
+	discovery := service.Discovery
+	for field, value := range map[string]string{
+		"certifier": discovery.Certifier,
+		"registry": discovery.Registry,
+		"identity": discovery.Identity,
+	} {
+		if value != "" && invalidName(value) {
+			return fmt.Errorf("services.%s.discovery.%s must contain no whitespace", name, field)
+		}
+	}
+	seenAliases := make(map[string]bool, len(discovery.ProviderAliases))
+	for index, alias := range discovery.ProviderAliases {
+		if !validBindingName(alias) {
+			return fmt.Errorf("services.%s.discovery.providerAliases[%d] is invalid", name, index)
+		}
+		if seenAliases[alias] {
+			return fmt.Errorf("services.%s.discovery.providerAliases[%d] duplicates %q", name, index, alias)
+		}
+		seenAliases[alias] = true
+	}
+	if discovery.Registry != "" {
+		if discovery.Identity == "" {
+			return fmt.Errorf("services.%s.discovery.identity is required when registry is declared", name)
+		}
+		for environmentName, environment := range manifest.Environments {
+			if _, found := environment.Registries[discovery.Registry]; !found {
+				return fmt.Errorf("services.%s.discovery.registry %q is not declared by environment %s", name, discovery.Registry, environmentName)
+			}
+		}
+	}
+	seenConsumers := make(map[string]bool, len(discovery.Consumers))
+	for index, driver := range discovery.Consumers {
+		if driver != "kafka" {
+			return fmt.Errorf("services.%s.discovery.consumers[%d] uses unsupported consumer driver %q", name, index, driver)
+		}
+		if seenConsumers[driver] {
+			return fmt.Errorf("services.%s.discovery.consumers[%d] duplicates %q", name, index, driver)
+		}
+		seenConsumers[driver] = true
+		isolation, found := service.Isolation.Consumers[driver]
+		if !found {
+			return fmt.Errorf("services.%s.isolation.consumers.%s is required for the discovered %s consumer", name, driver, driver)
+		}
+		if isolation.Mode != KafkaConsumerGuardMode || isolation.Env != KafkaConsumersEnabledEnv {
+			return fmt.Errorf("services.%s.isolation.consumers.%s must set mode=%s and env=%s", name, driver, KafkaConsumerGuardMode, KafkaConsumersEnabledEnv)
+		}
+	}
+	for driver := range service.Isolation.Consumers {
+		if !seenConsumers[driver] {
+			return fmt.Errorf("services.%s.isolation.consumers.%s has no matching discovery.consumers entry", name, driver)
 		}
 	}
 	return nil
@@ -428,9 +657,10 @@ func validateLocalPorts(manifest *model.Manifest) error {
 	return nil
 }
 
-func validatePolicy(name string, policy model.Policy) error {
+func validatePolicy(name string, policy model.Policy, version int) error {
 	prefix := "policies." + name
 	for field, value := range map[string]string{
+		"drivers.runtime":   policy.Drivers.Runtime,
 		"drivers.framework": policy.Drivers.Framework,
 		"drivers.discovery": policy.Drivers.Discovery,
 	} {
@@ -438,11 +668,14 @@ func validatePolicy(name string, policy model.Policy) error {
 			return fmt.Errorf("%s.%s must contain no whitespace", prefix, field)
 		}
 	}
-	if policy.Drivers.Materializer != "" && policy.Drivers.Materializer != "yaml-overlay" {
-		return fmt.Errorf("%s.drivers.materializer must be yaml-overlay, got %q", prefix, policy.Drivers.Materializer)
+	if version == 3 && policy.Drivers.Runtime == "" {
+		return fmt.Errorf("%s.drivers.runtime is required for manifest version 3", prefix)
 	}
-	if policy.Drivers.ConfigSource != "" && policy.Drivers.ConfigSource != "repository" && policy.Drivers.ConfigSource != "apollo" {
-		return fmt.Errorf("%s.drivers.configSource must be repository or apollo, got %q", prefix, policy.Drivers.ConfigSource)
+	if policy.Drivers.Materializer != "" && policy.Drivers.Materializer != "yaml-overlay" && policy.Drivers.Materializer != "properties-overlay" && policy.Drivers.Materializer != "environment" {
+		return fmt.Errorf("%s.drivers.materializer must be yaml-overlay, properties-overlay, or environment, got %q", prefix, policy.Drivers.Materializer)
+	}
+	if policy.Drivers.ConfigSource != "" && policy.Drivers.ConfigSource != "repository" && policy.Drivers.ConfigSource != "apollo" && policy.Drivers.ConfigSource != "environment" {
+		return fmt.Errorf("%s.drivers.configSource must be repository, apollo, or environment, got %q", prefix, policy.Drivers.ConfigSource)
 	}
 	if policy.Drivers.Materializer == "yaml-overlay" {
 		if policy.Drivers.ConfigSource == "" {
@@ -514,6 +747,14 @@ func validatePolicy(name string, policy model.Policy) error {
 		for index, argument := range server.Args {
 			if strings.TrimSpace(argument) == "" {
 				return fmt.Errorf("%s.routing.servers.%s.args[%d] must not be empty", prefix, kind, index)
+			}
+		}
+		for key, value := range server.Env {
+			if strings.TrimSpace(key) == "" || strings.ContainsAny(key, "=\x00") {
+				return fmt.Errorf("%s.routing.servers.%s.env contains invalid key %q", prefix, kind, key)
+			}
+			if strings.ContainsRune(value, '\x00') {
+				return fmt.Errorf("%s.routing.servers.%s.env.%s contains a NUL byte", prefix, kind, key)
 			}
 		}
 		if err := validateServerIsolation(server.Isolation, fmt.Sprintf("%s.routing.servers.%s.isolation", prefix, kind)); err != nil {

@@ -1,4 +1,4 @@
-.TH CONVEN 1 "September 1, 2026" "Conven 0.3.3" "User Commands"
+.TH CONVEN 1 "September 2, 2026" "Conven 1.0.1" "User Commands"
 .SH NAME
 conven \- run a focused set of local microservices with remote dependencies
 .SH SYNOPSIS
@@ -50,15 +50,14 @@ Conven scans direct-child Git repositories for supported service layouts and
 creates
 .IR .conven/conven.yaml .
 This scan is the initial registry pass. Initialization also creates missing
-.IR .conven/catalog.yaml ,
-.IR CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md ,
+.IR CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 and
 .IR README.md
 without overwriting existing files.
 An existing manifest is not overwritten.
 Use
 .BR "init \-\-local"
-to create a Manifest v2 no-cluster environment. Conven adds no infrastructure,
+to create a Manifest v3 no-cluster environment. Conven adds no infrastructure,
 secret files, or Docker requirement. Start databases and brokers with project
 tooling, then declare their reachable addresses as environment endpoints.
 .TP
@@ -76,19 +75,12 @@ The valid forms are:
     conven config [\-\-global] \-\-unset key
 .fi
 .TP
-.B catalog
-Edit or validate the declarative service catalog at
-.IR <workspace>/.conven/catalog.yaml .
-Exactly one of
-.BR \-\-edit
-or
-.BR \-\-validate
-is required. Edit publishes a temporary copy only after strict validation.
-.TP
-.B policy
-Edit, import, or reset the canonical workspace manifest.
+.B workspace
+Edit, validate, migrate, import, or reset the canonical workspace manifest.
 Exactly one of
 .BR \-\-edit ,
+.BR \-\-validate ,
+.BR \-\-migrate ,
 .BR \-\-import ,
 or
 .B \-\-reset
@@ -152,9 +144,10 @@ below.
 .TP
 .B status
 Show the complete workspace overview: workspace and manifest paths, declared
-services with types and ports, effective configured
+services with types, ports, listener scope and typed contract, configured
+registries, effective configured
 .BR ktctl.path / ktctl.kubeconfig
-values, configured environment endpoints, disabled bindings from the catalog,
+values, configured environment endpoints, disabled bindings from the manifest,
 and the saved runtime session state, including the hot-reload watcher.
 .TP
 .B doctor
@@ -413,18 +406,22 @@ A fresh start cannot reuse default artifacts inside
 restart can reuse current artifacts.
 .TP
 .B \-\-skip\-verify
-Skip service health checks.
-.SH CONFIGURATION AND POLICY
+Skip health, listener ownership, and registry-delta verification. The session
+is recorded as
+.BR unverified(skip-verify) .
+.SH WORKSPACE MANIFEST AND POLICIES
 The canonical workspace manifest is
 .IR <workspace>/.conven/conven.yaml .
-Manifest version 1 retains the 0.2.x environment and local/remote service
-dependency behavior. Manifest version 2 adds environment files, endpoints,
-and explicit environment resolutions without managing infrastructure.
+Manifest version 3 is required for normal operation. It supports multiple
+listeners per process, named registries, explicit registry identity and aliases,
+per-listener health checks, and certified runtime contracts. Version 1 and 2
+manifests must be upgraded with
+.BR "conven workspace \-\-migrate" .
 There is no separate policy file.
 Policy profiles in the manifest describe framework, configuration source,
 service discovery, materialization, routing, and local-isolation rules.
 .PP
-.B conven policy \-\-edit
+.B conven workspace \-\-edit
 publishes a temporary edited copy only after strict validation.
 For
 .BR vi ,
@@ -435,7 +432,12 @@ Conven enables two-space YAML indentation with
 .BR expandtab .
 Before validation it normalizes only leading indentation tabs to the same
 two-column stops and does not re-encode the remaining YAML.
-.B conven policy \-\-import
+.B conven workspace \-\-validate
+strictly checks the current manifest without changing it.
+.B conven workspace \-\-migrate
+backs up and atomically converts a stopped version 1 or 2 workspace to version
+3. Active saved service PIDs cause migration to fail with a stop-all hint.
+.B conven workspace \-\-import
 installs an entire local YAML file, backs up the previous manifest, and does not
 merge it with repository scan results. If the filename is omitted, Conven scans
 regular
@@ -445,13 +447,13 @@ and
 files directly under the workspace root and opens a single-selection picker,
 even when only one candidate exists. Non-interactive callers must pass the
 filename explicitly.
-.B conven policy \-\-reset
+.B conven workspace \-\-reset
 destructively rebuilds the whole manifest from facts that built-in analyzers can
 prove; manual rules must be restored from the backup or declared again.
 .PP
 Run
 .BR "conven doctor" " and " "conven services \-\-start \-\-dry\-run"
-after importing or materially changing a policy.
+after importing or materially changing a manifest.
 .SH FILES
 .TP
 .I <workspace>/.conven/conven.yaml
@@ -463,26 +465,13 @@ Workspace-local settings.
 .I <workspace>/.conven/plugins
 Workspace-local Python plugins; this scope takes precedence over global plugins.
 .TP
-.I <workspace>/.conven/catalog.yaml
-User- or AI-reviewed policy-generator catalog. A service declares
-.IR repository ,
-.IR rpcBinding ,
-case-sensitive
-.IR rpcBindings ,
-or a combination, together with
-.I kind
-and a unique local
-.IR port .
-The
-.I disabledRpcBindings
-list keeps selected bindings remote.
-.TP
 .I <workspace>/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 AI-readable policy-generator implementation and validation contract created
 during initialization.
 .TP
 .I <workspace>/conven-generator.json
-Workspace-specific generator profile, environment, and connection input.
+Workspace-specific generator profile, environment, connection, and optional
+binding-provider input.
 Conven does not generate this file because those policy values cannot be
 inferred safely.
 .TP
@@ -517,9 +506,7 @@ Cross-workspace shared connection lease metadata.
 .TP
 .B CONVEN_EDITOR
 Editor command used by
-.BR "policy \-\-edit"
-and
-.BR "catalog \-\-edit" .
+.BR "workspace \-\-edit" .
 Falls back to
 .BR VISUAL ,
 then
@@ -570,14 +557,14 @@ A missing path, invalid path, or configuration parse failure must terminate the
 service with a non-zero status. The service must not silently fall back to a
 repository-default configuration.
 .PP
-Conven does not require every language to use the same flag. The current trusted
-go-zero and Consul adapter requires exactly one
+Conven does not require every language to use the same flag. The trusted
+go-zero adapter requires exactly one
 .B \-f
 argument whose value is the verified absolute runtime configuration directory.
-The trusted Spring Boot and Consul adapter requires exactly one
+Spring Boot adapters require exactly one
 .BR \-\-spring.config.location ,
-disables both the neutral custom registration switch and Spring Cloud Consul
-registration, and verifies the selected listener scope and declared local port.
+disable the matching neutral or Spring Cloud Consul, Nacos, or Eureka
+registration property, and verify every selected listener and local port.
 The manifest or policy expands
 .B ${configDir}
 into that argument; business source need not reference Conven-specific names.
@@ -596,10 +583,17 @@ complete modification example. Custom go-zero registration must honor the final
 .B discovType
 value instead of registering unconditionally.
 .PP
-Static command validation proves that the adapter argument points to the guarded
-runtime directory. Runtime health and adapter contract tests must additionally
-prove that the service consumed it, including a listener canary that differs
-from the repository default.
+Environment contracts cover generic Go, Node, Bun, Quarkus, and Micronaut;
+Uvicorn and Gunicorn use protected native arguments. Repository analyzers cover
+go-zero, Go HTTP/gRPC frameworks, Kratos, Hertz, Kitex, Spring Boot,
+Quarkus, Micronaut, FastAPI, Starlette, Flask, Django, NestJS, Express,
+Fastify, Bun.serve, Elysia, and Hono. Recognized frameworks with incomplete
+evidence fail closed rather than becoming runner-only.
+.PP
+After health succeeds, Conven proves each listener belongs to the target PID,
+PGID, or child process, then observes Consul, Nacos, Eureka, or Etcd for an
+unexplained new instance. A failed proof stops processes started by that
+attempt and does not delete registry data.
 .SH SAFETY
 For typed services, the verified adapter contract prevents selected services
 from being advertised through the configured remote service registry and
@@ -608,9 +602,15 @@ with
 .B network.listen: all-interfaces
 is intentionally reachable through every host interface permitted by the
 firewall.
-It does not isolate business data or messaging.
-Local services may still connect to remote databases, Kafka, RPC endpoints, and
-other infrastructure, and may write data or consume messages.
+Detected typed Kafka consumers require a neutral, default-enabled source guard.
+Until unified local asynchronous-workload routing is implemented, Conven
+defaults
+.B SERVICE_KAFKA_CONSUMERS_ENABLED=true
+for local starts. Such consumers may join remote consumer groups; the plan and
+status report the effective value. A service environment can explicitly set
+the value to false. Kafka producers remain enabled. Local services may still
+connect to remote databases, RPC endpoints, and other infrastructure, write
+data, run scheduled jobs, and produce messages.
 .PP
 Use
 .B \-\-force
@@ -659,9 +659,8 @@ conven init
 conven \-C /path/of/workspace services \-\-start \-\-test service1 service2
 conven help services
 conven \-\-version
-conven catalog \-\-validate
-conven catalog \-\-edit
-conven policy \-\-edit
+conven workspace \-\-validate
+conven workspace \-\-edit
 conven status
 conven doctor \-\-test \-\-namespace test
 conven services \-\-start \-\-dry\-run api service-a

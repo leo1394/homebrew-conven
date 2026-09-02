@@ -1,320 +1,89 @@
 # Service runtime configuration contract
 
-This document defines how an application consumes configuration materialized by
-Conven. It applies to service authors, workspace manifest maintainers, and
-trusted-adapter implementers.
+Conven does not require one universal `-f` flag and does not require business
+source code to know `CONVEN_CONFIG_DIR`. A typed adapter uses each framework's
+native runtime interface, then proves that the process actually honors the
+compiled listener and registration contract.
 
-For Chinese, see [服务运行时配置契约](service-runtime-config-contract-zh.md).
+## Contract layers
 
-## 1. Required behavior
+- **Analyzer:** static language/framework/build/listener/registration and Kafka
+  consumer facts.
+- **Certifier:** unique policy match and sufficient trust evidence.
+- **ConfigDeliveryAdapter:** YAML, properties, or environment delivery.
+- **ListenerAdapter:** protected host and port for every listener.
+- **RegistrationAdapter:** passive, Kubernetes DNS, Consul, Nacos, Eureka, or
+  Etcd behavior.
+- **RoutingAdapter:** YAML path, properties key, or environment route.
+- **HealthAdapter:** process, TCP, HTTP, or command checks.
+- **Observer:** listener ownership and registry snapshot/delta proof.
 
-Conven materializes repository or remote configuration into a service-scoped
-runtime directory:
+The orchestrator consumes only the compiled `PlannedRuntime`; it does not branch
+on framework names.
 
-```text
-.conven/runtime/current/configs/<service>/
-```
-
-The executable artifact and runtime configuration remain separate:
-
-```text
-source ──build──> runtime/current/artifacts/<service>
-config ──copy + patch──> runtime/current/configs/<service>
-```
+## Service requirements
 
 A typed service must:
 
-1. accept the configuration argument declared by its trusted adapter;
-2. parse that argument;
-3. load configuration from the referenced runtime directory or file;
-4. exit non-zero when the argument is missing;
-5. exit non-zero when the path is invalid or configuration cannot be parsed;
-6. never silently fall back to repository, classpath, or build-time defaults;
-7. derive listener, port, registration, and dependency routes from the final
-   runtime configuration;
-8. remain in the foreground and expose a Conven-verifiable health check.
+1. accept its framework-native runtime arguments or environment variables;
+2. use the supplied host and port when creating every declared listener;
+3. disable registration through a framework-native setting or a neutral,
+   default-enabled application setting;
+4. guard detected Kafka consumer construction with the neutral,
+   default-enabled consumer switch;
+5. expose a deterministic build and executable entry;
+6. forward process arguments to the framework where arguments are the native
+   interface.
 
-Receiving argv alone does not satisfy the contract:
+Recognizing a flag is not enough: the service must parse and consume it. For
+example, declaring `flag.String("f", ...)` without loading that path into the
+application config is not a valid runtime contract.
 
-```text
-OS supplies argv
-  → language runtime exposes argv
-  → service parses the adapter option
-  → service loads configuration from that path
-```
+## Native listener interfaces
 
-The implementation is incompatible if the final step is missing.
+| Runtime | Protected interface |
+|---|---|
+| go-zero | `-f <runtime-config-directory>` plus guarded YAML |
+| Generic Go/Node/Bun | `HOST` and `PORT`, or `HTTP_PORT`/`RPC_PORT` for multiple listeners |
+| Spring Boot | `--spring.config.location`, native server address and port properties |
+| Quarkus | `QUARKUS_HTTP_HOST/PORT`, `QUARKUS_GRPC_SERVER_HOST/PORT` |
+| Micronaut | `MICRONAUT_SERVER_HOST/PORT`, `GRPC_SERVER_HOST/PORT` |
+| Uvicorn | `--host` and `--port` |
+| Gunicorn | `--bind host:port` |
 
-## 2. Tool-agnostic application source
+Adapters inject protected values last and reject missing, duplicated, or
+conflicting values. In loopback mode wildcard addresses fail before startup; in
+all-interface mode a non-wildcard listener fails runtime verification.
 
-Application source should not depend on `CONVEN_CONFIG_DIR` or another
-Conven-specific name. It should consume a framework-native or project-native
-option:
+## Neutral registration switch
 
-| Language/framework | Adapter option |
-| --- | --- |
-| Go/go-zero | `-f <runtime-config-directory>` |
-| Java/Spring Boot | `--spring.config.location=file:<runtime-config-directory>/` |
-| Python | `--config <runtime-config-file>` |
-| Node.js | `--config <runtime-config-file>` |
-| Dart | `--config <runtime-config-file>` |
-| Rust | `--config <runtime-config-file>` |
+The setting belongs to the service, not to Conven. Use a neutral name such as
+`SERVICE_REGISTRATION_ENABLED` or `service.registration.enabled`, defaulting to
+enabled so existing deployments do not change.
 
-The manifest or policy adapts Conven's `${configDir}` template to native argv:
-
-```yaml
-runner:
-  run: [python, -m, catalog_api, --config, "${configDir}/application.yaml"]
-```
-
-`${configDir}` expands to an absolute path before execution. The application
-only knows about `--config`.
-
-Conven may still inject `CONVEN_CONFIG_DIR` into prepare, build, health, and run
-processes as orchestration metadata. It is not the recommended application-source
-integration API.
-
-## 3. Manifest and policy responsibilities
-
-### 3.1 Runner-only services
-
-A runner-only service has no typed isolation contract and may use any
-project-native option:
-
-```yaml
-services:
-  report-worker:
-    path: services/report-worker
-    runner:
-      run: [python, -m, report_worker, --config, "${configDir}/application.yaml"]
-    health:
-      type: process
-```
-
-Conven expands and passes the argument without assuming its semantics.
-
-### 3.2 Typed services
-
-A typed service's trusted adapter must define:
-
-- how runtime configuration is materialized;
-- which option passes the configuration path;
-- whether that path denotes a directory or a file;
-- how listener and registration isolation are verified;
-- how actual configuration consumption is proven.
-
-The current built-in trusted adapters cover go-zero or Spring Boot with Consul
-and `yaml-overlay`. The go-zero contract requires:
-
-```yaml
-policies:
-  go-zero-consul:
-    process:
-      args: [-f, "${configDir}"]
-```
-
-The final command may contain only the executable and one verified
-`-f <absolute-config-directory>` argument.
-
-Other languages can run as runner-only services. Equivalent automatic routing
-and isolation require a trusted adapter for that framework, not just a different
-language label.
-
-### 3.3 Listener scope
-
-A typed service defaults to `network.listen: loopback`; omitting `network` has
-the same meaning. Conven's trusted adapter writes and verifies a loopback IP in
-the final runtime configuration. A service may explicitly opt into LAN access:
-
-```yaml
-services:
-  portal-api-service:
-    kind: http
-    network:
-      listen: all-interfaces
-```
-
-`all-interfaces` writes and verifies the IPv4 wildcard address `0.0.0.0` in the
-runtime copy and, for Spring Boot, in the protected server argument. It applies
-only to that service. Conven rejects arbitrary addresses and runner-only
-services cannot declare this setting because no trusted adapter can enforce it.
-Health checks and local dependency routes remain on `127.0.0.1`.
-
-`0.0.0.0` binds every host interface. It does not itself restrict traffic to
-the local network; firewall and network rules determine reachability.
-
-The same desired state can be changed without opening an editor:
-
-```bash
-conven services --listen --on portal-api-service
-conven services --listen --off portal-api-service
-```
-
-The command atomically updates the manifest. It does not change a running
-process; start or restart the service to apply the new scope.
-
-## 4. argv placement
-
-The option must appear in application argv, not interpreter or VM argv:
-
-```text
-Go executable     service -f <dir>
-Java JAR          java -jar service.jar --spring.config.location=file:<dir>/
-Python module     python -m service --config <file>
-Node.js script    node dist/server.js --config <file>
-Dart source       dart run bin/server.dart --config <file>
-Dart executable   service --config <file>
-Rust executable   service --config <file>
-```
-
-This Python command is invalid because `--config` is passed to the interpreter:
-
-```text
-python --config <file> -m service
-```
-
-Manifest commands are argv arrays and do not pass through a shell. Use:
-
-```yaml
-run: ["${artifact}", --config, "${configDir}/application.yaml"]
-```
-
-Do not rely on shell expansion:
-
-```yaml
-run: ["${artifact}", --config, "$CONVEN_CONFIG_DIR/application.yaml"]
-```
-
-## 5. Go / go-zero
-
-The current trusted go-zero adapter defines `-f` as the runtime configuration
-directory, not a single YAML file. The service bootstrap must preserve that
-meaning.
+### Go
 
 ```go
-package main
-
-import (
-	"flag"
-	"log"
-	"path/filepath"
-)
-
-func main() {
-	var configDir string
-	flag.StringVar(&configDir, "f", "", "runtime config directory")
-	flag.Parse()
-	if configDir == "" {
-		log.Fatal("-f runtime config directory is required")
-	}
-
-	configPath := filepath.Join(configDir, "config-local.yaml")
-	configuration, err := loadConfig(configPath)
-	if err != nil {
-		log.Fatalf("load runtime config %s: %v", configPath, err)
-	}
-	run(configuration)
+enabled := !strings.EqualFold(os.Getenv("SERVICE_REGISTRATION_ENABLED"), "false")
+if enabled {
+    registerService()
 }
-```
-
-Manifest:
-
-```yaml
-runner:
-  build: [go, build, -o, "${artifact}", ./cmd/server]
-  run: ["${artifact}"]
-
-policies:
-  go-zero-consul:
-    process:
-      args: [-f, "${configDir}"]
-```
-
-An invalid implementation parses the option but ignores it:
-
-```go
-func main() {
-	var configDir string
-	flag.StringVar(&configDir, "f", "", "runtime config directory")
-	flag.Parse()
-
-	// Invalid: repository configuration is still loaded.
-	configuration, _ := loadConfig("etc/config-local.yaml")
-	run(configuration)
-	_ = configDir
-}
-```
-
-Skipping `flag.Parse()`, treating the directory as a YAML file, ignoring the
-parsed value, or falling back to `etc/` all violate the contract.
-
-If a Go service bypasses standard go-zero registration and directly invokes a
-Consul registration API, that code must read the same final runtime configuration
-and register only when `discovType == "consul"`. Conven materializes that value
-as an empty string. A service with an unconditional `ServiceRegister` call cannot
-use the trusted go-zero adapter. Registration hidden behind project wrappers or
-dependencies cannot be proven by generic static analysis and must be covered by
-the behavioral test in section 11.
-
-## 6. Java / Spring Boot
-
-Spring Boot should use its native `spring.config.location`; application source
-does not need to recognize Conven. The option appears after the JAR:
-
-```yaml
-runner:
-  build: [./gradlew, bootJar]
-  artifact: "${serviceDir}/build/libs/catalog-api.jar"
-  run:
-    - java
-    - -jar
-    - "${artifact}"
-    - "--spring.config.location=file:${configDir}/"
-```
-
-The entry point forwards argv to Spring Boot:
-
-```java
-public final class CatalogApplication {
-    public static void main(String[] args) {
-        SpringApplication.run(CatalogApplication.class, args);
+defer func() {
+    if enabled {
+        deregisterService()
     }
-}
+}()
 ```
 
-The trusted adapter requires the repository config source
-`src/main/resources/application.yml`; Conven copies that directory and writes
-the guarded runtime `application.yml` there.
-`spring.config.location` replaces the default search locations. Do not use an
-`optional:` location or application fallback to classpath configuration. See
-[Spring Boot Externalized Configuration](https://docs.spring.io/spring-boot/reference/features/external-config.html)
-for the location and fail-closed behavior.
+The Analyzer must prove that both register and deregister calls are dominated
+by the disabled branch. An unrelated environment lookup elsewhere in the file
+does not count.
 
-A Spring trusted adapter appends server-specific arguments after common policy
-arguments and requires exactly one copy of every protected argument. It rejects
-missing or conflicting config locations, registration switches, listener
-addresses, and ports. The runtime configuration contains equivalent properties:
-
-```yaml
-server:
-  address: 127.0.0.1
-  port: 18080
-
-spring:
-  cloud:
-    consul:
-      discovery:
-        register: false
-
-service:
-  registration:
-    enabled: false
-```
-
-Custom registration code must use the neutral application property, defaulting
-to the existing cluster behavior:
+### Spring Boot custom registration
 
 ```java
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+
 @Configuration
 @ConditionalOnProperty(
     prefix = "service.registration",
@@ -323,234 +92,212 @@ to the existing cluster behavior:
     matchIfMissing = true
 )
 public class ConsulConfig {
-    // Existing registration and deregistration implementation.
+    // registration and deregistration
 }
 ```
 
-Services using only standard Spring Cloud Consul auto-registration do not need
-this annotation; the adapter disables it through the native
-`spring.cloud.consul.discovery.register=false` property. When the analyzer finds
-a known manual registration API, it verifies that the complete condition and
-the registration call belong to the same class. A missing or incorrect condition,
-or ambiguous ownership, aborts `services --registry` before Conven writes the
-manifest. The error includes the source path, required annotation, and local
-argument example.
+`matchIfMissing=true` preserves the existing cloud behavior. Conven supplies
+`--service.registration.enabled=false` locally. Standard Spring Cloud
+registration uses its native disable property and needs no custom source guard.
 
-This check covers only direct registration APIs known to the analyzer.
-Registration hidden in project wrappers or dependency JARs still requires the
-registry canary test in section 11; static inspection is not a substitute for
-behavioral proof.
+### Node.js and Bun
 
-The initial analyzer supports only root Gradle Spring Boot executable JARs. It
-derives the artifact from `bootJar.archiveFileName`, or from literal
-`rootProject.name` and `version` values. Maven, WAR, nested Boot modules, dynamic
-artifact names, and mixed HTTP/gRPC evidence require an explicit runner.
+```js
+if (process.env.SERVICE_REGISTRATION_ENABLED !== "false") {
+  await registerService();
+}
+```
 
-## 7. Python
+Bun-native source may use `Bun.env.SERVICE_REGISTRATION_ENABLED`. The register
+and deregister calls must be inside the guarded branch.
+
+### Python
 
 ```python
-import argparse
-from pathlib import Path
-
-
-def parse_arguments():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    return parser.parse_args()
-
-
-def main():
-    arguments = parse_arguments()
-    config_path = Path(arguments.config)
-    if not config_path.is_file():
-        raise SystemExit(f"runtime config is not a file: {config_path}")
-    configuration = load_config(config_path)
-    run(configuration)
-
-
-if __name__ == "__main__":
-    main()
+enabled = os.getenv("SERVICE_REGISTRATION_ENABLED", "true").lower() != "false"
+if enabled:
+    register_service()
 ```
 
-Manifest:
+The same condition must protect shutdown deregistration.
+
+## Kafka consumer runtime guard
+
+Typed services that construct Kafka consumers must expose the neutral switch
+`SERVICE_KAFKA_CONSUMERS_ENABLED`, defaulting to enabled when it is absent.
+`services --registry` records the proven consumer and emits this contract:
 
 ```yaml
-runner:
-  run: [python, -m, catalog_api, --config, "${configDir}/application.yaml"]
+discovery:
+  consumers: [kafka]
+isolation:
+  consumers:
+    kafka:
+      mode: guarded
+      env: SERVICE_KAFKA_CONSUMERS_ENABLED
 ```
 
-Do not use `parse_known_args()` to ignore an unknown configuration option, and
-do not give `--config` a repository-default path.
+Conven rescans the selected service before every start or restart, rejects an
+unguarded construction path or stale declaration, and currently injects the
+default value `true` when the manifest and dependency environments provide no
+explicit value. A service environment can explicitly set `false`; values other
+than `true` or `false` fail before the process starts. At this stage the
+contract proves controllability, not remote consumer-membership isolation.
 
-## 8. Node.js
+Go must return before constructing the queue or reader:
 
-This example has no argument-parser dependency:
-
-```javascript
-import fs from "node:fs";
-
-function optionValue(name) {
-  const index = process.argv.indexOf(name);
-  if (index < 0 || index + 1 >= process.argv.length) {
-    throw new Error(`${name} is required`);
-  }
-  return process.argv[index + 1];
+```go
+if strings.EqualFold(os.Getenv("SERVICE_KAFKA_CONSUMERS_ENABLED"), "false") {
+    return []service.Service{}, nil
 }
-
-const configPath = optionValue("--config");
-if (!fs.statSync(configPath).isFile()) {
-  throw new Error(`runtime config is not a file: ${configPath}`);
-}
-
-const configuration = loadConfig(configPath);
-await run(configuration);
+consumer, err := kq.NewQueue(config, handler)
 ```
 
-Manifest:
+Spring Boot can guard the configuration that owns `@KafkaListener` or consumer
+construction. Spring relaxed binding maps the environment variable to this
+property:
+
+```java
+@ConditionalOnProperty(
+    prefix = "service.kafka.consumers",
+    name = "enabled",
+    havingValue = "true",
+    matchIfMissing = true
+)
+class KafkaConsumers {
+    // listeners or consumer construction
+}
+```
+
+Node/Bun and Python use the same default-enabled meaning:
+
+```js
+if (process.env.SERVICE_KAFKA_CONSUMERS_ENABLED !== "false") {
+  await startKafkaConsumers();
+}
+```
+
+```python
+if os.getenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "true").lower() != "false":
+    start_kafka_consumers()
+```
+
+When explicitly set to `false`, this contract prevents local consumer-group
+membership by preventing consumer construction. With the current `true`
+default, the consumer is constructed normally. Kafka producers are
+intentionally unaffected. Conven does not infer membership from broker TCP
+connections because producers and consumers can share the same endpoint. The
+default can be reconsidered as `false` after unified local asynchronous-workload
+routing is implemented.
+
+## Spring Boot delivery
+
+Spring adapters copy the repository config directory to the runtime tree and
+patch only that copy. YAML and `.properties` are supported. Protected command
+line values have higher Spring precedence than repository files:
+
+```text
+--spring.config.location=file:<runtime-config-directory>/
+--spring.profiles.active=<environment>
+--server.address=127.0.0.1
+--server.port=<declared-http-port>
+--grpc.server.address=127.0.0.1
+--grpc.server.port=<declared-rpc-port>
+```
+
+Registration properties:
+
+- Consul custom guard: `service.registration.enabled=false`
+- Spring Cloud Consul: `spring.cloud.consul.discovery.register=false`
+- Nacos: `spring.cloud.nacos.discovery.register-enabled=false`
+- Eureka: `eureka.client.register-with-eureka=false`
+
+Gradle and Maven support requires the repository wrapper. The Analyzer never
+runs a wrapper or accesses the network. A JAR name must be a literal
+`archiveFileName`/`finalName`, or derivable from literal project name and
+version. Dynamic artifacts, WAR packaging, and ambiguous executable modules
+fail closed.
+
+## Environment contract
+
+Environment-based services must read the protected keys when constructing the
+actual listener. Examples:
+
+```go
+host := os.Getenv("HOST")
+port := os.Getenv("PORT")
+listener, err := net.Listen("tcp", net.JoinHostPort(host, port))
+```
+
+```js
+app.listen({ host: process.env.HOST, port: Number(process.env.PORT) })
+```
+
+```python
+# Conven invokes the framework runner with protected --host/--port or --bind.
+# The application object itself remains framework-native.
+app = FastAPI()
+```
+
+For a multi-listener process, use `HTTP_PORT` and `RPC_PORT`; one service-level
+`network.listen` scope applies to every listener.
+
+## Manifest v3 policy example
 
 ```yaml
-runner:
-  build: [npm, run, build]
-  run: [node, dist/server.js, --config, "${configDir}/application.yaml"]
+policies:
+  spring-boot-nacos:
+    drivers:
+      runtime: spring-boot
+      framework: spring-boot
+      configSource: repository
+      discovery: nacos
+      materializer: yaml-overlay
+    config:
+      sourceDir: src/main/resources
+      application: application.yml
+    process:
+      args:
+        - "--spring.config.location=file:${configDir}/"
+        - "--spring.cloud.nacos.discovery.register-enabled=false"
+    routing:
+      servers:
+        http:
+          port: http
+          patches:
+            - path: server.port
+              value: "${port.http}"
+          args:
+            - "--server.address=127.0.0.1"
+            - "--server.port=${port.http}"
+          isolation:
+            registration:
+              mode: config
+              path: spring.cloud.nacos.discovery.register-enabled
+              disabledValue: false
+            listener:
+              path: server.address
+              value: 127.0.0.1
 ```
 
-With commander, yargs, or another parser, keep the option required and terminate
-the process when configuration loading fails.
+Each declared kind must have a service port, policy server route, and health
+check. `routing.servers.<kind>.env` is available alongside `args` and `patches`
+for environment contracts.
 
-## 9. Dart
+## Runtime proof
 
-```dart
-import 'dart:io';
+Before startup Conven checks that declared ports are free and snapshots the
+selected service's registry identity. After health succeeds, it proves each
+listener belongs to the target PID, PGID, or child process and observes the
+registry for the configured period. Any unexplained new instance fails closed
+and rolls back processes started by the attempt.
 
-String requiredOption(List<String> args, String name) {
-  final index = args.indexOf(name);
-  if (index < 0 || index + 1 >= args.length) {
-    throw ArgumentError('$name is required');
-  }
-  return args[index + 1];
-}
+`--skip-verify` bypasses health, listener, and registry proof together and is
+recorded as `unverified(skip-verify)`.
 
-void main(List<String> args) {
-  final configPath = requiredOption(args, '--config');
-  final file = File(configPath);
-  if (!file.existsSync()) {
-    stderr.writeln('runtime config is not a file: $configPath');
-    exit(2);
-  }
-  final configuration = loadConfig(file.readAsStringSync());
-  run(configuration);
-}
-```
+## Runner-only boundary
 
-Manifest:
-
-```yaml
-runner:
-  build: [dart, compile, exe, bin/server.dart, -o, "${artifact}"]
-  run: ["${artifact}", --config, "${configDir}/application.yaml"]
-```
-
-When using `package:args`, make `--config` required and preserve the same
-fail-closed behavior.
-
-## 10. Rust
-
-```rust
-use std::{env, fs, path::PathBuf, process};
-
-fn required_option(name: &str) -> String {
-    let arguments: Vec<String> = env::args().collect();
-    arguments
-        .windows(2)
-        .find(|pair| pair[0] == name)
-        .map(|pair| pair[1].clone())
-        .unwrap_or_else(|| {
-            eprintln!("{} is required", name);
-            process::exit(2);
-        })
-}
-
-fn main() {
-    let config_path = PathBuf::from(required_option("--config"));
-    let source = fs::read_to_string(&config_path).unwrap_or_else(|error| {
-        eprintln!("load runtime config {}: {}", config_path.display(), error);
-        process::exit(2);
-    });
-    let configuration = load_config(&source).unwrap_or_else(|error| {
-        eprintln!("parse runtime config: {}", error);
-        process::exit(2);
-    });
-    run(configuration);
-}
-```
-
-Manifest:
-
-```yaml
-runner:
-  build: [cargo, build]
-  artifact: "${serviceDir}/target/debug/catalog-api"
-  run: ["${artifact}", --config, "${configDir}/application.yaml"]
-```
-
-The project may use clap instead, as long as the option is required and no
-repository fallback exists.
-
-## 11. Adapter contract test
-
-Static validation can prove that an argument is passed, but not that the service
-uses it. Every trusted adapter needs a behavioral test.
-
-Recommended canary test:
-
-1. make repository-default configuration listen on port `18080`;
-2. create temporary runtime configuration on a random free port such as `29137`;
-3. disable remote service registration in the runtime configuration;
-4. start the service with the adapter option;
-5. wait for health on `127.0.0.1:29137`;
-6. verify that the test process is not listening on `127.0.0.1:18080`;
-7. verify that the registry contains no local instance;
-8. stop the process;
-9. remove the runtime configuration and verify that a second start exits
-   non-zero.
-
-This detects:
-
-- no argument parsing;
-- a parsed but unused value;
-- disagreement over directory versus file semantics;
-- fallback after configuration failure;
-- listener or registration behavior not controlled by runtime configuration.
-
-Do not accept the option's appearance in `--help` as proof. Help output proves a
-parser declaration, not configuration consumption.
-
-## 12. Conven verification boundary
-
-Conven can verify:
-
-- the manifest or policy produces adapter-compliant argv;
-- the option references the guarded absolute runtime path;
-- the materialized listener and registration guards are correct;
-- the process passes health on the declared local address;
-- the trusted adapter contract test covers canary behavior.
-
-Conven cannot reliably prove arbitrary application behavior with language-neutral
-static analysis. The framework adapter's behavioral test provides that proof;
-source-string searches do not.
-
-## 13. Integration checklist
-
-Before accepting a typed service or trusted adapter, verify:
-
-- [ ] application source contains no Conven-specific integration name;
-- [ ] the manifest or policy maps `${configDir}` to native argv;
-- [ ] the option is in application argv, not interpreter or VM argv;
-- [ ] a missing option exits non-zero;
-- [ ] an invalid path or configuration exits non-zero;
-- [ ] there is no repository or classpath fallback;
-- [ ] listener and port come from runtime configuration;
-- [ ] local RPC/service registration is disabled by runtime configuration;
-- [ ] health checks use the manifest-declared local address;
-- [ ] the canary-port test detects an ignored argument;
-- [ ] the service remains in the foreground and Conven can stop it.
+A manual `generic-runner` may use arbitrary argv and environment. It must not
+declare typed `kinds`, is displayed as runner-only, and receives no typed
+listener or registration guarantee. Known frameworks with incomplete evidence
+cannot silently use this fallback.

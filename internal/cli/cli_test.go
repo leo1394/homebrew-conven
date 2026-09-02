@@ -290,8 +290,7 @@ These are common Conven commands:
 set up and configure a workspace
    init       Initialize a Conven workspace
    config     View or change Conven settings
-   catalog    Edit or validate the workspace service catalog
-   policy     Edit, import, or reset the workspace manifest
+   workspace  Edit, validate, import, or reset the workspace manifest
    plugins    Install, list, remove, or run plugins
 
 run and inspect local services
@@ -310,7 +309,7 @@ Run 'conven help <command>' or 'conven <command> --help' for detailed help.
 }
 
 func TestHelpCommandShowsDetailedCommandHelp(t *testing.T) {
-	for _, command := range []string{"init", "config", "catalog", "policy", "plugins", "status", "services", "doctor"} {
+	for _, command := range []string{"init", "config", "workspace", "plugins", "status", "services", "doctor"} {
 		t.Run(command, func(t *testing.T) {
 			var directOutput bytes.Buffer
 			var directError bytes.Buffer
@@ -335,63 +334,54 @@ func TestHelpCommandShowsDetailedCommandHelp(t *testing.T) {
 	}
 }
 
-func TestCatalogValidateAndEdit(t *testing.T) {
+func TestWorkspaceManifestValidateAndEdit(t *testing.T) {
 	workspace := environmentShortcutWorkspace(t)
-	catalogPath := filepath.Join(workspace, ".conven", "catalog.yaml")
-	catalog := `version: 1
-services:
-  - repository: api
-    kind: http
-    port: 18080
-  - rpcBinding: catalogRpc
-    kind: rpc
-    port: 18081
-disabledRpcBindings:
-  - legacyRpc
-`
-	if err := os.WriteFile(catalogPath, []byte(catalog), 0600); err != nil {
+	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
 	var errorOutput bytes.Buffer
-	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, CatalogEditor: func(_ context.Context, path string) error {
-		if path == catalogPath || !strings.Contains(filepath.Base(path), "catalog-edit-") {
-			t.Fatalf("catalog editor path = %q", path)
+	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, WorkspaceEditor: func(_ context.Context, path string) error {
+		if path == manifestPath || !strings.Contains(filepath.Base(path), "conven.yaml-edit-") {
+			t.Fatalf("workspace editor path = %q", path)
 		}
-		return os.WriteFile(path, []byte(strings.ReplaceAll(catalog, "legacyRpc", "disabledRpc")), 0600)
+		return os.WriteFile(path, []byte(strings.Replace(string(manifest), "name: environment-shortcuts", "name: edited-shortcuts", 1)), 0600)
 	}}
-	if code := app.Run([]string{"catalog", "--validate"}); code != 0 {
+	if code := app.Run([]string{"workspace", "--validate"}); code != 0 {
 		t.Fatalf("validate exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
 	}
-	for _, expected := range []string{"Conven catalog is valid", "Services: 2", "Disabled bindings: 1", catalogPath} {
+	for _, expected := range []string{"Conven workspace manifest is valid", "Services: 1", "Disabled bindings: 0", manifestPath} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("validate output is missing %q: %q", expected, output.String())
 		}
 	}
 	output.Reset()
 	errorOutput.Reset()
-	if code := app.Run([]string{"catalog", "--edit"}); code != 0 {
+	if code := app.Run([]string{"workspace", "--edit"}); code != 0 {
 		t.Fatalf("edit exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
 	}
-	if !strings.Contains(output.String(), "Updated Conven catalog") {
+	if !strings.Contains(output.String(), "Updated Conven workspace manifest") {
 		t.Fatalf("edit output = %q", output.String())
 	}
-	data, err := os.ReadFile(catalogPath)
+	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "disabledRpc") || strings.Contains(string(data), "legacyRpc") {
-		t.Fatalf("edited catalog = %q", data)
+	if !strings.Contains(string(data), "name: edited-shortcuts") {
+		t.Fatalf("edited manifest = %q", data)
 	}
 }
 
-func TestWorkspaceStatusCombinesWorkspaceCatalogAndRuntimeState(t *testing.T) {
+func TestWorkspaceStatusCombinesManifestAndRuntimeState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := environmentShortcutWorkspace(t)
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
-	manifest := `version: 2
+	manifest := `version: 3
 workspace:
   name: status-workspace
+  disabledBindings: [zRpc, aRpc]
 environments:
   local:
     connection:
@@ -400,23 +390,51 @@ environments:
       postgres:
         protocol: tcp
         address: 127.0.0.1:5432
+policies:
+  local-http:
+    drivers:
+      runtime: go-generic
+      framework: go
+      configSource: environment
+      discovery: passive
+      materializer: environment
+    routing:
+      servers:
+        http:
+          port: http
+          isolation:
+            registration:
+              mode: not-applicable
+            listener:
+              path: HOST
+              value: 127.0.0.1
 services:
   api:
     path: api
-    kind: http
+    policy: local-http
+    kinds: [http]
+    discovery:
+      analyzer: test-go
+      certifier: go-generic
+      consumers: [kafka]
+    isolation:
+      consumers:
+        kafka:
+          mode: guarded
+          env: SERVICE_KAFKA_CONSUMERS_ENABLED
     network:
       listen: all-interfaces
     ports:
       metrics: 19090
       http: 18080
+    healthChecks:
+      - server: http
+        type: tcp
+        address: 127.0.0.1:${port.http}
     runner:
       run: [sleep, "600"]
 `
 	if err := os.WriteFile(manifestPath, []byte(manifest), 0600); err != nil {
-		t.Fatal(err)
-	}
-	catalogPath := filepath.Join(workspace, ".conven", "catalog.yaml")
-	if err := os.WriteFile(catalogPath, []byte("version: 1\nservices: []\ndisabledRpcBindings: [zRpc, aRpc]\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := config.SetSetting(workspace, "", false, "ktctl.kubeconfig", "/secure/dev-kubeconfig"); err != nil {
@@ -435,11 +453,10 @@ services:
 		"Name: status-workspace",
 		"Root: " + workspace,
 		"Manifest: " + manifestPath,
-		"Catalog: " + catalogPath,
 		"ktctl.kubeconfig=/secure/dev-kubeconfig",
 		"ktctl.path=/usr/local/bin/ktctl",
 		"Available services",
-		"api: type=http, ports=http=18080,metrics=19090, listener=all-interfaces, path=api",
+		"api: type=http, ports=http=18080,metrics=19090, listener=all-interfaces, consumers=kafka:disabled, contract=go-generic, path=api",
 		"Configured endpoints",
 		"local.postgres: protocol=tcp, address=127.0.0.1:5432, readiness=tcp",
 		"Disabled bindings",
@@ -458,7 +475,7 @@ services:
 	if strings.Index(output.String(), "Available services") > strings.Index(output.String(), "Configured endpoints") || strings.Index(output.String(), "Configured endpoints") > strings.Index(output.String(), "Disabled bindings") {
 		t.Fatalf("workspace inventories are not ordered: %q", output.String())
 	}
-	if strings.Index(output.String(), "Catalog: ") > strings.Index(output.String(), "ktctl.kubeconfig=") || strings.Index(output.String(), "ktctl.path=") > strings.Index(output.String(), "Available services") {
+	if strings.Index(output.String(), "Manifest: ") > strings.Index(output.String(), "ktctl.kubeconfig=") || strings.Index(output.String(), "ktctl.path=") > strings.Index(output.String(), "Available services") {
 		t.Fatalf("ktctl settings are not in the Workspace group: %q", output.String())
 	}
 }
@@ -711,13 +728,14 @@ func listenerCommandWorkspace(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 2
+	manifest := `version: 3
 workspace:
   name: listener-command
   policy: trusted
 policies:
   trusted:
     drivers:
+      runtime: go-zero
       framework: go-zero
       configSource: repository
       discovery: consul
@@ -740,18 +758,32 @@ policies:
 services:
   api:
     path: api
-    kind: http
+    kinds: [http]
+    discovery:
+      analyzer: test-go-zero
+      certifier: go-zero
     runner:
       run: [api]
     ports:
       http: 18080
+    healthChecks:
+      - server: http
+        type: tcp
+        address: 127.0.0.1:${port.http}
   admin:
     path: admin
-    kind: http
+    kinds: [http]
+    discovery:
+      analyzer: test-go-zero
+      certifier: go-zero
     runner:
       run: [admin]
     ports:
       http: 18081
+    healthChecks:
+      - server: http
+        type: tcp
+        address: 127.0.0.1:${port.http}
 `
 	if err := os.WriteFile(manifestPath, []byte(manifest), 0600); err != nil {
 		t.Fatal(err)
@@ -779,15 +811,16 @@ func TestSubcommandHelpUsesStdout(t *testing.T) {
 	}
 }
 
-func TestPolicyHelpUsesStdout(t *testing.T) {
+func TestWorkspaceManifestHelpUsesStdout(t *testing.T) {
 	for _, arguments := range [][]string{
-		{"policy", "--help"},
-		{"policy", "-h"},
-		{"policy", "help"},
-		{"policy", "--edit", "--help"},
-		{"policy", "--import", "policy.yaml", "--help"},
-		{"policy", "--import", "policy.yaml", "--edit", "--help"},
-		{"policy", "--reset", "--help"},
+		{"workspace", "--help"},
+		{"workspace", "-h"},
+		{"workspace", "help"},
+		{"workspace", "--edit", "--help"},
+		{"workspace", "--validate", "--help"},
+		{"workspace", "--import", "workspace.yaml", "--help"},
+		{"workspace", "--import", "workspace.yaml", "--edit", "--help"},
+		{"workspace", "--reset", "--help"},
 	} {
 		var output bytes.Buffer
 		var errorOutput bytes.Buffer
@@ -795,7 +828,7 @@ func TestPolicyHelpUsesStdout(t *testing.T) {
 		if code := app.Run(arguments); code != 0 {
 			t.Fatalf("%v exit code = %d", arguments, code)
 		}
-		if !strings.Contains(output.String(), "conven policy") {
+		if !strings.Contains(output.String(), "conven workspace") {
 			t.Fatalf("%v stdout = %q", arguments, output.String())
 		}
 		if errorOutput.Len() != 0 {
@@ -827,19 +860,19 @@ func TestPluginsHelpUsesStdout(t *testing.T) {
 	}
 }
 
-func TestPolicyRequiresKnownActionBeforeWorkspaceLookup(t *testing.T) {
+func TestWorkspaceManifestRequiresKnownActionBeforeWorkspaceLookup(t *testing.T) {
 	for _, arguments := range [][]string{
-		{"policy"},
-		{"policy", "--unknown"},
-		{"policy", "--use-template"},
-		{"policy", "manifest", "--edit"},
+		{"workspace"},
+		{"workspace", "--unknown"},
+		{"workspace", "--use-template"},
+		{"workspace", "manifest", "--edit"},
 	} {
 		var output bytes.Buffer
 		app := App{Output: &output, Error: &output, Cwd: t.TempDir(), Version: "test-version"}
 		if code := app.Run(arguments); code != 2 {
 			t.Fatalf("%v exit code = %d: %s", arguments, code, output.String())
 		}
-		if !strings.Contains(output.String(), "conven policy --edit") || strings.Contains(output.String(), "not a Conven workspace") {
+		if !strings.Contains(output.String(), "conven workspace --edit") || strings.Contains(output.String(), "not a Conven workspace") {
 			t.Fatalf("%v output = %q", arguments, output.String())
 		}
 	}
@@ -1572,9 +1605,10 @@ func TestLeafFlagErrorsUseCanonicalDoubleDash(t *testing.T) {
 		{name: "logs", arguments: []string{"services", "--logs"}},
 		{name: "dashboard", arguments: []string{"services", "--dashboard"}},
 		{name: "list", arguments: []string{"services", "--list"}},
-		{name: "policy edit", arguments: []string{"policy", "--edit"}},
-		{name: "policy import", arguments: []string{"policy", "--import"}},
-		{name: "policy reset", arguments: []string{"policy", "--reset"}},
+		{name: "workspace edit", arguments: []string{"workspace", "--edit"}},
+		{name: "workspace validate", arguments: []string{"workspace", "--validate"}},
+		{name: "workspace import", arguments: []string{"workspace", "--import"}},
+		{name: "workspace reset", arguments: []string{"workspace", "--reset"}},
 	}
 	for _, command := range commands {
 		t.Run(command.name, func(t *testing.T) {
@@ -1612,7 +1646,7 @@ func TestFlagHelpUsesCanonicalDoubleDashForLongOptions(t *testing.T) {
 		{name: "restart", arguments: []string{"services", "--restart", "--help"}, flag: "dashboard"},
 		{name: "stop", arguments: []string{"services", "--stop", "--help"}, flag: "force"},
 		{name: "logs", arguments: []string{"services", "--logs", "--help"}, flag: "tail"},
-		{name: "policy import", arguments: []string{"policy", "--import", "--help"}, flag: "edit"},
+		{name: "workspace import", arguments: []string{"workspace", "--import", "--help"}, flag: "edit"},
 	}
 	for _, command := range commands {
 		t.Run(command.name, func(t *testing.T) {
@@ -1870,7 +1904,7 @@ func TestLogsTailNonTerminalOutputContainsOnlyPrefixedLogs(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workspace, "api"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 2
+	manifest := `version: 3
 workspace:
   name: non-terminal-tail
 services:
@@ -1880,9 +1914,6 @@ services:
       run: [sleep, "600"]
 `
 	if err := os.WriteFile(filepath.Join(workspace, ".conven", "conven.yaml"), []byte(manifest), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, ".conven", "catalog.yaml"), []byte("version: 1\nservices: []\ndisabledRpcBindings: []\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(t.TempDir(), "api.log")
@@ -2006,7 +2037,7 @@ func TestLogsDashboardAliasAndLastModeRouting(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workspace, "api"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 2
+	manifest := `version: 3
 workspace:
   name: dashboard-alias
 services:
@@ -2016,9 +2047,6 @@ services:
       run: [sleep, "600"]
 `
 	if err := os.WriteFile(filepath.Join(workspace, ".conven", "conven.yaml"), []byte(manifest), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, ".conven", "catalog.yaml"), []byte("version: 1\nservices: []\ndisabledRpcBindings: []\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(t.TempDir(), "api.log")
@@ -2368,7 +2396,7 @@ func TestStartWithoutServicesRejectsNonTerminal(t *testing.T) {
 	if err := os.Mkdir(serviceDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 2
+	manifest := `version: 3
 workspace:
   name: test
 services:
@@ -2416,13 +2444,20 @@ func TestStartWithDependenciesExpandsVersionOneServiceSelection(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	manifest := `version: 1
+	manifest := `version: 3
 workspace:
   name: with-dependencies
 environments:
   dev:
     connection:
       driver: none
+    resolutions:
+      api:
+        worker:
+          mode: remote
+      worker:
+        storage:
+          mode: remote
 services:
   api:
     path: api
@@ -2705,7 +2740,7 @@ func TestCompletions(t *testing.T) {
 			if !strings.Contains(completion, workingDirectoryMarker) {
 				t.Fatalf("completion for %s is missing -C", shell)
 			}
-			for _, command := range []string{"init", "services", "config", "catalog", "policy", "plugins", "status", "doctor"} {
+			for _, command := range []string{"init", "services", "config", "workspace", "plugins", "status", "doctor"} {
 				if !strings.Contains(completion, command) {
 					t.Fatalf("completion for %s is missing %s", shell, command)
 				}
@@ -2734,7 +2769,7 @@ func TestCompletions(t *testing.T) {
 			if strings.Contains(completion, "--follow") {
 				t.Fatalf("completion for %s still exposes --follow", shell)
 			}
-			for _, removed := range []string{"--workspace", "--config", "-l workspace", "-l config", "--use-template", "-l use-template"} {
+			for _, removed := range []string{"--workspace", "--config", "-l config", "--use-template", "-l use-template", "-a catalog ", "-a policy "} {
 				if strings.Contains(completion, removed) {
 					t.Fatalf("completion for %s still exposes %s", shell, removed)
 				}
@@ -2749,8 +2784,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		`compgen -W "init services config catalog policy plugins status doctor help version"`,
-		`compgen -W "-C init services config catalog policy plugins status doctor help version"`,
+		`compgen -W "init services config workspace plugins status doctor help version"`,
+		`compgen -W "-C init services config workspace plugins status doctor help version"`,
 		`compgen -d -- "$cur"`,
 		`if [ "$subcommand" = "help" ]`,
 		`if [ "$subcommand" = "services" ]`,
@@ -2770,13 +2805,11 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--stop-all)`,
 		`options="--force --help"`,
 		`options="--env --dev --test --kubeconfig --context --namespace --help"`,
-		`if [ "$subcommand" = "policy" ]`,
-		`options="--edit --import --reset --help"`,
-		`--edit|--reset)`,
+		`if [ "$subcommand" = "workspace" ]`,
+		`options="--edit --validate --migrate --import --reset --help"`,
+		`--edit|--validate|--migrate|--reset)`,
 		`--import)`,
 		`options="--edit --help"`,
-		`if [ "$subcommand" = "catalog" ]`,
-		`options="--edit --validate --help"`,
 		`if [ "$subcommand" = "plugins" ]`,
 		`[ "${COMP_WORDS[action_index + 1]}" = "--global" ]`,
 		`options="--global --output --disable-bindings"`,
@@ -2804,10 +2837,9 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`'-C:run as if conven was started in a different directory'`,
 		`_directories`,
 		`case $words[2] in`,
-		`'1:command:(init services config catalog policy plugins status doctor help version)'`,
+		`'1:command:(init services config workspace plugins status doctor help version)'`,
 		`'services:manage workspace services'`,
-		`'catalog:edit or validate the workspace service catalog'`,
-		`'policy:edit, import, or rebuild the workspace policy manifest'`,
+		`'workspace:edit, validate, migrate, import, or rebuild the workspace manifest'`,
 		`'plugins:install, list, remove, or run Conven plugins'`,
 		`'status:show the complete workspace and runtime status'`,
 		`case $action in`,
@@ -2833,7 +2865,8 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--off[restore loopback-only listening]`,
 		`--reset[destructively reset the manifest to scanned facts]`,
 		`--import[import a local YAML file as the entire manifest]`,
-		`--validate[validate the workspace service catalog]`,
+		`--validate[validate the current workspace manifest]`,
+		`--migrate[atomically migrate a stopped v1/v2 manifest to v3]`,
 		`'1::yaml file:_files'`,
 		`--install[install a Python plugin]`,
 		`--remove[remove an installed plugin]`,
@@ -2869,11 +2902,10 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_using_subcommand help; and __conven_help_without_command`,
 		`function __conven_services_action`,
 		`function __conven_services_without_action`,
-		`function __conven_policy_without_action`,
-		`function __conven_catalog_without_action`,
-		`function __conven_policy_action`,
-		`function __conven_policy_action_without_edit`,
-		`function __conven_policy_import_without_source`,
+		`function __conven_workspace_without_action`,
+		`function __conven_workspace_action`,
+		`function __conven_workspace_action_without_edit`,
+		`function __conven_workspace_import_without_source`,
 		`function __conven_plugins_without_action`,
 		`function __conven_plugins_action`,
 		`function __conven_plugins_scope_position`,
@@ -2881,8 +2913,7 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`function __conven_plugins_global_run`,
 		`function __conven_plugins_run_arguments`,
 		`__conven_without_command' -a services`,
-		`__conven_without_command' -a catalog`,
-		`__conven_without_command' -a policy`,
+		`__conven_without_command' -a workspace`,
 		`__conven_without_command' -a plugins`,
 		`__conven_without_command' -a status`,
 		`__conven_services_without_action' -l list`,
@@ -2907,13 +2938,13 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_services_action --registry' -l prune`,
 		`__conven_services_action --listen' -l on`,
 		`__conven_services_action --listen' -l off`,
-		`__conven_using_subcommand policy; and __conven_policy_without_action' -l edit`,
-		`__conven_using_subcommand policy; and __conven_policy_without_action' -l import`,
-		`__conven_using_subcommand policy; and __conven_policy_without_action' -l reset`,
-		`__conven_using_subcommand catalog; and __conven_catalog_without_action' -l edit`,
-		`__conven_using_subcommand catalog; and __conven_catalog_without_action' -l validate`,
-		`__conven_policy_action_without_edit --import' -l edit`,
-		`__conven_policy_import_without_source' -F`,
+		`__conven_using_subcommand workspace; and __conven_workspace_without_action' -l edit`,
+		`__conven_using_subcommand workspace; and __conven_workspace_without_action' -l validate`,
+		`__conven_using_subcommand workspace; and __conven_workspace_without_action' -l migrate`,
+		`__conven_using_subcommand workspace; and __conven_workspace_without_action' -l import`,
+		`__conven_using_subcommand workspace; and __conven_workspace_without_action' -l reset`,
+		`__conven_workspace_action_without_edit --import' -l edit`,
+		`__conven_workspace_import_without_source' -F`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l install`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l list`,
 		`__conven_using_subcommand plugins; and __conven_plugins_without_action' -l remove`,
@@ -3064,7 +3095,7 @@ func TestBashPluginGlobalCompletionOnlyImmediatelyAfterAction(t *testing.T) {
 	}
 }
 
-func TestBashPolicyCompletionDoesNotOfferSecondAction(t *testing.T) {
+func TestBashWorkspaceCompletionDoesNotOfferSecondAction(t *testing.T) {
 	completion, err := Completion("bash")
 	if err != nil {
 		t.Fatal(err)
@@ -3074,12 +3105,13 @@ func TestBashPolicyCompletionDoesNotOfferSecondAction(t *testing.T) {
 		words string
 		want  string
 	}{
-		{name: "action", words: "conven policy --r", want: "--reset\n"},
-		{name: "import action", words: "conven policy --i", want: "--import\n"},
-		{name: "after action", words: "conven policy --edit --", want: "--help\n"},
-		{name: "import options", words: "conven policy --import --", want: "--edit\n--help\n"},
-		{name: "after import source", words: "conven policy --import README.md --", want: "--edit\n--help\n"},
-		{name: "after import edit", words: "conven policy --import README.md --edit --", want: "--help\n"},
+		{name: "action", words: "conven workspace --r", want: "--reset\n"},
+		{name: "validate action", words: "conven workspace --v", want: "--validate\n"},
+		{name: "import action", words: "conven workspace --i", want: "--import\n"},
+		{name: "after action", words: "conven workspace --edit --", want: "--help\n"},
+		{name: "import options", words: "conven workspace --import --", want: "--edit\n--help\n"},
+		{name: "after import source", words: "conven workspace --import README.md --", want: "--edit\n--help\n"},
+		{name: "after import edit", words: "conven workspace --import README.md --edit --", want: "--help\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			script := completion + "\nCOMP_WORDS=(" + test.words + ")\nCOMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_conven\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
@@ -3094,7 +3126,7 @@ func TestBashPolicyCompletionDoesNotOfferSecondAction(t *testing.T) {
 	}
 }
 
-func TestBashPolicyImportCompletesLocalFilesBeforeSource(t *testing.T) {
+func TestBashWorkspaceImportCompletesLocalFilesBeforeSource(t *testing.T) {
 	completion, err := Completion("bash")
 	if err != nil {
 		t.Fatal(err)
@@ -3103,7 +3135,7 @@ func TestBashPolicyImportCompletesLocalFilesBeforeSource(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "candidate-policy.yaml"), []byte("candidate"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	script := completion + "\nCOMP_WORDS=(conven policy --import candidate)\nCOMP_CWORD=3\n_conven\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
+	script := completion + "\nCOMP_WORDS=(conven workspace --import candidate)\nCOMP_CWORD=3\n_conven\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
 	command := exec.Command("bash", "-c", script)
 	command.Dir = directory
 	output, err := command.CombinedOutput()
@@ -3149,16 +3181,13 @@ func environmentShortcutWorkspaceAt(t *testing.T, workspace string) string {
 	if err := os.Mkdir(filepath.Join(workspace, "api"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 2
+	manifest := `version: 3
 workspace:
   name: environment-shortcuts
 environments:
   dev:
-    registry: dev-registry
   test:
-    registry: test-registry
   stage:
-    registry: stage-registry
 services:
   api:
     path: api
@@ -3166,9 +3195,6 @@ services:
       run: [sh, -c, "while :; do sleep 1; done"]
 `
 	if err := os.WriteFile(filepath.Join(workspace, ".conven", "conven.yaml"), []byte(manifest), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, ".conven", "catalog.yaml"), []byte("version: 1\nservices: []\ndisabledRpcBindings: []\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return workspace
@@ -3195,7 +3221,6 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	}
 	wantInitFiles := "==> Initialized Conven workspace\n" +
 		"  - Manifest: " + path + "\n" +
-		"  - .conven/catalog.yaml\n" +
 		"  - CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md\n" +
 		"  - README.md\n" +
 		"==> Initial service registry scan complete\n"
@@ -3230,7 +3255,8 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	if strings.Contains(strings.ToLower(output.String()), "plugin") {
 		t.Fatalf("init misleadingly reported plugins when no built-ins exist: %q", output.String())
 	}
-	if err := os.WriteFile(path, []byte("custom\n"), 0600); err != nil {
+	customManifest := "version: 3\nworkspace:\n  name: custom\n  disabledBindings: []\nenvironments: {}\nservices: {}\n"
+	if err := os.WriteFile(path, []byte(customManifest), 0600); err != nil {
 		t.Fatal(err)
 	}
 	output.Reset()
@@ -3240,7 +3266,6 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	}
 	wantReinitFiles := "==> Reused Conven workspace\n" +
 		"  - Manifest: " + path + "\n" +
-		"  - .conven/catalog.yaml Skipped\n" +
 		"  - CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md Skipped\n" +
 		"  - README.md Skipped\n" +
 		"  - Existing manifest was not overwritten.\n"
@@ -3251,7 +3276,7 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "custom\n" {
+	if string(data) != customManifest {
 		t.Fatalf("init overwrote manifest: %q", data)
 	}
 	ignore, err = os.ReadFile(ignorePath)
@@ -3271,7 +3296,7 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 		t.Fatalf("reinitialize stderr = %q", errorOutput.String())
 	}
 
-	missingWorkspaceFile := filepath.Join(workspace, ".conven", "catalog.yaml")
+	missingWorkspaceFile := filepath.Join(workspace, "README.md")
 	if err := os.Remove(missingWorkspaceFile); err != nil {
 		t.Fatal(err)
 	}
@@ -3282,15 +3307,14 @@ func TestInitCreatesEmbeddedManifestAndRuntimeIgnoreWithoutOverwriting(t *testin
 	}
 	wantRepairFiles := "==> Reused Conven workspace\n" +
 		"  - Manifest: " + path + "\n" +
-		"  - .conven/catalog.yaml\n" +
 		"  - CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md Skipped\n" +
-		"  - README.md Skipped\n" +
+		"  - README.md\n" +
 		"  - Existing manifest was not overwritten.\n"
 	if !strings.Contains(output.String(), wantRepairFiles) {
 		t.Fatalf("repair init stdout = %q", output.String())
 	}
 	if _, err := os.Stat(missingWorkspaceFile); err != nil {
-		t.Fatalf("repair init did not recreate .conven/catalog.yaml: %v", err)
+		t.Fatalf("repair init did not recreate README.md: %v", err)
 	}
 	if errorOutput.Len() != 0 {
 		t.Fatalf("repair init stderr = %q", errorOutput.String())
@@ -3309,13 +3333,10 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 	if !strings.Contains(output.String(), "==> Initial service registry scan complete\n  - Discovered services: alpha-service") {
 		t.Fatalf("init output = %q", output.String())
 	}
-	catalogPath := filepath.Join(workspace, ".conven", "catalog.yaml")
-	catalog := "version: 1\nservices: []\ndisabledRpcBindings: [bindingStaysUnchanged]\n"
-	if err := os.WriteFile(catalogPath, []byte(catalog), 0644); err != nil {
+	writeCLIServiceRepository(t, workspace, "beta-service")
+	if err := os.WriteFile(filepath.Join(workspace, "beta-service", "go", "main.go"), []byte("package main\nvar _ = Getenv(\"HOST\")\nvar _ = Getenv(\"PORT\")\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-
-	writeCLIServiceRepository(t, workspace, "beta-service")
 	if err := os.MkdirAll(filepath.Join(workspace, "beta-service", "go", "config"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -3331,7 +3352,7 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 		"==> Service registry scan complete",
 		"  - Discovered services: alpha-service, beta-service",
 		"  - Added services: beta-service",
-		"  - Assigned local ports: beta-service.rpc=18080",
+		"  - Assigned local ports: beta-service.rpc=18081",
 		"  - Manifest:",
 	} {
 		if !strings.Contains(output.String(), expected) {
@@ -3345,7 +3366,6 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 	if !strings.Contains(string(data), "alpha-service:") || !strings.Contains(string(data), "beta-service:") {
 		t.Fatalf("manifest = %s", data)
 	}
-	assertFileContents(t, catalogPath, catalog)
 }
 
 func TestPolicyEditUsesInjectedEditorAndPublishesValidatedManifest(t *testing.T) {
@@ -3354,7 +3374,7 @@ func TestPolicyEditUsesInjectedEditorAndPublishesValidatedManifest(t *testing.T)
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 2
+	original := `version: 3
 workspace:
   name: before
 services:
@@ -3374,7 +3394,7 @@ services:
 		Error:   &errorOutput,
 		Cwd:     filepath.Join(workspace, ".conven"),
 		Version: "test",
-		PolicyEditor: func(_ context.Context, path string) error {
+		WorkspaceEditor: func(_ context.Context, path string) error {
 			called = true
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -3384,10 +3404,10 @@ services:
 			return os.WriteFile(path, []byte(updated), 0600)
 		},
 	}
-	if code := app.Run([]string{"policy", "--edit"}); code != 0 {
+	if code := app.Run([]string{"workspace", "--edit"}); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
 	}
-	if !called || !strings.Contains(output.String(), "==> Updated Conven policy manifest\n  - Manifest:") || errorOutput.Len() != 0 {
+	if !called || !strings.Contains(output.String(), "==> Updated Conven workspace manifest\n  - Manifest:") || errorOutput.Len() != 0 {
 		t.Fatalf("called=%v stdout=%q stderr=%q", called, output.String(), errorOutput.String())
 	}
 	data, err := os.ReadFile(manifestPath)
@@ -3406,7 +3426,7 @@ func TestPolicyResetReportsBackupAndLostRulesWarning(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 2
+	original := `version: 3
 workspace:
   name: manual
 services:
@@ -3423,11 +3443,11 @@ services:
 	var output bytes.Buffer
 	var errorOutput bytes.Buffer
 	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test"}
-	if code := app.Run([]string{"policy", "--reset"}); code != 0 {
+	if code := app.Run([]string{"workspace", "--reset"}); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
 	}
 	for _, expected := range []string{
-		"==> Reset Conven policy manifest to scan baseline",
+		"==> Reset Conven workspace manifest to scan baseline",
 		"  - Discovered services: api-service",
 		"  - Manifest:",
 		"  - Backup:",
@@ -3437,7 +3457,7 @@ services:
 		}
 	}
 	for _, expected := range []string{
-		"Warning: Policy reset rebuilds the complete workspace manifest.",
+		"Warning: Workspace reset rebuilds the complete workspace manifest.",
 		"  - Review and restore manually declared policies, environments, ports, dependencies, health checks, patches, and runner changes.",
 		"  => conven doctor",
 		"  => conven services --start --dry-run",
@@ -3467,10 +3487,10 @@ func TestPolicyResetAlreadyAtScanBaselineDoesNotWarn(t *testing.T) {
 	}
 	output.Reset()
 	errorOutput.Reset()
-	if code := app.Run([]string{"policy", "--reset"}); code != 0 {
+	if code := app.Run([]string{"workspace", "--reset"}); code != 0 {
 		t.Fatalf("reset exit code = %d: stdout=%s stderr=%s", code, output.String(), errorOutput.String())
 	}
-	if !strings.Contains(output.String(), "==> Conven policy manifest already matches scan baseline") {
+	if !strings.Contains(output.String(), "==> Conven workspace manifest already matches scan baseline") {
 		t.Fatalf("reset stdout = %q", output.String())
 	}
 	if errorOutput.Len() != 0 {
@@ -3484,7 +3504,7 @@ func TestPolicyImportReplacesManifestAndFeedsSubsequentServicesCommands(t *testi
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 2
+	original := `version: 3
 workspace:
   name: before-import
 services:
@@ -3497,7 +3517,7 @@ services:
 		t.Fatal(err)
 	}
 	importPath := filepath.Join(t.TempDir(), "generated policy.yaml")
-	imported := `version: 2
+	imported := `version: 3
 workspace:
   name: imported-workspace
 services:
@@ -3517,16 +3537,16 @@ services:
 		Error:   &errorOutput,
 		Cwd:     workspace,
 		Version: "test",
-		PolicyEditor: func(context.Context, string) error {
-			t.Fatal("policy --import without --edit launched the editor")
+		WorkspaceEditor: func(context.Context, string) error {
+			t.Fatal("workspace --import without --edit launched the editor")
 			return nil
 		},
 		SingleSelector: func(context.Context, *os.File, io.Writer, selector.Prompt, []selector.Candidate) (selector.Candidate, bool, error) {
-			t.Fatal("explicit policy import unexpectedly opened the selector")
+			t.Fatal("explicit workspace import unexpectedly opened the selector")
 			return selector.Candidate{}, false, nil
 		},
 	}
-	if code := app.Run([]string{"policy", "--import", importPath}); code != 0 {
+	if code := app.Run([]string{"workspace", "--import", importPath}); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
 	}
 	data, err := os.ReadFile(manifestPath)
@@ -3537,7 +3557,7 @@ services:
 		t.Fatalf("manifest = %s", data)
 	}
 	for _, expected := range []string{
-		"==> Replaced Conven policy manifest",
+		"==> Replaced Conven workspace manifest",
 		"  - Source: "+importPath,
 		"  - Manifest: "+manifestPath,
 		"  - Backup:",
@@ -3547,7 +3567,7 @@ services:
 		}
 	}
 	for _, expected := range []string{
-		"Warning: Policy import treats the source as the complete workspace manifest.",
+		"Warning: Workspace import treats the source as the complete workspace manifest.",
 		"  - Repository scan results were not merged.",
 		"  => conven doctor",
 		"  => conven services --start --dry-run",
@@ -3573,7 +3593,7 @@ func TestPolicyImportWithoutFilenameSelectsTheOnlyWorkspaceYAML(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 2
+	original := `version: 3
 workspace:
   name: before-import
 services:
@@ -3585,7 +3605,7 @@ services:
 	if err := os.WriteFile(manifestPath, []byte(original), 0600); err != nil {
 		t.Fatal(err)
 	}
-	imported := `version: 2
+	imported := `version: 3
 workspace:
   name: default-import
 services:
@@ -3613,7 +3633,7 @@ services:
 		Version: "test",
 		SingleSelector: func(_ context.Context, _ *os.File, _ io.Writer, prompt selector.Prompt, candidates []selector.Candidate) (selector.Candidate, bool, error) {
 			selectorCalled = true
-			if prompt.Title != "Select a policy file" || prompt.ConfirmationLabel != "Importing policy file" || prompt.EmptySelectionNotice != "Select one policy file before confirming." {
+			if prompt.Title != "Select a workspace manifest" || prompt.ConfirmationLabel != "Importing workspace manifest" || prompt.EmptySelectionNotice != "Select one manifest file before confirming." {
 				t.Fatalf("prompt = %#v", prompt)
 			}
 			if len(candidates) != 1 || candidates[0].Name != "application.yaml" {
@@ -3622,11 +3642,11 @@ services:
 			return candidates[0], true, nil
 		},
 	}
-	if code := app.Run([]string{"policy", "--import"}); code != 0 {
+	if code := app.Run([]string{"workspace", "--import"}); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, errorOutput.String())
 	}
 	if !selectorCalled {
-		t.Fatal("policy selector was not called for the sole YAML file")
+		t.Fatal("workspace selector was not called for the sole YAML file")
 	}
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -3635,12 +3655,12 @@ services:
 	if !bytes.Equal(data, []byte(imported)) {
 		t.Fatalf("manifest = %s", data)
 	}
-	for _, expected := range []string{"Warning: Policy import treats the source as the complete workspace manifest."} {
+	for _, expected := range []string{"Warning: Workspace import treats the source as the complete workspace manifest."} {
 		if !strings.Contains(errorOutput.String(), expected) {
 			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
 		}
 	}
-	if !strings.Contains(output.String(), "==> Replaced Conven policy manifest\n  - Source: "+defaultPath) {
+	if !strings.Contains(output.String(), "==> Replaced Conven workspace manifest\n  - Source: "+defaultPath) {
 		t.Fatalf("stdout = %q", output.String())
 	}
 }
@@ -3651,7 +3671,7 @@ func TestPolicyImportWithoutFilenameRequiresWorkspaceYAML(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 2
+	original := `version: 3
 workspace:
   name: unchanged
 services:
@@ -3667,13 +3687,13 @@ services:
 	var output bytes.Buffer
 	var errorOutput bytes.Buffer
 	app := App{Output: &output, Error: &errorOutput, Cwd: workspace, Version: "test"}
-	if code := app.Run([]string{"policy", "--import"}); code != 1 {
+	if code := app.Run([]string{"workspace", "--import"}); code != 1 {
 		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
 	}
 	if output.Len() != 0 {
 		t.Fatalf("stdout = %q", output.String())
 	}
-	for _, expected := range []string{"no YAML policy files were found in the workspace root", "specify a YAML filename"} {
+	for _, expected := range []string{"no YAML manifest files were found in the workspace root", "specify a YAML filename"} {
 		if !strings.Contains(errorOutput.String(), expected) {
 			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())
 		}
@@ -3723,7 +3743,7 @@ func TestPolicyImportWithoutFilenameSelectsAmongMultipleWorkspaceYAMLFiles(t *te
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 2
+	original := `version: 3
 workspace:
   name: before
 services:
@@ -3757,7 +3777,7 @@ services:
 			return candidates[1], true, nil
 		},
 	}
-	if code := app.Run([]string{"policy", "--import"}); code != 0 {
+	if code := app.Run([]string{"workspace", "--import"}); code != 0 {
 		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
 	}
 	data, err := os.ReadFile(manifestPath)
@@ -3778,7 +3798,7 @@ func TestPolicyImportWithoutFilenameCanCancelSelection(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 		t.Fatal(err)
 	}
-	original := `version: 2
+	original := `version: 3
 workspace:
   name: unchanged
 services:
@@ -3804,14 +3824,14 @@ services:
 			return selector.Candidate{}, false, nil
 		},
 	}
-	if code := app.Run([]string{"policy", "--import"}); code != 0 {
+	if code := app.Run([]string{"workspace", "--import"}); code != 0 {
 		t.Fatalf("exit code = %d: stderr=%q", code, errorOutput.String())
 	}
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != original || output.String() != "==> Policy import cancelled\n  - Conven policy manifest was not changed.\n" || errorOutput.Len() != 0 {
+	if string(data) != original || output.String() != "==> Workspace import cancelled\n  - Conven workspace manifest was not changed.\n" || errorOutput.Len() != 0 {
 		t.Fatalf("manifest=%s stdout=%q stderr=%q", data, output.String(), errorOutput.String())
 	}
 }
@@ -3835,10 +3855,10 @@ func TestPolicyImportWithoutFilenameReportsNonInteractiveSelection(t *testing.T)
 			return selector.Candidate{}, false, selector.ErrNotTerminal
 		},
 	}
-	if code := app.Run([]string{"policy", "--import"}); code != 1 {
+	if code := app.Run([]string{"workspace", "--import"}); code != 1 {
 		t.Fatalf("exit code = %d: stdout=%q stderr=%q", code, output.String(), errorOutput.String())
 	}
-	if output.Len() != 0 || !strings.Contains(errorOutput.String(), "policy import selection requires an interactive terminal; specify a YAML filename explicitly") {
+	if output.Len() != 0 || !strings.Contains(errorOutput.String(), "workspace import selection requires an interactive terminal; specify a YAML filename explicitly") {
 		t.Fatalf("stdout=%q stderr=%q", output.String(), errorOutput.String())
 	}
 }
@@ -3855,7 +3875,7 @@ func TestPolicyImportEditAcceptsFlagBeforeOrAfterSource(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(manifestPath), 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(manifestPath, []byte(`version: 2
+			if err := os.WriteFile(manifestPath, []byte(`version: 3
 workspace:
   name: before
 services:
@@ -3867,7 +3887,7 @@ services:
 				t.Fatal(err)
 			}
 			importPath := filepath.Join(t.TempDir(), "policy.yaml")
-			if err := os.WriteFile(importPath, []byte(`version: 2
+			if err := os.WriteFile(importPath, []byte(`version: 3
 workspace:
   name: imported
 services:
@@ -3885,7 +3905,7 @@ services:
 				Error:   &output,
 				Cwd:     workspace,
 				Version: "test",
-				PolicyEditor: func(_ context.Context, path string) error {
+				WorkspaceEditor: func(_ context.Context, path string) error {
 					called = true
 					data, err := os.ReadFile(path)
 					if err != nil {
@@ -3895,9 +3915,9 @@ services:
 					return os.WriteFile(path, []byte(edited), 0600)
 				},
 			}
-			arguments := []string{"policy", "--import", importPath, "--edit"}
+			arguments := []string{"workspace", "--import", importPath, "--edit"}
 			if editFirst {
-				arguments = []string{"policy", "--import", "--edit", importPath}
+				arguments = []string{"workspace", "--import", "--edit", importPath}
 			}
 			if code := app.Run(arguments); code != 0 {
 				t.Fatalf("exit code = %d: %s", code, output.String())
@@ -3919,12 +3939,13 @@ func TestPolicyActionsRejectArgumentsAndUnknownFlags(t *testing.T) {
 		code      int
 		message   string
 	}{
-		{[]string{"policy", "--edit", "extra"}, 1, "does not accept arguments"},
-		{[]string{"policy", "--reset", "extra"}, 1, "does not accept arguments"},
-		{[]string{"policy", "--edit", "--unknown"}, 2, "flag provided but not defined"},
-		{[]string{"policy", "--import", "one.yaml", "two.yaml"}, 1, "accepts at most one YAML file"},
-		{[]string{"policy", "--import", "--unknown", "one.yaml"}, 2, "flag provided but not defined"},
-		{[]string{"policy", "--import", "--reset", "one.yaml"}, 2, "flag provided but not defined"},
+		{[]string{"workspace", "--edit", "extra"}, 1, "does not accept arguments"},
+		{[]string{"workspace", "--validate", "extra"}, 1, "does not accept arguments"},
+		{[]string{"workspace", "--reset", "extra"}, 1, "does not accept arguments"},
+		{[]string{"workspace", "--edit", "--unknown"}, 2, "flag provided but not defined"},
+		{[]string{"workspace", "--import", "one.yaml", "two.yaml"}, 1, "accepts at most one YAML file"},
+		{[]string{"workspace", "--import", "--unknown", "one.yaml"}, 2, "flag provided but not defined"},
+		{[]string{"workspace", "--import", "--reset", "one.yaml"}, 2, "flag provided but not defined"},
 	} {
 		var output bytes.Buffer
 		app := App{Output: &output, Error: &output, Cwd: t.TempDir(), Version: "test"}
@@ -3937,7 +3958,7 @@ func TestPolicyActionsRejectArgumentsAndUnknownFlags(t *testing.T) {
 	}
 }
 
-func TestLaunchPolicyEditorUsesConvenEditorAndSupportsArguments(t *testing.T) {
+func TestLaunchWorkspaceEditorUsesConvenEditorAndSupportsArguments(t *testing.T) {
 	directory := t.TempDir()
 	script := filepath.Join(directory, "editor.sh")
 	capture := filepath.Join(directory, "capture")
@@ -3955,7 +3976,7 @@ func TestLaunchPolicyEditorUsesConvenEditorAndSupportsArguments(t *testing.T) {
 	}
 	defer input.Close()
 	manifest := filepath.Join(directory, "manifest with spaces.yaml")
-	if err := launchPolicyEditor(context.Background(), input, io.Discard, io.Discard, manifest); err != nil {
+	if err := launchWorkspaceEditor(context.Background(), input, io.Discard, io.Discard, manifest); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(capture)
@@ -3967,7 +3988,7 @@ func TestLaunchPolicyEditorUsesConvenEditorAndSupportsArguments(t *testing.T) {
 	}
 }
 
-func TestLaunchPolicyEditorConfiguresViForYAML(t *testing.T) {
+func TestLaunchWorkspaceEditorConfiguresViForYAML(t *testing.T) {
 	directory := t.TempDir()
 	script := filepath.Join(directory, "vi")
 	capture := filepath.Join(directory, "capture")
@@ -3985,7 +4006,7 @@ func TestLaunchPolicyEditorConfiguresViForYAML(t *testing.T) {
 	}
 	defer input.Close()
 	manifest := filepath.Join(directory, "conven.yaml")
-	if err := launchPolicyEditor(context.Background(), input, io.Discard, io.Discard, manifest); err != nil {
+	if err := launchWorkspaceEditor(context.Background(), input, io.Discard, io.Discard, manifest); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(capture)
@@ -4008,11 +4029,6 @@ func TestRegistryPruneRemovesMissingDirectChildService(t *testing.T) {
 	if code := app.Run([]string{"init"}); code != 0 {
 		t.Fatalf("init exit code = %d: %s", code, output.String())
 	}
-	catalogPath := filepath.Join(workspace, ".conven", "catalog.yaml")
-	catalog := "version: 1\nservices: []\ndisabledRpcBindings: [bindingSurvivesPrune]\n"
-	if err := os.WriteFile(catalogPath, []byte(catalog), 0644); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.RemoveAll(filepath.Join(workspace, "alpha-service")); err != nil {
 		t.Fatal(err)
 	}
@@ -4030,7 +4046,6 @@ func TestRegistryPruneRemovesMissingDirectChildService(t *testing.T) {
 	if strings.Contains(string(data), "alpha-service:") || !strings.Contains(string(data), "beta-service:") {
 		t.Fatalf("manifest after registry --prune = %s", data)
 	}
-	assertFileContents(t, catalogPath, catalog)
 }
 
 func TestRegistryRejectsArgumentsAndUnknownFlags(t *testing.T) {
@@ -4080,7 +4095,7 @@ func TestRegistryReportsKeptMissingRepositoriesAsUnchanged(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspace, ".conven"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := `version: 2
+	manifest := `version: 3
 workspace:
   name: missing
 services:
@@ -4281,9 +4296,10 @@ func TestWorkspaceCommandsFailOutsideDotConvenBoundary(t *testing.T) {
 		{"doctor"},
 		{"services", "--list"},
 		{"services", "--registry"},
-		{"policy", "--edit"},
-		{"policy", "--reset"},
-		{"policy", "--import", filepath.Join(t.TempDir(), "policy.yaml")},
+		{"workspace", "--edit"},
+		{"workspace", "--validate"},
+		{"workspace", "--reset"},
+		{"workspace", "--import", filepath.Join(t.TempDir(), "workspace.yaml")},
 		{"config", "--list"},
 	} {
 		t.Run(strings.Join(arguments, "_"), func(t *testing.T) {
@@ -4311,7 +4327,10 @@ func writeCLIServiceRepository(t *testing.T, workspace string, name string) {
 	if err := os.WriteFile(filepath.Join(repository, "go", "go.mod"), []byte("module example.com/"+name+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repository, "go", "main.go"), []byte("package main\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(repository, "go", "go.sum"), []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "go", "main.go"), []byte("package main\ntype Config struct { Server rest.RestConf }\nvar _ = Getenv(\"HOST\")\nvar _ = Getenv(\"PORT\")\nvar _ = Getenv(\"HTTP_PORT\")\nvar _ = Getenv(\"RPC_PORT\")\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 }

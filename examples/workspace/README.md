@@ -9,7 +9,7 @@ Conven repository: [leo1394/homebrew-conven](https://github.com/leo1394/homebrew
 ## No-cluster local start
 
 When this workspace was created with `conven init --local`, it contains a
-Manifest v2 `local` environment with no cluster connection. Declare the
+Manifest v3 `local` environment with no cluster connection. Declare the
 addresses required by local services as environment endpoints, then:
 
 ```bash
@@ -22,11 +22,10 @@ Conven checks endpoints referenced by the selected services before startup.
 
 ## Initialized files
 
-- `.conven/conven.yaml` is the active Conven workspace manifest.
-- `.conven/catalog.yaml` is the generator service catalog. Each service uses a
-  `repository`, an `rpcBinding`, case-sensitive `rpcBindings`, or a combination,
-  plus `kind` and a unique local `port`.
-  `disabledRpcBindings` lists bindings that remain remote.
+- `.conven/conven.yaml` is the active and sole core Conven workspace manifest.
+  Its `services` entries own paths, kinds, ports, provider bindings, runners,
+  health checks, and dependencies. `workspace.disabledBindings` owns the
+  persisted disabled-binding set.
 - `CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md` is a complete AI-readable
   contract for implementing or updating a workspace policy generator plugin.
 - `README.md` is this workspace-local quick start for the generated files and
@@ -35,8 +34,8 @@ Conven checks endpoints referenced by the selected services before startup.
 `conven init` never overwrites these files. The first init performs the same
 direct-child repository scan used by `conven services --registry`; it does not
 need to run that command a second time. Review and edit the generator inputs
-before generating a policy. Use `conven catalog --edit` for validated edits and
-`conven catalog --validate` for a read-only check.
+before generating a candidate. Use `conven workspace --edit` for validated
+edits and `conven workspace --validate` for a read-only check.
 
 ## Create and install the generator
 
@@ -55,6 +54,7 @@ minimal no-connection example is:
   "version": 1,
   "profile": "go-zero-apollo-consul-v1",
   "policyName": "local-services",
+  "bindingProviders": {},
   "environments": {
     "dev": {
       "registry": "consul",
@@ -77,7 +77,7 @@ conven plugins --install ./generate-workspace-policy.py
 conven plugins --list
 ```
 
-## Generate and import the policy
+## Generate and import the manifest
 
 When the workspace has exactly one plugin, its name may be omitted. With no
 filename after `--output`, the plugin writes `application.yaml` and asks before
@@ -85,7 +85,7 @@ overwriting an existing file:
 
 ```bash
 conven plugins --run --output
-conven policy --import --edit
+conven workspace --import --edit
 ```
 
 If more than one workspace plugin is installed, Conven opens its single
@@ -95,8 +95,8 @@ selector; the name can still be provided explicitly:
 conven plugins --run generate-workspace-policy --output
 ```
 
-To replace the disabled binding file for one generation, pass the bindings
-after `--disable-bindings`:
+To replace `workspace.disabledBindings` in memory for one generation, pass the
+bindings after `--disable-bindings`:
 
 ```bash
 conven plugins --run --output --disable-bindings legacyRpc experimentalRpc
@@ -135,9 +135,13 @@ direct child service repository. It updates discovered facts in
 `.conven/conven.yaml` without overwriting manual service configuration unless
 pruning is explicitly requested.
 
-The registry command never edits `.conven/catalog.yaml`. Conven cannot safely
-infer unique local ports or policy-level provider aliases from every
-repository. Keep the catalog as a user- or AI-reviewed superset: add newly
-discovered repositories with verified ports, retain repository or RPC-binding
-entries that are not currently checked out, and remove entries only by an
-explicit review. Even `services --registry --prune` changes only the manifest.
+The registry command uses the shared lowest-free-port allocator for newly
+proven typed services and never renumbers existing services. Analyzer-proven
+consumer bindings live in `services.*.discovery.consumerBindings`; provider
+names live in `services.*.discovery.providerAliases`.
+Detected typed Kafka consumers are recorded in `discovery.consumers` together
+with the required `isolation.consumers` contract; workspace generators must
+preserve both fields.
+If an organization-specific generator needs an additional consumer-binding to
+provider mapping, place only that mapping in `conven-generator.json` under
+`bindingProviders`; do not duplicate service paths, kinds, or ports there.

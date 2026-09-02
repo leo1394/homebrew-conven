@@ -29,16 +29,11 @@ func (app App) runWorkspaceStatus(arguments []string) int {
 	if err != nil {
 		return app.fail(err)
 	}
-	catalog, catalogPath, err := config.LoadWorkspaceCatalog(workspace.Root)
-	if err != nil {
-		return app.fail(err)
-	}
 	style := terminal.New(app.Output)
 	fmt.Fprintln(app.Output, style.Stage("Workspace"))
 	fmt.Fprintln(app.Output, style.Detail("Name: "+style.Identifier(workspace.Manifest.Workspace.Name)))
 	fmt.Fprintln(app.Output, style.Detail("Root: "+workspace.Root))
 	fmt.Fprintln(app.Output, style.Detail("Manifest: "+workspace.ConfigPath))
-	fmt.Fprintln(app.Output, style.Detail("Catalog: "+catalogPath))
 	for _, key := range []string{"ktctl.kubeconfig", "ktctl.path"} {
 		if value := strings.TrimSpace(workspace.Settings[key]); value != "" {
 			fmt.Fprintln(app.Output, style.Detail(key+"="+value))
@@ -52,15 +47,27 @@ func (app App) runWorkspaceStatus(arguments []string) int {
 	}
 	for _, name := range serviceNames {
 		service := workspace.Manifest.Services[name]
-		kind := service.Kind
-		if kind == "" {
-			kind = "-"
+		kinds := service.EffectiveKinds()
+		kind := "runner-only"
+		if len(kinds) > 0 {
+			kind = strings.Join(kinds, "+")
 		}
-		fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("%s: type=%s, %s, listener=%s, path=%s", style.Identifier(name), kind, statusPortSummary(service.Ports), service.Network.EffectiveListen(), service.Path)))
+		contract := service.Discovery.Certifier
+		if contract == "" {
+			contract = "manual"
+		}
+		consumerSummary := ""
+		if len(service.Discovery.Consumers) > 0 {
+			consumerNames := append([]string(nil), service.Discovery.Consumers...)
+			sort.Strings(consumerNames)
+			consumerSummary = ", consumers=" + strings.Join(consumerNames, "+") + ":disabled"
+		}
+		fmt.Fprintln(app.Output, style.Detail(fmt.Sprintf("%s: type=%s, %s, listener=%s%s, contract=%s, path=%s", style.Identifier(name), kind, statusPortSummary(service.Ports), service.Network.EffectiveListen(), consumerSummary, contract, service.Path)))
 	}
+	printConfiguredRegistries(workspace, app.Output)
 	printConfiguredEndpoints(workspace, app.Output)
 
-	disabled := append([]string(nil), catalog.DisabledRPCBindings...)
+	disabled := append([]string(nil), workspace.Manifest.Workspace.DisabledBindings...)
 	sort.Strings(disabled)
 	fmt.Fprintln(app.Output, style.Stage("Disabled bindings"))
 	if len(disabled) == 0 {
@@ -74,6 +81,42 @@ func (app App) runWorkspaceStatus(arguments []string) int {
 		return app.fail(err)
 	}
 	return 0
+}
+
+func printConfiguredRegistries(workspace *convenruntime.WorkspaceData, output interface{ Write([]byte) (int, error) }) {
+	style := terminal.New(output)
+	fmt.Fprintln(output, style.Stage("Configured registries"))
+	environments := make([]string, 0, len(workspace.Manifest.Environments))
+	for name := range workspace.Manifest.Environments {
+		environments = append(environments, name)
+	}
+	sort.Strings(environments)
+	count := 0
+	for _, environmentName := range environments {
+		registryNames := make([]string, 0, len(workspace.Manifest.Environments[environmentName].Registries))
+		for name := range workspace.Manifest.Environments[environmentName].Registries {
+			registryNames = append(registryNames, name)
+		}
+		sort.Strings(registryNames)
+		for _, name := range registryNames {
+			registry := workspace.Manifest.Environments[environmentName].Registries[name]
+			credentials := "none"
+			refs := make([]string, 0, 3)
+			for _, reference := range []string{registry.TokenEnv, registry.UsernameEnv, registry.PasswordEnv} {
+				if reference != "" {
+					refs = append(refs, reference)
+				}
+			}
+			if len(refs) > 0 {
+				credentials = "env:" + strings.Join(refs, ",")
+			}
+			fmt.Fprintln(output, style.Detail(fmt.Sprintf("%s.%s: driver=%s, address=%s, namespace=%s, credentials=%s", style.Identifier(environmentName), style.Identifier(name), registry.Driver, registry.Address, registry.Namespace, credentials)))
+			count++
+		}
+	}
+	if count == 0 {
+		fmt.Fprintln(output, style.Detail("none"))
+	}
 }
 
 func statusPorts(ports map[string]int) string {
@@ -137,11 +180,7 @@ func printConfiguredEndpoints(workspace *convenruntime.WorkspaceData, output int
 }
 
 func dashboardTailOptions(workspace *convenruntime.WorkspaceData, names []string, version string) (convenruntime.TailOptions, error) {
-	catalog, err := config.LoadCatalog(config.CatalogPath(workspace.Root))
-	if err != nil {
-		return convenruntime.TailOptions{}, err
-	}
-	disabled := append([]string(nil), catalog.DisabledRPCBindings...)
+	disabled := append([]string(nil), workspace.Manifest.Workspace.DisabledBindings...)
 	sort.Strings(disabled)
-	return convenruntime.TailOptions{Names: names, Version: version, DisabledRPCBindings: disabled}, nil
+	return convenruntime.TailOptions{Names: names, Version: version, DisabledBindings: disabled}, nil
 }

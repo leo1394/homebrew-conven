@@ -30,6 +30,43 @@ jobs:
       - name: Build
         run: go build ./cmd/conven
 
+  adapter-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runtime: [jdk17, node22, python, bun]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v4
+        if: matrix.runtime == 'jdk17'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        if: matrix.runtime == 'node22'
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        if: matrix.runtime == 'python'
+        with:
+          python-version: '3.x'
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.runtime == 'bun'
+      - name: Verify runtime
+        run: |
+          case "${{ matrix.runtime }}" in
+            jdk17) java -version ;;
+            node22) node --version ;;
+            python) python --version ;;
+            bun) bun --version ;;
+          esac
+      - name: Test typed adapter fixtures
+        run: go test ./internal/config -run 'TestTypedAnalyzer|TestKnownDynamicFramework'
+
   homebrew:
     runs-on: macos-latest
     steps:
@@ -88,7 +125,7 @@ jobs:
           grep -Fq -- "'-C:run as if conven was started" "$completion_dir/_conven"
           grep -Fq -- "-s C" "$completion_dir/conven.fish"
           bash_top="$(grep -m 1 -F 'compgen -W "' "$completion_dir/conven.bash" | sed -E 's/.*compgen -W "([^"]+)".*/\1/')"
-          for command in init services config catalog policy plugins status doctor help version; do
+          for command in init services config workspace plugins status doctor help version; do
             case " $bash_top " in
               *" $command "*) ;;
               *) echo "missing bash top-level completion: $command" >&2; exit 1 ;;
@@ -96,7 +133,7 @@ jobs:
             grep -Fq "        '$command:" "$completion_dir/_conven"
             grep -Fq "complete -c conven -f -n '__conven_without_command' -a $command " "$completion_dir/conven.fish"
           done
-          for command in discover list logs start restart stop; do
+          for command in catalog policy discover list logs start restart stop; do
             case " $bash_top " in
               *" $command "*) echo "retained bash top-level completion: $command" >&2; exit 1 ;;
             esac
@@ -114,12 +151,7 @@ jobs:
             grep -Fq -- "--$action" "$completion_dir/_conven"
             grep -Fq -- "-l $action" "$completion_dir/conven.fish"
           done
-          for action in edit import reset; do
-            grep -Fq -- "--$action" "$completion_dir/conven.bash"
-            grep -Fq -- "--$action" "$completion_dir/_conven"
-            grep -Fq -- "-l $action" "$completion_dir/conven.fish"
-          done
-          for action in edit validate; do
+          for action in edit validate migrate import reset; do
             grep -Fq -- "--$action" "$completion_dir/conven.bash"
             grep -Fq -- "--$action" "$completion_dir/_conven"
             grep -Fq -- "-l $action" "$completion_dir/conven.fish"

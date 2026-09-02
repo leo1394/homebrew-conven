@@ -175,9 +175,12 @@ go vet ./...
 go build -o /tmp/conven-release ./cmd/conven
 /tmp/conven-release --version
 test -f examples/application.yaml
+grep -Eq '^version:[[:space:]]+3$' examples/application.yaml
+grep -Fq 'adapter-smoke:' .github/workflows/ci.yml
+for runtime in jdk17 node22 python bun; do grep -Fq "$runtime" .github/workflows/ci.yml; done
 test ! -e examples/loom.yaml
 test ! -e examples/conven.yaml
-test -f examples/workspace/catalog.yaml
+test ! -e examples/workspace/catalog.yaml
 test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
 test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
 test -f examples/workspace/README.md
@@ -204,9 +207,9 @@ https://github.com/leo1394/homebrew-conven
 ### Workspace 接入与插件验收
 
 如果本次发布修改了 workspace 接入或插件行为，必须使用构建出的二进制在隔离
-workspace 中执行 smoke test。首次 `init` 必须生成 manifest 和三个 workspace
+workspace 中执行 smoke test。首次 `init` 必须生成 manifest 和两个 workspace
 指导文件；再次执行 `init` 必须逐字节保留全部已有文件。`services --registry` 可以更新
-`.conven/conven.yaml`，但不得修改 catalog。`policy --import` 省略来源文件
+`.conven/conven.yaml`。`workspace --import` 省略来源文件
 时必须交互选择 workspace 根目录的 YAML 候选；自动检查必须显式传入来源文件：
 
 ```bash
@@ -223,10 +226,9 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   tee "$CONVEN_SMOKE_INIT_OUTPUT"
 grep -Fq '==> Initialized Conven workspace' "$CONVEN_SMOKE_INIT_OUTPUT"
 grep -Fq '  - Manifest: ' "$CONVEN_SMOKE_INIT_OUTPUT"
-/tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" catalog --validate
+/tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" workspace --validate
 /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" status
 for CONVEN_SMOKE_ASSET in \
-  .conven/catalog.yaml \
   CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
   README.md
 do
@@ -246,7 +248,6 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
 grep -Fq 'language: zh-CN' \
   "$CONVEN_SMOKE_CHINESE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md"
 CONVEN_ASSET_SHA_BEFORE="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
 CONVEN_SMOKE_REINIT_OUTPUT="$CONVEN_SMOKE_ROOT/reinit-output.txt"
@@ -254,31 +255,24 @@ env HOME="$CONVEN_SMOKE_HOME" LC_ALL=zh_TW.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" init | \
   tee "$CONVEN_SMOKE_REINIT_OUTPUT"
 for CONVEN_SMOKE_ASSET in \
-  .conven/catalog.yaml \
   CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md \
   README.md
 do
   grep -Fq "  - $CONVEN_SMOKE_ASSET Skipped" "$CONVEN_SMOKE_REINIT_OUTPUT"
 done
 CONVEN_ASSET_SHA_AFTER="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md" \
   "$CONVEN_SMOKE_WORKSPACE/README.md")"
 test "$CONVEN_ASSET_SHA_BEFORE" = "$CONVEN_ASSET_SHA_AFTER"
 
-CONVEN_CATALOG_SHA_BEFORE="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml")"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" services --registry
-CONVEN_CATALOG_SHA_AFTER="$(shasum \
-  "$CONVEN_SMOKE_WORKSPACE/.conven/catalog.yaml")"
-test "$CONVEN_CATALOG_SHA_BEFORE" = "$CONVEN_CATALOG_SHA_AFTER"
 
 cp "$CONVEN_SMOKE_WORKSPACE/.conven/conven.yaml" \
   "$CONVEN_SMOKE_WORKSPACE/application.yaml"
 env HOME="$CONVEN_SMOKE_HOME" LC_ALL=en_US.UTF-8 \
   /tmp/conven-release -C "$CONVEN_SMOKE_WORKSPACE" \
-  policy --import "$CONVEN_SMOKE_WORKSPACE/application.yaml"
+  workspace --import "$CONVEN_SMOKE_WORKSPACE/application.yaml"
 ```
 
 插件回归门禁还必须证明以下全部契约：
@@ -633,9 +627,13 @@ manifest，并准备其中引用的服务仓库。至少让一个选中的验收
 连接或进程恢复测试。
 
 执行下面命令前，先准备 `.acceptance/import-candidate.yaml`：它必须是适用于同一组
-一次性服务仓库的完整、合法 Conven v1 manifest，不含凭据，并且至少让
+一次性服务仓库的完整、合法 Conven Manifest v3，不含凭据，并且至少让
 `workspace.name` 与 `init` 结果不同。这样才能覆盖真实替换和备份路径，而不是逐字节
 相同的 no-op。
+
+另保留一份一次性 v1/v2 fixture。除 help、version、`workspace --migrate` 和仅用于恢复的
+`services --stop-all` 外，其他命令都必须拒绝旧 Manifest。迁移必须创建备份、保留
+runner/health 语义，并在第二次执行时保持逐字节不变。
 
 至少验证：
 
@@ -651,7 +649,7 @@ test "$CONVEN_MANIFEST_SHA" = "$(shasum -a 256 .conven/conven.yaml | awk '{print
 mkdir -p .acceptance/descendant
 CONVEN_IMPORT_SOURCE=.acceptance/import-candidate.yaml
 CONVEN_IMPORT_SOURCE_SHA=$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')
-(cd .acceptance/descendant && "$CONVEN_BIN" policy --import ../import-candidate.yaml)
+(cd .acceptance/descendant && "$CONVEN_BIN" workspace --import ../import-candidate.yaml)
 test "$CONVEN_IMPORT_SOURCE_SHA" = "$(shasum -a 256 "$CONVEN_IMPORT_SOURCE" | awk '{print $1}')"
 cmp "$CONVEN_IMPORT_SOURCE" .conven/conven.yaml
 test -n "$(find .conven/backups -type f -name 'conven.yaml-before-import-*.bak' -print -quit)"

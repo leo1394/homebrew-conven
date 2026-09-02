@@ -41,9 +41,11 @@ func (dependency ExternalConsulDependency) Reference() string {
 }
 
 func detectExternalConsulDependencies(service PlannedService, kind string) ([]ExternalConsulDependency, error) {
-	if service.Config == nil || service.Config.Framework != "go-zero" || service.Config.Discovery != "consul" || service.Config.Plan.Driver != materialize.DriverYAMLOverlay {
-		return nil, nil
-	}
+	dependencies, _, err := inspectRuntimeContractExternalDependencies(service, kind)
+	return dependencies, err
+}
+
+func inspectExternalConsulDependencies(service PlannedService, kind string) ([]ExternalConsulDependency, error) {
 	applicationPath, err := externalDependencyApplicationPath(service.Config.Plan)
 	if err != nil {
 		return nil, fmt.Errorf("inspect %s external dependencies: %w", service.Name, err)

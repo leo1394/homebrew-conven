@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.0.1 - 2026-09-02
+
+- Ship the Manifest v3 runtime contract, atomic workspace migration, multi-listener
+  service model, and listener/registry runtime verification developed across the
+  0.4.0-0.8.0 milestones.
+- Expand typed analysis and certification across Go, Java, Python, Node.js, and
+  Bun frameworks while keeping planning, orchestration, status, and dashboard
+  independent of concrete framework implementations.
+- Make `.conven/conven.yaml` the sole service inventory and consolidate manifest
+  operations under `conven workspace`.
+- Preserve guarded Kafka consumer control with the temporary default
+  `SERVICE_KAFKA_CONSUMERS_ENABLED=true` until local asynchronous-workload routing
+  is implemented.
+- Make Dashboard `g` and `G` jump to the latest log position and resume continuous
+  follow; Home remains the shortcut for the oldest retained log.
+- Add typed Kratos, Hertz, Kitex, Bun.serve, Elysia, and Hono analysis with
+  deterministic lockfile preparation and Consul, Nacos, or Etcd contracts.
+- Keep planning, orchestration, status, and dashboard independent of concrete
+  framework implementations.
+- Fail closed on unguarded typed Kafka consumers while temporarily defaulting
+  `SERVICE_KAFKA_CONSUMERS_ENABLED=true`; plans and status expose the effective
+  guard state, and services can explicitly set `false` until unified local
+  asynchronous-workload routing is implemented.
+- Add typed Go standard library, Gin, Echo, Fiber, Chi, grpc-go, Flask,
+  Django, Quarkus, and Micronaut analysis and runtime contracts.
+- Require framework-native HOST/PORT evidence and deterministic dependency
+  inputs before registry certification.
+- Add typed FastAPI, Starlette, NestJS, Express, Fastify, Maven Spring Boot,
+  Spring properties, Nacos, and Eureka support.
+- Add framework-specific, copyable diagnostics when registration or listener
+  isolation cannot be proven.
+- Introduce Manifest v3 with multi-listener services, named registries,
+  explicit registry identity and aliases, and per-listener health checks.
+- Add atomic `conven workspace --migrate` for v1/v2 workspaces and reject old
+  manifests from normal commands until migration.
+- Split static Analyzer facts from Certifier trust decisions and compile typed
+  services through self-registering runtime-contract adapters.
+- Add listener ownership and registry-delta observation, session state v4, and
+  explicit `unverified(skip-verify)` state.
+- Introduce a deep runtime-contract module so planning, orchestration, status,
+  and dashboard behavior no longer branch on individual frameworks.
+- Separate repository analysis from trust certification; registry now matches
+  static evidence and the manifest through a certifier before granting typed
+  trust, while preserving atomic failure diagnostics.
+- Make `.conven/conven.yaml` the sole core source of truth: service bindings
+  stay under `services.*.discovery.bindings`, and disabled bindings move to
+  `workspace.disabledBindings`.
+- Replace the overlapping `catalog` and whole-manifest `policy` commands with
+  `conven workspace --edit|--validate|--import|--reset`; initialization no
+  longer creates `.conven/catalog.yaml`, and no compatibility aliases are kept.
+- Keep service selection, planning, routing, listener, lifecycle, status, and
+  dashboard runtime behavior unchanged.
+
 ## 0.3.3 - 2026-09-01
 
 - Add static discovery for root Gradle Spring Boot HTTP and gRPC services,

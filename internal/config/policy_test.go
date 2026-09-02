@@ -154,7 +154,7 @@ func TestEditWorkspacePolicyRejectsInvalidDraftAndPreservesIt(t *testing.T) {
 	result, err := EditWorkspacePolicy(workspace, func(path string) error {
 		return os.WriteFile(path, []byte("version: 2\nunknown: true\n"), 0600)
 	})
-	if err == nil || !strings.Contains(err.Error(), "edited policy manifest is invalid") || !strings.Contains(err.Error(), "is kept") {
+	if err == nil || !strings.Contains(err.Error(), "edited workspace manifest is invalid") || !strings.Contains(err.Error(), "is kept") {
 		t.Fatalf("error = %v", err)
 	}
 	if result.DraftPath == "" || filepath.Dir(result.DraftPath) != filepath.Join(workspace, ".conven", "backups") {
@@ -190,7 +190,7 @@ func TestEditWorkspacePolicyRejectsConcurrentManifestEdit(t *testing.T) {
 		}
 		return os.WriteFile(manifestPath, []byte(concurrent), 0600)
 	})
-	if err == nil || !strings.Contains(err.Error(), "edited during policy edit") {
+	if err == nil || !strings.Contains(err.Error(), "edited during workspace edit") {
 		t.Fatalf("error = %v", err)
 	}
 	if strings.Contains(err.Error(), "canonical manifest is unchanged") {
@@ -212,7 +212,7 @@ func TestEditWorkspacePolicyNoOpRejectsConcurrentManifestEdit(t *testing.T) {
 	result, err := EditWorkspacePolicy(workspace, func(string) error {
 		return os.WriteFile(manifestPath, []byte(concurrent), 0600)
 	})
-	if err == nil || !strings.Contains(err.Error(), "edited during policy edit") {
+	if err == nil || !strings.Contains(err.Error(), "edited during workspace edit") {
 		t.Fatalf("error = %v", err)
 	}
 	if result.Changed || result.DraftPath != "" {
@@ -244,7 +244,7 @@ func TestEditWorkspacePolicyMissingManifestSuggestsReset(t *testing.T) {
 	workspace := t.TempDir()
 	mustMkdirAll(t, filepath.Join(workspace, ".conven"))
 	_, err := EditWorkspacePolicy(workspace, func(string) error { return nil })
-	if err == nil || !strings.Contains(err.Error(), "policy --reset") {
+	if err == nil || !strings.Contains(err.Error(), "workspace --reset") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -394,7 +394,7 @@ func TestImportWorkspacePolicyRejectsInvalidFileWithoutWriting(t *testing.T) {
 	}
 
 	result, err := ImportWorkspacePolicy(workspace, importPath, nil)
-	if err == nil || !strings.Contains(err.Error(), "validate policy import") {
+	if err == nil || !strings.Contains(err.Error(), "validate workspace import") {
 		t.Fatalf("error = %v", err)
 	}
 	if result.Changed || result.BackupPath != "" || result.DraftPath != "" {
@@ -411,7 +411,7 @@ func TestImportWorkspacePolicyRejectsMissingOrDirectorySource(t *testing.T) {
 	manifestPath := filepath.Join(workspace, ".conven", "conven.yaml")
 	writeDiscoveryFile(t, manifestPath, editablePolicyManifest)
 
-	if _, err := ImportWorkspacePolicy(workspace, "missing.yaml", nil); err == nil || !strings.Contains(err.Error(), "inspect policy import") {
+	if _, err := ImportWorkspacePolicy(workspace, "missing.yaml", nil); err == nil || !strings.Contains(err.Error(), "inspect workspace import") {
 		t.Fatalf("missing import error = %v", err)
 	}
 	if _, err := ImportWorkspacePolicy(workspace, workspace, nil); err == nil || !strings.Contains(err.Error(), "regular file") {
@@ -630,7 +630,7 @@ services:
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, removed := range []string{"manual configuration", "company", "18080", "custom-api"} {
+	for _, removed := range []string{"manual configuration", "company", "custom-api"} {
 		if strings.Contains(string(data), removed) {
 			t.Fatalf("reset manifest retained %q:\n%s", removed, data)
 		}
@@ -766,7 +766,7 @@ func TestEditWorkspacePolicyPreservesChangedDraftOnEditorError(t *testing.T) {
 		}
 		return errors.New("cancelled")
 	})
-	if err == nil || !strings.Contains(err.Error(), "policy editor failed") {
+	if err == nil || !strings.Contains(err.Error(), "workspace editor failed") {
 		t.Fatalf("error = %v", err)
 	}
 	assertFileContents(t, manifestPath, editablePolicyManifest)

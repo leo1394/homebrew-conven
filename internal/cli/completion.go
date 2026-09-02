@@ -26,14 +26,14 @@ func Completion(shell string) (string, error) {
         break
     done
     if [ "$command_index" -eq 0 ]; then
-        COMPREPLY=( $(compgen -W "-C init services config catalog policy plugins status doctor help version" -- "$cur") )
+        COMPREPLY=( $(compgen -W "-C init services config workspace plugins status doctor help version" -- "$cur") )
         return
     fi
     subcommand="${COMP_WORDS[command_index]}"
     action_index=$((command_index + 1))
     if [ "$subcommand" = "help" ]; then
         if [ "$COMP_CWORD" -eq "$action_index" ]; then
-            COMPREPLY=( $(compgen -W "init services config catalog policy plugins status doctor help version" -- "$cur") )
+            COMPREPLY=( $(compgen -W "init services config workspace plugins status doctor help version" -- "$cur") )
         else
             COMPREPLY=()
         fi
@@ -77,13 +77,13 @@ func Completion(shell string) (string, error) {
         COMPREPLY=( $(compgen -W "$options" -- "$cur") )
         return
     fi
-    if [ "$subcommand" = "policy" ]; then
+    if [ "$subcommand" = "workspace" ]; then
         action="${COMP_WORDS[action_index]}"
         if [ "$COMP_CWORD" -eq "$action_index" ]; then
-            options="--edit --import --reset --help"
+            options="--edit --validate --migrate --import --reset --help"
         else
             case "$action" in
-                --edit|--reset)
+                --edit|--validate|--migrate|--reset)
                     options="--help"
                     ;;
                 --import)
@@ -101,23 +101,6 @@ func Completion(shell string) (string, error) {
                         COMPREPLY+=( $(compgen -f -- "$cur") )
                     fi
                     return
-                    ;;
-                *)
-                    options=""
-                    ;;
-            esac
-        fi
-        COMPREPLY=( $(compgen -W "$options" -- "$cur") )
-        return
-    fi
-    if [ "$subcommand" = "catalog" ]; then
-        action="${COMP_WORDS[action_index]}"
-        if [ "$COMP_CWORD" -eq "$action_index" ]; then
-            options="--edit --validate --help"
-        else
-            case "$action" in
-                --edit|--validate)
-                    options="--help"
                     ;;
                 *)
                     options=""
@@ -205,8 +188,7 @@ _conven() {
         'init:initialize a Conven workspace'
         'services:manage workspace services'
         'config:read or write Conven configuration'
-        'catalog:edit or validate the workspace service catalog'
-        'policy:edit, import, or rebuild the workspace policy manifest'
+        'workspace:edit, validate, migrate, import, or rebuild the workspace manifest'
         'plugins:install, list, remove, or run Conven plugins'
         'status:show the complete workspace and runtime status'
         'doctor:validate workspace and connection configuration'
@@ -240,7 +222,7 @@ _conven() {
     case $words[2] in
         help)
             _arguments \
-                '1:command:(init services config catalog policy plugins status doctor help version)'
+                '1:command:(init services config workspace plugins status doctor help version)'
             ;;
         services)
             action=''
@@ -290,7 +272,7 @@ _conven() {
                         '--dry-run[show the startup plan]' \
                         '--with-dependencies[also start transitive local service dependencies]' \
                         '--skip-build[skip build when artifacts are reusable]' \
-                        '--skip-verify[skip health checks]' \
+                        '--skip-verify[skip health, listener, and registry verification]' \
                         '--help[show command help]' \
                         '*:service:'
                     ;;
@@ -299,7 +281,7 @@ _conven() {
                         '--tail[stream aggregated logs as plain text]' \
                         '--dashboard[open the interactive log dashboard]' \
                         '--skip-build[skip build when artifacts are reusable]' \
-                        '--skip-verify[skip health checks]' \
+                        '--skip-verify[skip health, listener, and registry verification]' \
                         '--help[show command help]' \
                         '*:service:'
                     ;;
@@ -349,7 +331,7 @@ _conven() {
                 '--help[show command help]' \
                 '*:configuration key or value:'
             ;;
-        catalog)
+        workspace)
             action=''
             if (( CURRENT > 3 )); then
                 action=$words[3]
@@ -357,31 +339,7 @@ _conven() {
                 (( CURRENT -= 2 ))
             fi
             case $action in
-                --edit|--validate)
-                    _arguments \
-                        '--help[show command help]'
-                    ;;
-                *)
-                    if (( CURRENT == 3 )); then
-                        _arguments \
-                            '--edit[edit a validated temporary catalog copy]' \
-                            '--validate[validate the workspace service catalog]' \
-                            '--help[show command help]'
-                    else
-                        _message 'unknown conven catalog action'
-                    fi
-                    ;;
-            esac
-            ;;
-        policy)
-            action=''
-            if (( CURRENT > 3 )); then
-                action=$words[3]
-                words=($words[1] $words[4,-1])
-                (( CURRENT -= 2 ))
-            fi
-            case $action in
-                --edit|--reset)
+                --edit|--validate|--migrate|--reset)
                     _arguments \
                         '--help[show command help]'
                     ;;
@@ -395,11 +353,13 @@ _conven() {
                     if (( CURRENT == 3 )); then
                         _arguments \
                             '--edit[edit a validated temporary manifest copy]' \
+                            '--validate[validate the current workspace manifest]' \
+                            '--migrate[atomically migrate a stopped v1/v2 manifest to v3]' \
                             '--import[import a local YAML file as the entire manifest]' \
                             '--reset[destructively reset the manifest to scanned facts]' \
                             '--help[show command help]'
                     else
-                        _message 'unknown conven policy action'
+                        _message 'unknown conven workspace action'
                     fi
                     ;;
             esac
@@ -576,16 +536,10 @@ function __conven_services_without_action
     test "$tokens[2]" = services; or return 1
 end
 
-function __conven_policy_without_action
+function __conven_workspace_without_action
     set -l tokens (__conven_command_tokens)
     test (count $tokens) -eq 2; or return 1
-    test "$tokens[2]" = policy; or return 1
-end
-
-function __conven_catalog_without_action
-    set -l tokens (__conven_command_tokens)
-    test (count $tokens) -eq 2; or return 1
-    test "$tokens[2]" = catalog; or return 1
+    test "$tokens[2]" = workspace; or return 1
 end
 
 function __conven_plugins_without_action
@@ -632,22 +586,22 @@ function __conven_plugins_run_arguments
     return 0
 end
 
-function __conven_policy_action
+function __conven_workspace_action
     set -l tokens (__conven_command_tokens)
     test (count $tokens) -ge 3; or return 1
-    test "$tokens[2]" = policy; or return 1
+    test "$tokens[2]" = workspace; or return 1
     test "$tokens[3]" = "$argv[1]"
 end
 
-function __conven_policy_action_without_edit
+function __conven_workspace_action_without_edit
     set -l tokens (__conven_command_tokens)
-    __conven_policy_action "$argv[1]"; or return 1
+    __conven_workspace_action "$argv[1]"; or return 1
     not contains -- --edit $tokens[4..-1]
 end
 
-function __conven_policy_import_without_source
+function __conven_workspace_import_without_source
     set -l tokens (__conven_command_tokens)
-    __conven_policy_action --import; or return 1
+    __conven_workspace_action --import; or return 1
     for token in $tokens[4..-1]
         string match -q -- '-*' "$token"; or return 1
     end
@@ -658,26 +612,25 @@ complete -c conven -f -n '__conven_global_context' -s C -r -a '(__fish_complete_
 complete -c conven -f -n '__conven_without_command' -a init -d 'Initialize a Conven workspace'
 complete -c conven -f -n '__conven_without_command' -a services -d 'Manage workspace services'
 complete -c conven -f -n '__conven_without_command' -a config -d 'Read or write Conven configuration'
-complete -c conven -f -n '__conven_without_command' -a catalog -d 'Edit or validate the workspace service catalog'
-complete -c conven -f -n '__conven_without_command' -a policy -d 'Edit, import, or rebuild the workspace policy manifest'
+complete -c conven -f -n '__conven_without_command' -a workspace -d 'Edit, validate, migrate, import, or rebuild the workspace manifest'
 complete -c conven -f -n '__conven_without_command' -a plugins -d 'Install, list, remove, or run Conven plugins'
 complete -c conven -f -n '__conven_without_command' -a status -d 'Show the complete workspace and runtime status'
 complete -c conven -f -n '__conven_without_command' -a doctor -d 'Validate workspace configuration'
 complete -c conven -f -n '__conven_without_command' -a help -d 'Show conven usage'
 complete -c conven -f -n '__conven_without_command' -a version -d 'Show conven version'
-complete -c conven -f -n '__conven_using_subcommand help; and __conven_help_without_command' -a 'init services config catalog policy plugins status doctor help version' -d 'Show detailed command help'
-complete -c conven -n '__conven_using_subcommand init services config catalog policy plugins status doctor' -s h -l help -d 'Show command help'
+complete -c conven -f -n '__conven_using_subcommand help; and __conven_help_without_command' -a 'init services config workspace plugins status doctor help version' -d 'Show detailed command help'
+complete -c conven -n '__conven_using_subcommand init services config workspace plugins status doctor' -s h -l help -d 'Show command help'
 complete -c conven -n '__conven_using_subcommand init' -l local -d 'Initialize no-cluster local development'
 complete -c conven -n '__conven_using_subcommand config' -l global -d 'Use the current user global config'
 complete -c conven -n '__conven_using_subcommand config' -l list -d 'List configuration values'
 complete -c conven -n '__conven_using_subcommand config' -l unset -d 'Remove one configuration value'
-complete -c conven -n '__conven_using_subcommand catalog; and __conven_catalog_without_action' -l edit -d 'Edit a validated temporary catalog copy'
-complete -c conven -n '__conven_using_subcommand catalog; and __conven_catalog_without_action' -l validate -d 'Validate the workspace service catalog'
-complete -c conven -n '__conven_using_subcommand policy; and __conven_policy_without_action' -l edit -d 'Edit a validated temporary manifest copy'
-complete -c conven -n '__conven_using_subcommand policy; and __conven_policy_without_action' -l import -d 'Import a local YAML file as the entire manifest'
-complete -c conven -n '__conven_using_subcommand policy; and __conven_policy_without_action' -l reset -d 'Destructively reset the manifest to scanned facts'
-complete -c conven -n '__conven_policy_action_without_edit --import' -l edit -d 'Edit the private import draft before publication'
-complete -c conven -n '__conven_policy_import_without_source' -F
+complete -c conven -n '__conven_using_subcommand workspace; and __conven_workspace_without_action' -l edit -d 'Edit a validated temporary manifest copy'
+complete -c conven -n '__conven_using_subcommand workspace; and __conven_workspace_without_action' -l validate -d 'Validate the current workspace manifest'
+complete -c conven -n '__conven_using_subcommand workspace; and __conven_workspace_without_action' -l migrate -d 'Atomically migrate a stopped v1/v2 manifest to v3'
+complete -c conven -n '__conven_using_subcommand workspace; and __conven_workspace_without_action' -l import -d 'Import a local YAML file as the entire manifest'
+complete -c conven -n '__conven_using_subcommand workspace; and __conven_workspace_without_action' -l reset -d 'Destructively reset the manifest to scanned facts'
+complete -c conven -n '__conven_workspace_action_without_edit --import' -l edit -d 'Edit the private import draft before publication'
+complete -c conven -n '__conven_workspace_import_without_source' -F
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l install -r -a '(__fish_complete_suffix .py)' -d 'Install a Python plugin'
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l list -d 'List installed plugins'
 complete -c conven -n '__conven_using_subcommand plugins; and __conven_plugins_without_action' -l remove -r -d 'Remove an installed plugin'
@@ -724,11 +677,11 @@ complete -c conven -n '__conven_services_action --start' -l tail -d 'Stream aggr
 complete -c conven -n '__conven_services_action --start' -l dry-run -d 'Show the startup plan'
 complete -c conven -n '__conven_services_action --start' -l with-dependencies -d 'Also start transitive local service dependencies'
 complete -c conven -n '__conven_services_action --start' -l skip-build -d 'Skip build when artifacts are reusable'
-complete -c conven -n '__conven_services_action --start' -l skip-verify -d 'Skip health checks'
+complete -c conven -n '__conven_services_action --start' -l skip-verify -d 'Skip health, listener, and registry verification'
 complete -c conven -n '__conven_services_action --restart' -l tail -d 'Stream aggregated logs as plain text'
 complete -c conven -n '__conven_services_action --restart' -l dashboard -d 'Open the interactive log dashboard'
 complete -c conven -n '__conven_services_action --restart' -l skip-build -d 'Skip build when artifacts are reusable'
-complete -c conven -n '__conven_services_action --restart' -l skip-verify -d 'Skip health checks'
+complete -c conven -n '__conven_services_action --restart' -l skip-verify -d 'Skip health, listener, and registry verification'
 complete -c conven -n '__conven_services_action --stop' -l all -d 'Stop every service and release the workspace connection'
 complete -c conven -n '__conven_services_action --stop' -l force -d 'Bypass identity checks and recover saved process groups'
 complete -c conven -n '__conven_services_action --stop-all' -l force -d 'Bypass identity checks and recover saved process groups'

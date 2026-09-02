@@ -49,7 +49,8 @@ func PlanFingerprint(service PlannedService) (string, error) {
 		Build       []string
 		Run         []string
 		Environment []string
-		Health      HealthCheck
+		ConsumerIsolation map[string]ConsumerIsolationEvidence
+		HealthChecks []HealthCheck
 	}{
 		Directory:   service.Directory,
 		Workdir:     service.Workdir,
@@ -61,7 +62,8 @@ func PlanFingerprint(service PlannedService) (string, error) {
 		Build:       service.Build,
 		Run:         service.Run,
 		Environment: service.Environment,
-		Health:      service.Health,
+		ConsumerIsolation: service.ConsumerIsolation,
+		HealthChecks: service.HealthChecks,
 	}
 	data, err := json.Marshal(value)
 	if err != nil {

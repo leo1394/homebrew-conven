@@ -123,6 +123,21 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 	if err := runRuntimePreflight(ctx, plan, output, false); err != nil {
 		return nil, err
 	}
+	registryBaselines := make(map[string]*RegistrySnapshot, len(targets))
+	observeRuntime := !options.SkipVerify && workspace.Manifest.Version >= 3
+	if observeRuntime {
+		for _, name := range targets {
+			service := plan.Services[name]
+			baseline, err := snapshotServiceRegistry(ctx, workspace.Root, service)
+			if err != nil {
+				return nil, err
+			}
+			if err := rejectLocalRegistryEntries(service, baseline); err != nil {
+				return nil, err
+			}
+			registryBaselines[name] = baseline
+		}
+	}
 
 	for index := len(plan.Order) - 1; index >= 0; index-- {
 		name := plan.Order[index]
@@ -135,6 +150,9 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		fmt.Fprintf(output, "%s %s for restart\n", style.Stage("Stopping"), style.Identifier(name))
 		if err := StopProcess(processes[name], 10*time.Second); err != nil {
 			return nil, fmt.Errorf("stop %s for restart: %w", name, err)
+		}
+		if err := preflightServicePorts(plan.Services[name]); err != nil {
+			return nil, err
 		}
 	}
 
@@ -170,6 +188,12 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 				return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
 			}
 			process.Ports = copyPorts(service.Ports)
+			process.ConsumerIsolation = copyConsumerIsolation(service.ConsumerIsolation)
+			if options.SkipVerify {
+				process.Verification = "unverified(skip-verify)"
+			} else {
+				process.Verification = "started"
+			}
 			process.SourceFingerprint = processes[name].SourceFingerprint
 			process.PlanFingerprint = processes[name].PlanFingerprint
 			replaceSessionProcess(session, process)
@@ -182,12 +206,50 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			for _, name := range groupTargets {
 				service := plan.Services[name]
 				process := sessionProcess(session, name)
-				if err := WaitHealthy(ctx, process, service.Health); err != nil {
+				if err := WaitHealthyChecks(ctx, process, service.HealthChecks); err != nil {
 					fmt.Fprintf(output, "%s %s; last log lines:\n", style.Failure("✗ Health check failed:"), style.Identifier(name))
 					ShowLogs(context.Background(), session, []string{name}, false, output)
 					return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
 				}
+				process.Verification = "healthy"
+				replaceSessionProcess(session, process)
+				if err := workspace.Store.Save(session); err != nil {
+					return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
+				}
 				fmt.Fprintf(output, "%s %s\n", style.Success("✓ Healthy:"), style.Identifier(name))
+				if observeRuntime {
+					listeners, err := verifyServiceListeners(ctx, service, process)
+					if err != nil {
+						return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
+					}
+					process.Listeners = listeners
+					process.Verification = "listener-verified"
+					replaceSessionProcess(session, process)
+					if err := workspace.Store.Save(session); err != nil {
+						return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
+					}
+					registration, err := verifyServiceRegistry(ctx, workspace.Root, service, registryBaselines[name])
+					if err != nil {
+						return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
+					}
+					process.Registration = registration
+					if registration != nil {
+						process.Verification = "registry-verified"
+						replaceSessionProcess(session, process)
+						if err := workspace.Store.Save(session); err != nil {
+							return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
+						}
+					}
+					if service.Runtime == "generic-runner" || len(service.Kinds) == 0 {
+						process.Verification = "runner-only"
+					} else {
+						process.Verification = "verified"
+					}
+				} else {
+					process.Verification = "verified"
+				}
+				replaceSessionProcess(session, process)
+				fmt.Fprintf(output, "%s %s\n", style.Success("✓ Runtime contract verified:"), style.Identifier(name))
 			}
 		}
 		for _, name := range groupTargets {

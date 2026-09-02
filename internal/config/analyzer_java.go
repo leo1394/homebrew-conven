@@ -14,6 +14,11 @@ import (
 
 type JavaGradleSpringBootAdapter struct{}
 
+func init() {
+	RegisterRepositoryAnalyzer(30, JavaGradleSpringBootAdapter{})
+	registerDriverRepositoryCertifier("spring-boot", certifySpringRegistration, springPolicyCompatible)
+}
+
 func (JavaGradleSpringBootAdapter) Name() string {
 	return "java-gradle-spring-boot"
 }
@@ -43,49 +48,63 @@ func (JavaGradleSpringBootAdapter) Analyze(repository RepositoryCandidate) (Repo
 	if !hasSpringBootGradlePlugin(buildText) {
 		return RepositoryAnalysis{}, false, nil
 	}
-	mainClasses, hasGrpcService, hasController, err := inspectSpringSources(repository.Directory)
+	mainClasses, hasGrpcService, hasController, registrations, err := inspectSpringSources(repository.Directory)
 	if err != nil {
 		return RepositoryAnalysis{}, false, err
 	}
 	if len(mainClasses) != 1 {
-		return RepositoryAnalysis{}, false, nil
+		return RepositoryAnalysis{}, false, fmt.Errorf("Spring Boot repository %q requires exactly one @SpringBootApplication entry that calls SpringApplication.run; found %d (%s); keep one executable application entry before services --registry", repository.Name, len(mainClasses), strings.Join(mainClasses, ", "))
 	}
-	artifactName, err := springBootArtifactName(settingsPath, buildText)
+	artifactName, err := springBootArtifactName(repository.Directory, settingsPath, buildText)
 	if err != nil {
 		return RepositoryAnalysis{}, false, fmt.Errorf("Spring Boot repository %q: %w", repository.Name, err)
 	}
 	if artifactName == "" {
-		return RepositoryAnalysis{}, false, nil
+		return RepositoryAnalysis{}, false, fmt.Errorf("Spring Boot repository %q artifact cannot be determined; set bootJar.archiveFileName to a literal JAR filename, or make rootProject.name and version literal values", repository.Name)
 	}
 
 	hasGrpcStarter := strings.Contains(buildText, "grpc-server-spring-boot-starter")
 	hasWebStarter := strings.Contains(buildText, "spring-boot-starter-web") || strings.Contains(buildText, "spring-boot-starter-webflux")
-	kind := RepositoryKindUnknown
+	kinds := make([]string, 0, 2)
 	grpc := hasGrpcStarter && hasGrpcService
 	http := hasWebStarter && hasController
-	if grpc && !http {
-		kind = RepositoryKindRPC
+	if http {
+		kinds = append(kinds, RepositoryKindHTTP)
 	}
-	if http && !grpc {
-		kind = RepositoryKindHTTP
+	if grpc {
+		kinds = append(kinds, RepositoryKindRPC)
 	}
+	if len(kinds) == 0 {
+		return RepositoryAnalysis{}, false, fmt.Errorf("Spring Boot repository %q has no statically proven listener; HTTP requires a Web starter and @RestController/@Controller, while gRPC requires the server starter and @GrpcService", repository.Name)
+	}
+	kind := RepositoryKindUnknown
+	if len(kinds) == 1 { kind = kinds[0] }
 	health := model.Health{}
 	if kind == RepositoryKindHTTP || kind == RepositoryKindRPC {
 		health = model.Health{Type: "tcp", Address: "127.0.0.1:${port." + kind + "}"}
 	}
+	healthChecks := make([]model.ServiceHealthCheck, 0, len(kinds))
+	for _, server := range kinds {
+		healthChecks = append(healthChecks, model.ServiceHealthCheck{Server: server, Type: "tcp", Address: "127.0.0.1:${port." + server + "}"})
+	}
+	discovery := springDiscoveryDriver(buildText, registrations)
 	return RepositoryAnalysis{
 		ServiceName: repository.Name,
 		ModulePath:  mainClasses[0],
 		Framework:   "spring-boot",
-		Discovery:   "consul",
+		Runtime:     "spring-boot",
+		Discovery:   discovery,
 		Runner: model.Runner{
 			Workdir:  ".",
 			Artifact: "${serviceDir}/build/libs/" + artifactName,
 			Build:    []string{"./gradlew", "bootJar"},
 			Run:      []string{"java", "-jar", "${artifact}"},
 		},
-		Kind:   kind,
-		Health: health,
+		Kind:          kind,
+		Kinds:         kinds,
+		Health:        health,
+		HealthChecks:  healthChecks,
+		Registrations: registrations,
 	}, true, nil
 }
 
@@ -108,18 +127,19 @@ func oneRootGradleFile(directory string, names ...string) (string, bool, error) 
 	return found, found != "", nil
 }
 
-func inspectSpringSources(repository string) ([]string, bool, bool, error) {
+func inspectSpringSources(repository string) ([]string, bool, bool, []RepositoryRegistrationEvidence, error) {
 	root := filepath.Join(repository, "src", "main")
 	rootExists, err := pathExists(root)
 	if err != nil {
-		return nil, false, false, fmt.Errorf("inspect Spring source root %s: %w", root, err)
+		return nil, false, false, nil, fmt.Errorf("inspect Spring source root %s: %w", root, err)
 	}
 	if !rootExists {
-		return nil, false, false, nil
+		return nil, false, false, nil, nil
 	}
 	mainClasses := make([]string, 0, 1)
 	hasGrpcService := false
 	hasController := false
+	registrations := make([]RepositoryRegistrationEvidence, 0)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -139,9 +159,11 @@ func inspectSpringSources(repository string) ([]string, bool, bool, error) {
 			return err
 		}
 		text := stripCStyleComments(string(source))
-		if err := validateSpringCustomConsulRegistration(repository, path, text); err != nil {
+		detected, err := inspectSpringCustomConsulRegistration(repository, path, text)
+		if err != nil {
 			return err
 		}
+		registrations = append(registrations, detected...)
 		if regexp.MustCompile(`(?m)^\s*@GrpcService\b`).MatchString(text) {
 			hasGrpcService = true
 		}
@@ -163,19 +185,24 @@ func inspectSpringSources(repository string) ([]string, bool, bool, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, false, false, fmt.Errorf("inspect Spring sources: %w", err)
+		return nil, false, false, nil, fmt.Errorf("inspect Spring sources: %w", err)
 	}
 	sort.Strings(mainClasses)
-	return mainClasses, hasGrpcService, hasController, nil
+	return mainClasses, hasGrpcService, hasController, registrations, nil
 }
 
-func validateSpringCustomConsulRegistration(repository string, sourcePath string, source string) error {
+func inspectSpringCustomConsulRegistration(repository string, sourcePath string, source string) ([]RepositoryRegistrationEvidence, error) {
 	code := stripQuotedLiterals(source)
 	registrations := customSpringConsulRegistrationIndexes(code)
 	if len(registrations) == 0 {
-		return nil
+		return nil, nil
+	}
+	relative, err := filepath.Rel(repository, sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve custom Consul registration source %s: %w", sourcePath, err)
 	}
 	ranges := trustedSpringRegistrationRanges(source, code)
+	evidence := make([]RepositoryRegistrationEvidence, 0, len(registrations))
 	for _, registration := range registrations {
 		trusted := false
 		for _, sourceRange := range ranges {
@@ -184,32 +211,13 @@ func validateSpringCustomConsulRegistration(repository string, sourcePath string
 				break
 			}
 		}
-		if trusted {
-			continue
-		}
-		relative, err := filepath.Rel(repository, sourcePath)
-		if err != nil {
-			return fmt.Errorf("resolve custom Consul registration source %s: %w", sourcePath, err)
-		}
-		return fmt.Errorf(`custom Consul registration in %s cannot be trusted because Conven could not verify a service.registration.enabled condition on the class that performs registration
-
-Add this import and condition to that class:
-
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-
-@ConditionalOnProperty(
-    prefix = "service.registration",
-    name = "enabled",
-    havingValue = "true",
-    matchIfMissing = true
-)
-public class ConsulConfig {
-    // existing registration and deregistration code
-}
-
-Conven passes --service.registration.enabled=false for local runs; matchIfMissing=true preserves existing deployments`, filepath.ToSlash(relative))
+		evidence = append(evidence, RepositoryRegistrationEvidence{
+			Provider:  "consul",
+			File:      fmt.Sprintf("%s:%d", filepath.ToSlash(relative), 1+strings.Count(source[:registration], "\n")),
+			Protected: trusted,
+		})
 	}
-	return nil
+	return evidence, nil
 }
 
 func customSpringConsulRegistrationIndexes(code string) []int {
@@ -337,7 +345,7 @@ func hasSpringBootGradlePlugin(source string) bool {
 	return false
 }
 
-func springBootArtifactName(settingsPath string, buildText string) (string, error) {
+func springBootArtifactName(directory string, settingsPath string, buildText string) (string, error) {
 	explicitPattern := regexp.MustCompile(`(?m)\barchiveFileName(?:\.set)?\s*(?:=\s*|\(\s*)["']([^"']+\.jar)["']\s*\)?`)
 	explicitMatches := explicitPattern.FindAllStringSubmatch(buildText, -1)
 	explicit := make(map[string]bool)
@@ -360,6 +368,14 @@ func springBootArtifactName(settingsPath string, buildText string) (string, erro
 	settingsText := stripCStyleComments(string(settingsSource))
 	name := oneLiteralAssignment(settingsText, `rootProject\.name`)
 	version := oneLiteralAssignment(buildText, `version`)
+	if version == "" {
+		properties, err := os.ReadFile(filepath.Join(directory, "gradle.properties"))
+		if err == nil {
+			version = onePropertyAssignment(string(properties), "version")
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("read gradle.properties: %w", err)
+		}
+	}
 	if name == "" || version == "" {
 		return "", nil
 	}
@@ -367,6 +383,28 @@ func springBootArtifactName(settingsPath string, buildText string) (string, erro
 		return "", fmt.Errorf("rootProject.name and version must form a safe artifact file name")
 	}
 	return name + "-" + version + ".jar", nil
+}
+
+func springDiscoveryDriver(buildText string, registrations []RepositoryRegistrationEvidence) string {
+	switch {
+	case strings.Contains(buildText, "nacos-discovery"):
+		return "nacos"
+	case strings.Contains(buildText, "eureka-client"):
+		return "eureka"
+	case strings.Contains(buildText, "spring-cloud-starter-consul") || len(registrations) > 0:
+		return "consul"
+	default:
+		return "passive"
+	}
+}
+
+func onePropertyAssignment(source string, key string) string {
+	pattern := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `\s*=\s*([^\s#]+)\s*$`)
+	matches := pattern.FindAllStringSubmatch(source, -1)
+	if len(matches) != 1 {
+		return ""
+	}
+	return strings.TrimSpace(matches[0][1])
 }
 
 func oneLiteralAssignment(source string, namePattern string) string {
@@ -404,7 +442,7 @@ func stripCStyleComments(source string) string {
 			} else if character != '\n' {
 				result[index] = ' '
 			}
-		case 3, 4:
+		case 3, 4, 5:
 			if escaped {
 				escaped = false
 				continue
@@ -413,7 +451,7 @@ func stripCStyleComments(source string) string {
 				escaped = true
 				continue
 			}
-			if state == 3 && character == '"' || state == 4 && character == '\'' {
+			if state == 3 && character == '"' || state == 4 && character == '\'' || state == 5 && character == '`' {
 				state = 0
 			}
 		default:
@@ -431,6 +469,8 @@ func stripCStyleComments(source string) string {
 				state = 3
 			} else if character == '\'' {
 				state = 4
+			} else if character == '`' {
+				state = 5
 			}
 		}
 	}
