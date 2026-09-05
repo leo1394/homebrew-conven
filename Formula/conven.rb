@@ -208,9 +208,10 @@ class Conven < Formula
     %w[bash zsh fish].each do |shell|
       completion = shell_output("#{bin}/conven __completion #{shell}")
       if dynamic_completion
-        assert_includes completion, "__completion candidates services"
-        assert_includes completion, "__completion candidates environments"
-        assert_includes completion, "__completion candidates plugins"
+        candidate_command = (shell == "fish") ? "__conven_completion_candidates" : "__completion candidates"
+        assert_includes completion, "#{candidate_command} services"
+        assert_includes completion, "#{candidate_command} environments"
+        assert_includes completion, "#{candidate_command} plugins"
       end
       case shell
       when "bash"
