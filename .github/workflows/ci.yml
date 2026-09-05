@@ -133,13 +133,13 @@ jobs:
           grep -Fq -- "-s C" "$completion_dir/conven.fish"
           grep -Fq -- "__completion candidates services" "$completion_dir/conven.bash"
           grep -Fq -- "__completion candidates services" "$completion_dir/_conven"
-          grep -Fq -- "__completion candidates services" "$completion_dir/conven.fish"
+          grep -Fq -- "__conven_completion_candidates services" "$completion_dir/conven.fish"
           grep -Fq -- "__completion candidates environments" "$completion_dir/conven.bash"
           grep -Fq -- "__completion candidates environments" "$completion_dir/_conven"
-          grep -Fq -- "__completion candidates environments" "$completion_dir/conven.fish"
+          grep -Fq -- "__conven_completion_candidates environments" "$completion_dir/conven.fish"
           grep -Fq -- "__completion candidates plugins" "$completion_dir/conven.bash"
           grep -Fq -- "__completion candidates plugins" "$completion_dir/_conven"
-          grep -Fq -- "__completion candidates plugins" "$completion_dir/conven.fish"
+          grep -Fq -- "__conven_completion_candidates plugins" "$completion_dir/conven.fish"
           bash_top="$(grep -m 1 -F 'compgen -W "' "$completion_dir/conven.bash" | sed -E 's/.*compgen -W "([^"]+)".*/\1/')"
           for command in init services config workspace plugins status doctor help version; do
             case " $bash_top " in
