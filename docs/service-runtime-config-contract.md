@@ -36,8 +36,8 @@ A typed service must:
    interface.
 
 Recognizing a flag is not enough: the service must parse and consume it. For
-example, declaring `flag.String("f", ...)` without loading that path into the
-application config is not a valid runtime contract.
+example, Go/go-zero must call `flag.Parse()` before reading the value declared
+by `flag.String("f", ...)`, then load application configuration from that path.
 
 ## Native listener interfaces
 
@@ -123,9 +123,9 @@ The same condition must protect shutdown deregistration.
 
 ## Kafka consumer runtime guard
 
-Typed services that construct Kafka consumers must expose the neutral switch
-`SERVICE_KAFKA_CONSUMERS_ENABLED`, defaulting to enabled when it is absent.
-`services --registry` records the proven consumer and emits this contract:
+Typed services that construct Kafka consumers use the neutral switch
+`SERVICE_KAFKA_CONSUMERS_ENABLED`, which defaults to enabled when it is absent.
+`services --registry` records the detected consumer and emits this contract:
 
 ```yaml
 discovery:
@@ -137,12 +137,23 @@ isolation:
       env: SERVICE_KAFKA_CONSUMERS_ENABLED
 ```
 
-Conven rescans the selected service before every start or restart, rejects an
-unguarded construction path or stale declaration, and currently injects the
-default value `true` when the manifest and dependency environments provide no
-explicit value. A service environment can explicitly set `false`; values other
-than `true` or `false` fail before the process starts. At this stage the
-contract proves controllability, not remote consumer-membership isolation.
+When the effective value is not `false`, Conven normalizes it to `true`, starts
+the service with its current consumer implementation, and does not review Kafka
+consumer source. Only an explicit `false` requests isolation. Conven then
+rescans the selected service, rejects an unguarded construction path or stale
+declaration, and starts only when the source proves that no consumer will be
+constructed. A shell value overrides manifest and environment values for this
+operational switch, so a developer who cannot change source can explicitly
+choose startup over isolation:
+
+```bash
+SERVICE_KAFKA_CONSUMERS_ENABLED=true \
+  conven -C /path/to/workspace services --start --env test service-name
+```
+
+This command allows that local process to join the remote Kafka consumer group.
+At this stage the contract is an opt-in isolation control, not local Kafka
+routing.
 
 Go must return before constructing the queue or reader:
 
@@ -182,9 +193,9 @@ if os.getenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "true").lower() != "false":
     start_kafka_consumers()
 ```
 
-When explicitly set to `false`, this contract prevents local consumer-group
-membership by preventing consumer construction. With the current `true`
-default, the consumer is constructed normally. Kafka producers are
+When explicitly set to `false` and source verification succeeds, this contract
+prevents local consumer-group membership by preventing consumer construction.
+With the current `true` default, the consumer is constructed normally. Kafka producers are
 intentionally unaffected. Conven does not infer membership from broker TCP
 connections because producers and consumers can share the same endpoint. The
 default can be reconsidered as `false` after unified local asynchronous-workload

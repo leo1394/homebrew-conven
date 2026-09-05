@@ -8,10 +8,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/leo1394/homebrew-conven/internal/config"
+	"github.com/leo1394/homebrew-conven/internal/plugins"
 	convenruntime "github.com/leo1394/homebrew-conven/internal/runtime"
 	"github.com/leo1394/homebrew-conven/internal/selector"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
@@ -521,14 +523,84 @@ func (app App) runList(arguments []string) int {
 }
 
 func (app App) runCompletion(arguments []string) int {
+	if len(arguments) > 0 && arguments[0] == "candidates" {
+		return app.runCompletionCandidates(arguments[1:])
+	}
 	if len(arguments) != 1 {
-		return app.fail(errors.New("__completion requires bash, zsh, or fish"))
+		return app.fail(errors.New("__completion requires bash, zsh, fish, or a candidate query"))
 	}
 	completion, err := Completion(arguments[0])
 	if err != nil {
 		return app.fail(err)
 	}
 	fmt.Fprint(app.Output, completion)
+	return 0
+}
+
+func (app App) runCompletionCandidates(arguments []string) int {
+	if len(arguments) < 1 || len(arguments) > 2 {
+		return app.fail(errors.New("__completion candidates requires services, environments, or plugins [global]"))
+	}
+	names := make([]string, 0)
+	switch arguments[0] {
+	case "services", "environments":
+		if len(arguments) != 1 {
+			return app.fail(errors.New("service and environment completion queries do not accept a scope"))
+		}
+		workspace, err := convenruntime.OpenWorkspace(convenruntime.CommonOptions{Cwd: app.Cwd})
+		if err != nil {
+			return app.fail(err)
+		}
+		if arguments[0] == "services" {
+			for name := range workspace.Manifest.Services {
+				names = append(names, name)
+			}
+		} else {
+			for name := range workspace.Manifest.Environments {
+				names = append(names, name)
+			}
+		}
+	case "plugins":
+		globalOnly := len(arguments) == 2 && arguments[1] == "global"
+		if len(arguments) == 2 && !globalOnly {
+			return app.fail(fmt.Errorf("unsupported plugin completion scope %q", arguments[1]))
+		}
+		if !globalOnly {
+			workspace, err := config.FindWorkspace(app.Cwd)
+			if err != nil {
+				return app.fail(err)
+			}
+			store, err := plugins.WorkspaceStore(workspace)
+			if err != nil {
+				return app.fail(err)
+			}
+			workspaceNames, err := store.List()
+			if err != nil {
+				return app.fail(err)
+			}
+			names = append(names, workspaceNames...)
+		}
+		store, err := plugins.GlobalStore()
+		if err != nil {
+			return app.fail(err)
+		}
+		globalNames, err := store.List()
+		if err != nil {
+			return app.fail(err)
+		}
+		names = append(names, globalNames...)
+	default:
+		return app.fail(fmt.Errorf("unsupported completion candidate query %q", arguments[0]))
+	}
+	sort.Strings(names)
+	previous := ""
+	for _, name := range names {
+		if name == previous {
+			continue
+		}
+		fmt.Fprintln(app.Output, name)
+		previous = name
+	}
 	return 0
 }
 
@@ -772,7 +844,11 @@ func (common commonFlags) options(cwd string) convenruntime.CommonOptions {
 func (app App) fail(err error) int {
 	message := strings.TrimSpace(err.Error())
 	style := terminal.New(app.Error)
-	fmt.Fprintln(app.Error, style.Failure("conven: "+message))
+	lines := strings.Split(message, "\n")
+	fmt.Fprintln(app.Error, style.Failure("conven: "+lines[0]))
+	for _, line := range lines[1:] {
+		fmt.Fprintln(app.Error, line)
+	}
 	return 1
 }
 

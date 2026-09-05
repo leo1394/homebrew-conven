@@ -23,6 +23,8 @@ import (
 const (
 	externalDependencyResponseLimit = 1 << 20
 	externalDependencyTimeout = 3 * time.Second
+	externalDependencyAttempts = 3
+	externalDependencyRetryDelay = 200 * time.Millisecond
 )
 
 type ExternalConsulDependency struct {
@@ -313,7 +315,7 @@ func preflightExternalConsulDependencies(ctx context.Context, dependencies []Ext
 	})
 	problems := make([]string, 0)
 	for _, target := range ordered {
-		passing, err := externalConsulServicePassing(ctx, client, target.Host, target.Port, target.Key)
+		passing, err := externalConsulServicePassingWithRetry(ctx, client, target.Host, target.Port, target.Key)
 		if err != nil {
 			for _, dependency := range targets[target] {
 				problems = append(problems, fmt.Sprintf("%s -> %s via %s: %v", dependency.Reference(), target.Key, net.JoinHostPort(target.Host, strconv.Itoa(target.Port)), err))
@@ -332,6 +334,28 @@ func preflightExternalConsulDependencies(ctx context.Context, dependencies []Ext
 		return errors.New("external Consul dependency preflight failed: " + strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func externalConsulServicePassingWithRetry(ctx context.Context, client *http.Client, host string, port int, key string) (bool, error) {
+	var lastErr error
+	for attempt := 1; attempt <= externalDependencyAttempts; attempt++ {
+		passing, err := externalConsulServicePassing(ctx, client, host, port, key)
+		if err == nil {
+			return passing, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil || attempt == externalDependencyAttempts {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt) * externalDependencyRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return false, lastErr
 }
 
 func externalConsulServicePassing(ctx context.Context, client *http.Client, host string, port int, key string) (bool, error) {

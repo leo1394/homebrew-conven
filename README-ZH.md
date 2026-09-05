@@ -93,9 +93,9 @@ Conven 内置的 materializer 只将生成的 YAML 写入
 
 > **本地服务隔离不等于数据隔离。** 本地服务仍会使用运行时配置中的远程
 > 数据库、Kafka、未选中的 RPC 客户端和后台任务，因此可能写入数据或消费消息。
-> Conven 不会隔离这些副作用。已识别的 Kafka consumer 必须具有中性 guard；在统一
-> 异步工作负载本地路由实现前，暂时默认注入
-> `SERVICE_KAFKA_CONSUMERS_ENABLED=true`，需要隔离时可由服务环境显式设为 `false`。
+> Conven 不会隔离这些副作用。在统一异步工作负载本地路由实现前，
+> `SERVICE_KAFKA_CONSUMERS_ENABLED` 默认取 `true`，也不强制源码实现 guard。只有显式
+> 设置为 `false` 请求隔离 Kafka consumer 时，Conven 才会在启动前验证服务能否响应该开关。
 
 未声明 `kinds` 的 runner-only 服务不具备相同的 Adapter 安全保证。项目自定义的
 `prepare` 和 `build` 命令也会以当前用户权限运行，并可能修改其工作目录。
@@ -130,7 +130,7 @@ SHA256 清单校验源码归档，构建 Conven，并安装到 `~/.local/bin`。
 或安装目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.1 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.2 bash
 curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
@@ -275,7 +275,8 @@ Conven 当前不内置任何项目专用插件。`workspace --import` 会验证�
 
 1. 查找最近的 `.conven/conven.yaml`，并解析选中的环境。
 2. 选择服务，解析每条 dependency edge，并按依赖顺序生成启动分组。
-3. 验证本地 Service、Endpoint、remote、disabled 路由以及隔离契约、命令和路径。
+3. 验证本地 Service、Endpoint、remote、disabled 路由，以及隔离契约、运行时配置消费、
+   本地 module replacement、命令和路径。
 4. 检查被引用的外部 Endpoint 是否就绪。
 5. 复用或建立环境连接，在 `.conven/runtime/current` 生成运行时配置。
 6. 执行 prepare、build、start 和 health check，再验证 listener 归属与注册中心增量，
@@ -306,12 +307,14 @@ Apollo application.yml
   → server patch
   → services.portal-api-service.config.patches
   → dependency routing patch
+  → workspace.disabledBindings（仅处理实际存在的 binding）
   → 本地隔离 guard
   → runtime/current
 ```
 
 第二条链路同时表示覆盖优先级：后面的 patch 基于前一步结果继续处理；
 `services.portal-api-service.config.patches` 是服务级 manifest patch 的具体示例。
+`workspace.disabledBindings` 只禁用拉取配置中实际存在的客户端，不会创建缺失的 binding。
 本地隔离 guard 强制并校验最终监听和注册行为，Consul preflight 则检查最终运行时配置
 中仍然启用的远程依赖。
 

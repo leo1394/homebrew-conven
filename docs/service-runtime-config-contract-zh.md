@@ -28,8 +28,8 @@ Typed service 必须：
 5. 提供确定性的构建和可执行入口；
 6. 以参数作为原生接口时，把进程 argv 继续交给框架。
 
-仅“识别参数”不够。例如 Go 代码声明了 `flag.String("f", ...)`，却没有用该路径加载
-应用配置，不构成有效运行时契约。
+仅“识别参数”不够。例如 Go/go-zero 必须在读取 `flag.String("f", ...)` 返回值之前调用
+`flag.Parse()`，再从该路径加载应用配置；缺少任一步都不构成有效运行时契约。
 
 ## 框架原生 listener 接口
 
@@ -112,9 +112,9 @@ if enabled:
 
 ## Kafka consumer runtime guard
 
-创建 Kafka consumer 的 typed service 必须支持中性开关
+创建 Kafka consumer 的 typed service 使用中性开关
 `SERVICE_KAFKA_CONSUMERS_ENABLED`；环境变量缺失时默认开启。
-`services --registry` 证明构造路径受保护后生成：
+`services --registry` 发现 consumer 后生成：
 
 ```yaml
 discovery:
@@ -126,10 +126,19 @@ isolation:
       env: SERVICE_KAFKA_CONSUMERS_ENABLED
 ```
 
-Conven 每次 start/restart 前重新扫描所选 service，拒绝未受保护的构造路径和过期声明；
-合并 manifest 与依赖环境变量后，如果没有显式值，当前阶段注入默认值 `true`。service
-环境可以显式设置 `false` 临时关闭 consumer；非 `true`/`false` 值会在进程启动前失败。
-该 contract 当前只证明 consumer 可控，不构成远程 consumer membership 隔离保证。
+最终值不是 `false` 时，Conven 会将其规范为 `true`，直接使用 service 当前的 consumer
+实现启动，不复核 Kafka consumer 源码。只有显式设置 `false` 才表示请求隔离；此时 Conven
+重新扫描所选 service，拒绝没有 guard 的构造路径或过期声明，确认源码不会创建 consumer
+后才启动。该操作开关允许 shell 环境变量覆盖 manifest 和环境配置；开发者暂时不便修改
+源码时，可以明确选择优先启动：
+
+```bash
+SERVICE_KAFKA_CONSUMERS_ENABLED=true \
+  conven -C /path/to/workspace services --start --env test service-name
+```
+
+该命令会允许本地进程加入远程 Kafka consumer group。当前 contract 是显式启用的隔离
+控制，不是 Kafka 本地路由能力。
 
 Go 必须在创建 queue/reader 前返回：
 
@@ -168,8 +177,9 @@ if os.getenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "true").lower() != "false":
     start_kafka_consumers()
 ```
 
-显式设置 `false` 时，该契约通过不创建 consumer 阻止本地进程加入远程 consumer group；
-默认 `true` 时 consumer 正常创建。Kafka producer 不受影响。Conven 不从 broker TCP 连接
+显式设置 `false` 且源码验证通过时，该契约通过不创建 consumer 阻止本地进程加入远程
+consumer group；默认 `true` 时 consumer 正常创建。Kafka producer 不受影响。Conven 不从
+broker TCP 连接
 推断 membership，因为 producer 和 consumer 可以共用同一 endpoint。统一异步工作负载
 本地路由实现后，再评估把默认值收紧为 `false`。
 

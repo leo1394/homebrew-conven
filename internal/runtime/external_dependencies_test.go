@@ -290,6 +290,26 @@ func TestPreflightExternalConsulDependenciesDeduplicatesPassingQuery(t *testing.
 	}
 }
 
+func TestPreflightExternalConsulDependenciesRetriesTransientFailure(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if requests.Add(1) == 1 {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(writer, `[{"Service":{"ID":"device.rpc-1"}}]`)
+	}))
+	defer server.Close()
+	host, port := externalDependencyTestServerAddress(t, server)
+	if err := preflightExternalConsulDependencies(context.Background(), []ExternalConsulDependency{{Owner: "api", Path: "deviceRpc", Host: host, Port: port, Key: "device.rpc"}}); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 2 {
+		t.Fatalf("requests = %d, want 2", requests.Load())
+	}
+}
+
 func TestPreflightExternalConsulDependenciesReportsMissingOwnerPathAndKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")

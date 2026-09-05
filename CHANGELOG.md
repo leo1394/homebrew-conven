@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.2 - 2026-09-05
+
+- Make remote configuration and endpoint readiness tolerant of short network
+  interruptions while preserving bounded retries and actionable final errors.
+- Validate that go-zero services parse and consume the runtime `-f` path, and
+  report unavailable local Go module replacements before startup.
+- Keep Kafka consumers enabled by default without requiring source inspection;
+  require a trusted source guard only when consumer isolation is explicitly
+  requested with `SERVICE_KAFKA_CONSUMERS_ENABLED=false`.
+- Apply disabled bindings only when they exist in fetched configuration, align
+  status with the effective consumer state, and add static start-readiness
+  diagnostics.
+- Add path, service, environment, and plugin completion across Bash, Zsh, and
+  Fish, with matching Homebrew stable/HEAD release smoke coverage.
+
 ## 1.0.1 - 2026-09-02
 
 - Ship the Manifest v3 runtime contract, atomic workspace migration, multi-listener

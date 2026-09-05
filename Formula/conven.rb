@@ -32,9 +32,10 @@ class Conven < Formula
     workspace_catalog = !unified_workspace_manifest && version >= "0.2.13"
     workspace_status = workspace_catalog || unified_workspace_manifest
     generalized_bindings = build.head? || version >= "0.3.0"
+    dynamic_completion = build.head? || version >= "1.0.2"
     if build.head?
       expected_version = <<~EOS
-        conven version 1.0.1 (2026-09-02)
+        conven version 1.0.2 (2026-09-05)
         https://github.com/leo1394/homebrew-conven
       EOS
       expected_version = Regexp.new("#{Regexp.escape(expected_version)}\\z")
@@ -173,6 +174,14 @@ class Conven < Formula
     end
 
     system bin/"conven", "-C", workspace, "services", "--list" if new_cli
+    if dynamic_completion
+      service_candidates = shell_output("#{bin}/conven -C #{workspace} __completion candidates services").lines
+      plugin_candidates = shell_output("#{bin}/conven -C #{workspace} __completion candidates plugins").lines
+      global_candidates = shell_output("#{bin}/conven -C #{workspace} __completion candidates plugins global").lines
+      assert_includes service_candidates, "user-svc\n"
+      assert_includes plugin_candidates, "formula-plugin\n"
+      assert_includes global_candidates, "global-formula-plugin\n"
+    end
 
     assert_path_exists bash_completion/"conven"
     assert_path_exists zsh_completion/"_conven"
@@ -198,6 +207,11 @@ class Conven < Formula
     removed_top_level_commands.insert(2, "status") unless workspace_status
     %w[bash zsh fish].each do |shell|
       completion = shell_output("#{bin}/conven __completion #{shell}")
+      if dynamic_completion
+        assert_includes completion, "__completion candidates services"
+        assert_includes completion, "__completion candidates environments"
+        assert_includes completion, "__completion candidates plugins"
+      end
       case shell
       when "bash"
         top_level = completion[/compgen -W "([^"]+)"/, 1]

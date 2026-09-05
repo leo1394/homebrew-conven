@@ -33,9 +33,10 @@ type Apollo struct {
 }
 
 type Patch struct {
-	File  string
-	Path  string
-	Value any
+	File      string
+	Path      string
+	Value     any
+	IfPresent bool
 }
 
 type Guard struct {
@@ -151,6 +152,15 @@ func Materialize(ctx context.Context, plan Plan) error {
 		path, err := secureJoin(staging, patch.File)
 		if err != nil {
 			return fmt.Errorf("resolve patch %d file: %w", index, err)
+		}
+		if patch.IfPresent {
+			found, err := configPathExists(validated.Driver, path, patch.Path)
+			if err != nil {
+				return fmt.Errorf("inspect optional patch %d target in %s: %w", index, patch.File, err)
+			}
+			if !found {
+				continue
+			}
 		}
 		if err := applyConfigPatch(validated.Driver, path, patch.Path, patch.Value); err != nil {
 			return fmt.Errorf("apply patch %d to %s: %w", index, patch.File, err)

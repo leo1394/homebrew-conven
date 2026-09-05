@@ -223,6 +223,11 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 		}
 		planned.Plan.Patches = append(planned.Plan.Patches, plannedPatch)
 	}
+	disabledBindingPatches, err := runtimeContractDisabledBindingPatches(planned, application, plan.Workspace.Manifest.Workspace.DisabledBindings)
+	if err != nil {
+		return nil, fmt.Errorf("plan %s disabled bindings: %w", name, err)
+	}
+	planned.Plan.Patches = append(planned.Plan.Patches, disabledBindingPatches...)
 	for _, kind := range kinds {
 		server, hasServer := policy.Routing.Servers[kind]
 		if !hasServer {

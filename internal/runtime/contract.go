@@ -84,6 +84,14 @@ type protectedEnvironmentCompiler interface {
 	ProtectedServerEnvironment(map[string]string, string, *PlannedConfig) (map[string]string, error)
 }
 
+type runtimeSourceValidator interface {
+	ValidateSource(string, string, string) error
+}
+
+type disabledBindingCompiler interface {
+	DisabledBindingPatches(string, []string) []materialize.Patch
+}
+
 var runtimeContractRegistry = struct {
 	sync.RWMutex
 	adapters map[string]RuntimeContractAdapter
@@ -213,6 +221,39 @@ func runtimeContractServerEnvironment(name string, planned *PlannedConfig, kind 
 		return environment, nil
 	}
 	return implementation.ProtectedServerEnvironment(environment, kind, planned)
+}
+
+func validateRuntimeContractSource(name string, planned *PlannedConfig, directory string, workdir string) error {
+	if planned == nil {
+		return nil
+	}
+	adapter, found, err := runtimeContractForConfig(planned)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	implementation, ok := adapter.(runtimeSourceValidator)
+	if !ok {
+		return nil
+	}
+	return implementation.ValidateSource(name, directory, workdir)
+}
+
+func runtimeContractDisabledBindingPatches(planned *PlannedConfig, application string, bindings []string) ([]materialize.Patch, error) {
+	if planned == nil || len(bindings) == 0 {
+		return nil, nil
+	}
+	adapter, found, err := runtimeContractForConfig(planned)
+	if err != nil || !found {
+		return nil, err
+	}
+	implementation, ok := adapter.(disabledBindingCompiler)
+	if !ok {
+		return nil, nil
+	}
+	return implementation.DisabledBindingPatches(application, bindings), nil
 }
 
 func inspectRuntimeContractExternalDependencies(service PlannedService, kind string) ([]ExternalConsulDependency, bool, error) {

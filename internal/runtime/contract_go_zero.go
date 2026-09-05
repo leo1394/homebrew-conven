@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -48,6 +49,25 @@ func (goZeroConsulRuntimeContract) AllowGuardCreation() bool {
 
 func (goZeroConsulRuntimeContract) RuntimeConfigGuards(plan materialize.Plan, context config.ExpandContext) ([]materialize.Guard, error) {
 	return planRuntimeConfigGuards(plan, context)
+}
+
+func (goZeroConsulRuntimeContract) ValidateSource(name string, directory string, workdir string) error {
+	return config.ValidateGoZeroRuntimeConfigSource(name, directory, workdir)
+}
+
+func (goZeroConsulRuntimeContract) DisabledBindingPatches(application string, bindings []string) []materialize.Patch {
+	bindings = append([]string(nil), bindings...)
+	sort.Strings(bindings)
+	patches := make([]materialize.Patch, 0, len(bindings))
+	for _, binding := range bindings {
+		patches = append(patches, materialize.Patch{
+			File:      application,
+			Path:      binding + ".discovType",
+			Value:     "",
+			IfPresent: true,
+		})
+	}
+	return patches
 }
 
 func (goZeroConsulRuntimeContract) ServerArguments(arguments []string, _ string, _ PlannedIsolation) []string {

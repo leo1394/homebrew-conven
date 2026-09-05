@@ -262,7 +262,11 @@ func analyzeGoModule(repository RepositoryCandidate, workdir string) (Repository
 	if len(kinds) == 0 {
 		return RepositoryAnalysis{}, false, fmt.Errorf("Go service %q is recognized as %s but no HTTP/RPC listener could be proven; expose a supported listener and consume runtime host/port settings before services --registry", repository.Name, framework)
 	}
-	if runtimeName != "go-zero" {
+	if runtimeName == "go-zero" {
+		if err := ValidateGoZeroRuntimeConfigSource(repository.Name, repository.Directory, workdir); err != nil {
+			return RepositoryAnalysis{}, false, err
+		}
+	} else {
 		if err := validateGoEnvironmentContract(repository.Name, moduleSource, kinds); err != nil {
 			return RepositoryAnalysis{}, false, err
 		}
@@ -297,6 +301,145 @@ func analyzeGoModule(repository RepositoryCandidate, workdir string) (Repository
 		RPCClientBindings: bindings,
 		Registrations:     registrations,
 	}, true, nil
+}
+
+func ValidateGoZeroRuntimeConfigSource(name string, directory string, workdir string) error {
+	if filepath.IsAbs(workdir) {
+		relative, err := filepath.Rel(directory, workdir)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("Go service %q workdir is outside its repository: %s", name, workdir)
+		}
+		workdir = relative
+	}
+	if err := validateGoLocalModuleReplacements(name, directory, workdir); err != nil {
+		return err
+	}
+	mainFile := filepath.Join(directory, workdir, "main.go")
+	source, err := os.ReadFile(mainFile)
+	if err != nil {
+		return fmt.Errorf("read Go service %q runtime config entry %s: %w", name, goEntryDisplayPath(workdir), err)
+	}
+	files := token.NewFileSet()
+	parsed, err := parser.ParseFile(files, mainFile, source, parser.SkipObjectResolution)
+	if err != nil {
+		return fmt.Errorf("parse Go service %q runtime config entry %s: %w", name, goEntryDisplayPath(workdir), err)
+	}
+	configVariables := make(map[string]bool)
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		switch declaration := node.(type) {
+		case *ast.AssignStmt:
+			if len(declaration.Lhs) != len(declaration.Rhs) {
+				return true
+			}
+			for index, value := range declaration.Rhs {
+				if !isGoConfigFlag(value) {
+					continue
+				}
+				if identifier, ok := declaration.Lhs[index].(*ast.Ident); ok {
+					configVariables[identifier.Name] = true
+				}
+			}
+		case *ast.ValueSpec:
+			if len(declaration.Names) != len(declaration.Values) {
+				return true
+			}
+			for index, value := range declaration.Values {
+				if isGoConfigFlag(value) {
+					configVariables[declaration.Names[index].Name] = true
+				}
+			}
+		}
+		return true
+	})
+	if len(configVariables) == 0 {
+		return fmt.Errorf("Go service %q does not declare the required -f runtime config flag in %s\n  => Declare it with flag.String(\"f\", <default>, <usage>), call flag.Parse(), then load configuration from the parsed value", name, goEntryDisplayPath(workdir))
+	}
+	var mainFunction *ast.FuncDecl
+	for _, declaration := range parsed.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Recv == nil && function.Name.Name == "main" {
+			mainFunction = function
+			break
+		}
+	}
+	if mainFunction == nil || mainFunction.Body == nil {
+		return fmt.Errorf("Go service %q has no main entry function in %s", name, goEntryDisplayPath(workdir))
+	}
+	var parsePosition token.Pos
+	var readPosition token.Pos
+	ast.Inspect(mainFunction.Body, func(node ast.Node) bool {
+		switch value := node.(type) {
+		case *ast.CallExpr:
+			if isGoFlagCall(value, "Parse") && len(value.Args) == 0 && (parsePosition == token.NoPos || value.Pos() < parsePosition) {
+				parsePosition = value.Pos()
+			}
+		case *ast.StarExpr:
+			identifier, ok := value.X.(*ast.Ident)
+			if ok && configVariables[identifier.Name] && (readPosition == token.NoPos || value.Pos() < readPosition) {
+				readPosition = value.Pos()
+			}
+		}
+		return true
+	})
+	if readPosition == token.NoPos {
+		return fmt.Errorf("Go service %q declares -f but does not read its parsed value in %s\n  => Pass the parsed config path to the service configuration loader", name, goEntryDisplayPath(workdir))
+	}
+	if parsePosition == token.NoPos || parsePosition >= readPosition {
+		line := files.Position(readPosition).Line
+		return fmt.Errorf("Go service %q does not call flag.Parse() before reading -f at %s:%d\n  => Add flag.Parse() after defining command-line flags and before loading service configuration", name, goEntryDisplayPath(workdir), line)
+	}
+	return nil
+}
+
+func validateGoLocalModuleReplacements(name string, directory string, workdir string) error {
+	moduleFile := filepath.Join(directory, workdir, "go.mod")
+	source, err := os.ReadFile(moduleFile)
+	if err != nil {
+		return fmt.Errorf("read Go service %q module file %s: %w", name, filepath.ToSlash(filepath.Join(workdir, "go.mod")), err)
+	}
+	pattern := regexp.MustCompile(`(?m)^\s*(?:replace\s+)?[^\s]+(?:\s+v[^\s]+)?\s+=>\s+((?:\.{1,2}/|/)[^\s]+)\s*(?://.*)?$`)
+	for _, match := range pattern.FindAllSubmatch(source, -1) {
+		replacement := string(match[1])
+		target := replacement
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(moduleFile), filepath.FromSlash(target))
+		}
+		info, statErr := os.Stat(filepath.Join(filepath.Clean(target), "go.mod"))
+		if statErr == nil && info.Mode().IsRegular() {
+			continue
+		}
+		return fmt.Errorf("Go service %q has an unavailable local module replacement %s in %s\n  => Run git -C %q submodule update --init --recursive, then retry", name, replacement, filepath.ToSlash(filepath.Join(workdir, "go.mod")), directory)
+	}
+	return nil
+}
+
+func isGoConfigFlag(expression ast.Expr) bool {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok || !isGoFlagCall(call, "String") || len(call.Args) == 0 {
+		return false
+	}
+	literal, ok := call.Args[0].(*ast.BasicLit)
+	if !ok || literal.Kind != token.STRING {
+		return false
+	}
+	value, err := strconv.Unquote(literal.Value)
+	return err == nil && value == "f"
+}
+
+func isGoFlagCall(call *ast.CallExpr, name string) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != name {
+		return false
+	}
+	identifier, ok := selector.X.(*ast.Ident)
+	return ok && identifier.Name == "flag"
+}
+
+func goEntryDisplayPath(workdir string) string {
+	if workdir == "" || workdir == "." {
+		return "main.go"
+	}
+	return filepath.ToSlash(filepath.Join(workdir, "main.go"))
 }
 
 func goModuleRepositoryName(modulePath string) string {

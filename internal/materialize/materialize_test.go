@@ -76,6 +76,33 @@ func TestMaterializeRepositoryPatchesPrivatelyAndPreservesSource(t *testing.T) {
 	assertPrivateTree(t, target)
 }
 
+func TestMaterializeOptionalPatchChangesOnlyExistingPath(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	configRoot := filepath.Join(root, "configs")
+	target := filepath.Join(configRoot, "api")
+	writeTestSource(t, source, "http://unused.invalid")
+	if err := os.Mkdir(configRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan := testPlan(source, configRoot, target)
+	plan.Patches = []Patch{
+		{File: "application.yaml", Path: "rpc.partner.discovType", Value: "", IfPresent: true},
+		{File: "application.yaml", Path: "rpc.missing.discovType", Value: "", IfPresent: true},
+	}
+	if err := Materialize(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	application := readYAMLMap(t, filepath.Join(target, "application.yaml"))
+	rpc := application["rpc"].(map[string]any)
+	if rpc["partner"].(map[string]any)["discovType"] != "" {
+		t.Fatalf("existing optional patch was not applied: %#v", rpc)
+	}
+	if _, found := rpc["missing"]; found {
+		t.Fatalf("missing optional patch created a new binding: %#v", rpc)
+	}
+}
+
 func TestMaterializeAppliesGuardsAfterPatchesAndVerifiesScalars(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
@@ -457,6 +484,33 @@ func TestMaterializeApolloRetriesAndReplacesApplication(t *testing.T) {
 	serverConfig := application["server"].(map[string]any)
 	if serverConfig["name"] != "apollo" || serverConfig["port"] != 18080 {
 		t.Fatalf("Apollo application was not fetched then patched: %#v", serverConfig)
+	}
+}
+
+func TestApolloUsesBoundedRetriesByDefault(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if requests.Add(1) == 1 {
+			writer.Header().Set("Retry-After", "0")
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]any{
+			"configurations": map[string]string{"content": "server:\n  name: apollo\n"},
+		})
+	}))
+	defer server.Close()
+	bootstrap := fmt.Sprintf("appId: demo\ncluster: dev\nip: %s\nnamespaceName: application.yml\n", server.URL)
+	application, err := (ApolloAdapter{}).Application(context.Background(), SourceInput{
+		Bootstrap: []byte(bootstrap),
+		Apollo: Apollo{Timeout: time.Second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 2 || !strings.Contains(string(application), "name: apollo") {
+		t.Fatalf("default retry result: requests=%d application=%q", requests.Load(), application)
 	}
 }
 

@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/leo1394/homebrew-conven/internal/config"
+	"github.com/leo1394/homebrew-conven/internal/model"
 	convenruntime "github.com/leo1394/homebrew-conven/internal/runtime"
 	"github.com/leo1394/homebrew-conven/internal/selector"
+	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
 
 func TestVersion(t *testing.T) {
@@ -384,6 +386,10 @@ workspace:
   disabledBindings: [zRpc, aRpc]
 environments:
   local:
+    registries:
+      consul:
+        driver: consul
+        address: http://consul.default:8500
     connection:
       driver: none
     endpoints:
@@ -456,13 +462,14 @@ services:
 		"ktctl.kubeconfig=/secure/dev-kubeconfig",
 		"ktctl.path=/usr/local/bin/ktctl",
 		"Available services",
-		"api: type=http, ports=http=18080,metrics=19090, listener=all-interfaces, consumers=kafka:disabled, contract=go-generic, path=api",
+		"api:    http:18080 + metrics:19090 · go-generic · listen=all-interfaces · kafka:enabled(default)",
+		"Remote dependency registries",
+		"local.consul:    consul · http://consul.default:8500",
 		"Configured endpoints",
 		"local.postgres: protocol=tcp, address=127.0.0.1:5432, readiness=tcp",
 		"Disabled bindings",
 		"aRpc",
 		"zRpc",
-		"Conven status",
 		"No Conven session found.",
 	} {
 		if !strings.Contains(output.String(), expected) {
@@ -472,30 +479,108 @@ services:
 	if strings.Index(output.String(), "aRpc") > strings.Index(output.String(), "zRpc") {
 		t.Fatalf("disabled bindings are not sorted: %q", output.String())
 	}
-	if strings.Index(output.String(), "Available services") > strings.Index(output.String(), "Configured endpoints") || strings.Index(output.String(), "Configured endpoints") > strings.Index(output.String(), "Disabled bindings") {
+	if strings.Index(output.String(), "Available services") > strings.Index(output.String(), "Disabled bindings") || strings.Index(output.String(), "Disabled bindings") > strings.Index(output.String(), "Remote dependency registries") || strings.Index(output.String(), "Remote dependency registries") > strings.Index(output.String(), "Configured endpoints") {
 		t.Fatalf("workspace inventories are not ordered: %q", output.String())
+	}
+	if strings.Contains(output.String(), "Configured registries") {
+		t.Fatalf("status output uses ambiguous registry heading: %q", output.String())
 	}
 	if strings.Index(output.String(), "Manifest: ") > strings.Index(output.String(), "ktctl.kubeconfig=") || strings.Index(output.String(), "ktctl.path=") > strings.Index(output.String(), "Available services") {
 		t.Fatalf("ktctl settings are not in the Workspace group: %q", output.String())
 	}
 }
 
-func TestStatusPortSummaryUsesCompactSinglePortDisplay(t *testing.T) {
+func TestWorkspaceStatusOmitsEmptyEndpointsAndDerivedRuntimePaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := environmentShortcutWorkspace(t)
+	var output bytes.Buffer
+	app := App{Output: &output, Error: &output, Cwd: workspace}
+	if code := app.Run([]string{"status"}); code != 0 {
+		t.Fatalf("status exit code = %d: %s", code, output.String())
+	}
+	for _, unexpected := range []string{"Configured endpoints", "Conven status", "Runtime: ", "Current: "} {
+		if strings.Contains(output.String(), unexpected) {
+			t.Fatalf("status output contains redundant %q: %q", unexpected, output.String())
+		}
+	}
+	if !strings.Contains(output.String(), "No Conven session found.") {
+		t.Fatalf("status output is missing session state: %q", output.String())
+	}
+}
+
+func TestStatusServiceSummaryOmitsDefaultsAndKeepsExceptions(t *testing.T) {
 	for _, test := range []struct {
-		name  string
-		ports map[string]int
-		want  string
+		name        string
+		serviceName string
+		service     model.Service
+		want        string
 	}{
-		{name: "none", want: "ports=-"},
-		{name: "http", ports: map[string]int{"http": 18080}, want: "port=18080"},
-		{name: "rpc", ports: map[string]int{"rpc": 18081}, want: "port=18081"},
-		{name: "multiple", ports: map[string]int{"metrics": 19090, "http": 18080}, want: "ports=http=18080,metrics=19090"},
+		{
+			name: "typed defaults", serviceName: "api",
+			service: model.Service{Path: "api", Kinds: []string{"http"}, Ports: map[string]int{"http": 18080}, Discovery: model.ServiceDiscovery{Certifier: "go-zero"}},
+			want: "http:18080 · go-zero",
+		},
+		{
+			name: "typed exceptions", serviceName: "api",
+			service: model.Service{
+				Path: "services/api",
+				Kinds: []string{"http", "rpc"},
+				Network: model.ServiceNetwork{Listen: model.NetworkListenAllInterfaces},
+				Isolation: model.ServiceIsolation{Consumers: map[string]model.ConsumerIsolation{"kafka": {Mode: "guarded"}}},
+				Discovery: model.ServiceDiscovery{Certifier: "spring-boot", Consumers: []string{"kafka"}},
+				Ports: map[string]int{"rpc": 18081, "http": 18080},
+			},
+			want: "http:18080 + rpc:18081 · spring-boot · listen=all-interfaces · kafka:enabled(default) · path=services/api",
+		},
+		{
+			name: "runner only", serviceName: "worker",
+			service: model.Service{Path: "worker"},
+			want: "runner-only · manual",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := statusPortSummary(test.ports); got != test.want {
-				t.Fatalf("port summary = %q, want %q", got, test.want)
+			if got := statusServiceSummary(test.serviceName, test.service); got != test.want {
+				t.Fatalf("service summary = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestStatusRegistrySummaryOmitsEmptyDefaults(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		registry model.Registry
+		want     string
+	}{
+		{
+			name: "defaults",
+			registry: model.Registry{Driver: "consul", Address: "http://consul.default:8500"},
+			want: "consul · http://consul.default:8500",
+		},
+		{
+			name: "namespace and credential references",
+			registry: model.Registry{Driver: "nacos", Address: "http://nacos.default:8848", Namespace: "dev", UsernameEnv: "NACOS_USERNAME", PasswordEnv: "NACOS_PASSWORD"},
+			want: "nacos · http://nacos.default:8848 · namespace=dev · credentials=env:NACOS_USERNAME,NACOS_PASSWORD",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := statusRegistrySummary(test.registry); got != test.want {
+				t.Fatalf("registry summary = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestStatusRowsAlignLabelsAndPrimaryValues(t *testing.T) {
+	var output bytes.Buffer
+	printStatusRows(&output, terminal.New(&output), []statusRow{
+		{Label: "asset-api-service", Summary: "http:18088 · spring-boot"},
+		{Label: "customer-custom-service", Summary: "rpc:18085 · go-zero"},
+	})
+	want := "  - asset-api-service:          http:18088 · spring-boot\n" +
+		"  - customer-custom-service:    rpc:18085  · go-zero\n"
+	if output.String() != want {
+		t.Fatalf("aligned rows = %q, want %q", output.String(), want)
 	}
 }
 
@@ -2778,6 +2863,50 @@ func TestCompletions(t *testing.T) {
 	}
 }
 
+func TestCompletionCandidatesUseEffectiveWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := environmentShortcutWorkspace(t)
+	workspacePlugins := filepath.Join(workspace, ".conven", "plugins")
+	globalPlugins := filepath.Join(home, ".conven", "plugins")
+	for _, directory := range []string{workspacePlugins, globalPlugins} {
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, content := range map[string]string{
+		filepath.Join(workspacePlugins, "build.py"): "workspace",
+		filepath.Join(globalPlugins, "build.py"):    "global duplicate",
+		filepath.Join(globalPlugins, "inspect.py"):  "global",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		name      string
+		arguments []string
+		want      string
+	}{
+		{name: "services", arguments: []string{"-C", workspace, "__completion", "candidates", "services"}, want: "api\n"},
+		{name: "environments", arguments: []string{"-C", workspace, "__completion", "candidates", "environments"}, want: "dev\nstage\ntest\n"},
+		{name: "plugins", arguments: []string{"-C", workspace, "__completion", "candidates", "plugins"}, want: "build\ninspect\n"},
+		{name: "global plugins", arguments: []string{"-C", workspace, "__completion", "candidates", "plugins", "global"}, want: "build\ninspect\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			var errorOutput bytes.Buffer
+			app := App{Output: &output, Error: &errorOutput, Cwd: t.TempDir()}
+			if code := app.Run(test.arguments); code != 0 {
+				t.Fatalf("candidate exit code = %d: %s", code, errorOutput.String())
+			}
+			if output.String() != test.want {
+				t.Fatalf("candidates = %q, want %q", output.String(), test.want)
+			}
+		})
+	}
+}
+
 func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 	bash, err := Completion("bash")
 	if err != nil {
@@ -2789,7 +2918,11 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`compgen -d -- "$cur"`,
 		`if [ "$subcommand" = "help" ]`,
 		`if [ "$subcommand" = "services" ]`,
-		`--list|--status|--dashboard|--cleanup)`,
+		`--list|--status|--cleanup)`,
+		`root_args+=("-C" "${COMP_WORDS[i + 1]}")`,
+		`__completion candidates services`,
+		`__completion candidates environments`,
+		`__completion candidates plugins`,
 		`--registry)`,
 		`options="--prune --help"`,
 		`--listen)`,
@@ -2834,6 +2967,11 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`root_candidates=(`,
+		`_conven_service_names()`,
+		`_conven_environment_names()`,
+		`_conven_plugin_names()`,
+		`_conven_global_plugin_names()`,
+		`conven_root_args+=(-C $words[scan+1])`,
 		`'-C:run as if conven was started in a different directory'`,
 		`_directories`,
 		`case $words[2] in`,
@@ -2874,10 +3012,10 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--global[force a named user-global plugin run]`,
 		`--global[use the user-global plugin scope]`,
 		`words=($words[1] $words[3,-1])`,
-		`'1:global plugin:'`,
+		`'1:global plugin:_conven_global_plugin_names'`,
 		`--output[generator output path; omit the value for application.yaml]`,
 		`--disable-bindings[replace disabled bindings for this generator run]`,
-		`'1::plugin:'`,
+		`'1::plugin:_conven_plugin_names'`,
 	} {
 		if !strings.Contains(zsh, expected) {
 			t.Fatalf("zsh completion is missing %q", expected)
@@ -2895,12 +3033,14 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 	}
 	for _, expected := range []string{
 		`function __conven_command_tokens`,
+		`function __conven_completion_candidates`,
 		`function __conven_without_command`,
 		`__conven_global_context' -s C -r`,
 		`function __conven_using_subcommand`,
 		`function __conven_help_without_command`,
 		`__conven_using_subcommand help; and __conven_help_without_command`,
 		`function __conven_services_action`,
+		`function __conven_services_name_position`,
 		`function __conven_services_without_action`,
 		`function __conven_workspace_without_action`,
 		`function __conven_workspace_action`,
@@ -2909,8 +3049,10 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`function __conven_plugins_without_action`,
 		`function __conven_plugins_action`,
 		`function __conven_plugins_scope_position`,
+		`function __conven_plugins_global_name_position`,
 		`function __conven_plugins_global_without_action`,
 		`function __conven_plugins_global_run`,
+		`function __conven_plugins_global_run_name_position`,
 		`function __conven_plugins_run_arguments`,
 		`__conven_without_command' -a services`,
 		`__conven_without_command' -a workspace`,
@@ -2956,6 +3098,9 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`__conven_plugins_scope_position --run' -l global`,
 		`__conven_plugins_run_arguments' -l output`,
 		`__conven_plugins_run_arguments' -l disable-bindings`,
+		`__conven_completion_candidates services`,
+		`__conven_completion_candidates environments`,
+		`__conven_completion_candidates plugins`,
 	} {
 		if !strings.Contains(fish, expected) {
 			t.Fatalf("fish completion is missing %q", expected)
@@ -3015,6 +3160,97 @@ func TestBashCompletionPreservesSpacesInWorkingDirectoryCandidates(t *testing.T)
 	}
 	if string(output) != "<workspace with spaces>\n" {
 		t.Fatalf("completion = %q", output)
+	}
+}
+
+func TestBashCompletionUsesEffectiveWorkspaceCandidates(t *testing.T) {
+	completion, err := Completion("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "conven")
+	program := `#!/bin/sh
+if [ "$1" != "-C" ] || [ "$2" != "/target-workspace" ]; then
+    exit 0
+fi
+shift 2
+case "$*" in
+    "__completion candidates services") printf 'api-service\nworker-service\n' ;;
+    "__completion candidates environments") printf 'dev\ntest\n' ;;
+    "__completion candidates plugins") printf 'build-policy\ninspect\n' ;;
+    "__completion candidates plugins global") printf 'global-policy\n' ;;
+esac
+`
+	if err := os.WriteFile(executable, []byte(program), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		words string
+		want  string
+	}{
+		{name: "service", words: executable + " -C /target-workspace services --start api", want: "api-service\n"},
+		{name: "environment", words: executable + " -C /target-workspace services --start --env d", want: "dev\n"},
+		{name: "context value", words: executable + " -C /target-workspace services --start --context ''", want: ""},
+		{name: "namespace value", words: executable + " -C /target-workspace services --start --namespace ''", want: ""},
+		{name: "plugin", words: executable + " -C /target-workspace plugins --remove bu", want: "build-policy\n"},
+		{name: "global plugin", words: executable + " -C /target-workspace plugins --global --run gl", want: "global-policy\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := completion + "\nCOMP_WORDS=(" + test.words + ")\nCOMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_conven\nfor candidate in \"${COMPREPLY[@]}\"; do printf '%s\\n' \"$candidate\"; done\n"
+			output, err := exec.Command("bash", "-c", script).CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash completion failed: %v: %s", err, output)
+			}
+			if string(output) != test.want {
+				t.Fatalf("completion = %q, want %q", output, test.want)
+			}
+		})
+	}
+}
+
+func TestZshCompletionHelpersUseEffectiveWorkspaceCandidates(t *testing.T) {
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh is not installed")
+	}
+	completion, err := Completion("zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "conven")
+	program := `#!/bin/sh
+if [ "$1" != "-C" ] || [ "$2" != "/target-workspace" ]; then
+    exit 0
+fi
+shift 2
+case "$*" in
+    "__completion candidates services") printf 'api-service\nworker-service\n' ;;
+    "__completion candidates environments") printf 'dev\ntest\n' ;;
+    "__completion candidates plugins") printf 'build-policy\ninspect\n' ;;
+    "__completion candidates plugins global") printf 'global-policy\n' ;;
+esac
+`
+	if err := os.WriteFile(executable, []byte(program), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := `compdef() { :; }
+_describe() { eval "print -l -- \${$2[@]}"; }
+` + completion + "\nconven_executable=" + executable + `
+conven_root_args=(-C /target-workspace)
+_conven_service_names
+_conven_environment_names
+_conven_plugin_names
+_conven_global_plugin_names
+`
+	output, err := exec.Command("zsh", "-f", "-c", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("zsh completion helper failed: %v: %s", err, output)
+	}
+	want := "api-service\nworker-service\ndev\ntest\nbuild-policy\ninspect\nglobal-policy\n"
+	if string(output) != want {
+		t.Fatalf("completion candidates = %q, want %q", output, want)
 	}
 }
 
@@ -3132,7 +3368,7 @@ func TestBashWorkspaceImportCompletesLocalFilesBeforeSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	if err := os.WriteFile(filepath.Join(directory, "candidate-policy.yaml"), []byte("candidate"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "candidate policy.yaml"), []byte("candidate"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	script := completion + "\nCOMP_WORDS=(conven workspace --import candidate)\nCOMP_CWORD=3\n_conven\nprintf '%s\\n' \"${COMPREPLY[@]}\"\n"
@@ -3142,8 +3378,43 @@ func TestBashWorkspaceImportCompletesLocalFilesBeforeSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bash completion failed: %v: %s", err, output)
 	}
-	if string(output) != "candidate-policy.yaml\n" {
+	if string(output) != "candidate policy.yaml\n" {
 		t.Fatalf("completion = %q", output)
+	}
+}
+
+func TestBashValuePathCompletionPreservesSpaces(t *testing.T) {
+	completion, err := Completion("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	for _, name := range []string{"cluster config", "plugin output"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		name  string
+		words string
+		want  string
+	}{
+		{name: "service kubeconfig", words: "conven services --start --kubeconfig cluster", want: "cluster config\n"},
+		{name: "doctor kubeconfig", words: "conven doctor --kubeconfig cluster", want: "cluster config\n"},
+		{name: "plugin output", words: "conven plugins --run inspect --output plugin", want: "plugin output\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := completion + "\nCOMP_WORDS=(" + test.words + ")\nCOMP_CWORD=$((${#COMP_WORDS[@]} - 1))\n_conven\nprintf '<%s>\\n' \"${COMPREPLY[@]}\"\n"
+			command := exec.Command("bash", "-c", script)
+			command.Dir = directory
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash completion failed: %v: %s", err, output)
+			}
+			if string(output) != "<"+test.want[:len(test.want)-1]+">\n" {
+				t.Fatalf("completion = %q, want %q", output, test.want)
+			}
+		})
 	}
 }
 

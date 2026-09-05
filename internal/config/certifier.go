@@ -151,9 +151,6 @@ func CertifyRepository(manifest *model.Manifest, request RepositoryCertification
 	if request.Runtime == "" {
 		request.Runtime = request.Framework
 	}
-	if err := certifyKafkaConsumerEvidence(request); err != nil {
-		return RepositoryCertification{}, false, err
-	}
 	if request.Framework == "" || request.Runtime == "" || request.Discovery == "" || len(requestKinds(request)) == 0 {
 		return RepositoryCertification{Policy: request.ExplicitPolicy}, false, nil
 	}
@@ -189,42 +186,58 @@ func CertifyRepository(manifest *model.Manifest, request RepositoryCertification
 	return RepositoryCertification{Certifier: matches[0].Name(), Policy: policy}, true, nil
 }
 
-func certifyKafkaConsumerEvidence(request RepositoryCertificationRequest) error {
+func certifyDisabledKafkaConsumerEvidence(request RepositoryCertificationRequest) error {
 	for _, evidence := range request.Consumers {
 		if evidence.Driver != "kafka" || evidence.Protected {
 			continue
 		}
-		return fmt.Errorf(`%s service %q creates a Kafka consumer at %s without a trusted runtime guard; services --registry made no changes
+		return fmt.Errorf(`%s service %q cannot disable Kafka consumers because its current source has no trusted runtime guard
+  - Source: %s
+  - Required switch: %s
+  => Add this guard before the consumer is created:
 
-Guard consumer construction with the neutral switch below. Conven currently defaults %s=true; the guard is required so a future certified local-routing policy can disable remote membership without another source change.
-
-Go:
-if strings.EqualFold(os.Getenv("%s"), "false") {
-    return []service.Service{}, nil
-}
-
-Spring Boot:
-@ConditionalOnProperty(
-    prefix = "service.kafka.consumers",
-    name = "enabled",
-    havingValue = "true",
-    matchIfMissing = true
-)
-
-Node/Bun:
-if (process.env.%s !== "false") {
-  await startKafkaConsumers();
-}
-
-Python:
-if os.getenv("%s", "true").lower() != "false":
-    start_kafka_consumers()`, request.Framework, request.Name, evidence.File, KafkaConsumersEnabledEnv, KafkaConsumersEnabledEnv, KafkaConsumersEnabledEnv, KafkaConsumersEnabledEnv)
+%s`, request.Framework, request.Name, evidence.File, KafkaConsumersEnabledEnv, kafkaConsumerGuardExample(request.Framework, request.Runtime))
 	}
 	return nil
 }
 
-func ValidateKafkaConsumerEvidence(name string, framework string, evidence []RepositoryConsumerEvidence) error {
-	return certifyKafkaConsumerEvidence(RepositoryCertificationRequest{Name: name, Framework: framework, Consumers: evidence})
+func kafkaConsumerGuardExample(framework string, runtimeName string) string {
+	switch serviceLanguage(framework, runtimeName) {
+	case "go":
+		return `  Go example:
+      if strings.EqualFold(os.Getenv("SERVICE_KAFKA_CONSUMERS_ENABLED"), "false") {
+          return nil, nil
+      }`
+	case "java":
+		return `  Spring Boot example:
+      @ConditionalOnProperty(
+          prefix = "service.kafka.consumers",
+          name = "enabled",
+          havingValue = "true",
+          matchIfMissing = true
+      )`
+	case "bun":
+		return `  Bun example:
+      if (Bun.env.SERVICE_KAFKA_CONSUMERS_ENABLED !== "false") {
+        await startKafkaConsumers();
+      }`
+	case "node":
+		return `  Node.js example:
+      if (process.env.SERVICE_KAFKA_CONSUMERS_ENABLED !== "false") {
+        await startKafkaConsumers();
+      }`
+	case "python":
+		return `  Python example:
+      if os.getenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "true").lower() != "false":
+          start_kafka_consumers()`
+	default:
+		return `  Runtime contract:
+      Skip consumer construction when SERVICE_KAFKA_CONSUMERS_ENABLED=false.`
+	}
+}
+
+func ValidateDisabledKafkaConsumerEvidence(name string, framework string, evidence []RepositoryConsumerEvidence) error {
+	return certifyDisabledKafkaConsumerEvidence(RepositoryCertificationRequest{Name: name, Framework: framework, Consumers: evidence})
 }
 
 func requestKinds(request RepositoryCertificationRequest) []string {
@@ -235,35 +248,94 @@ func requestKinds(request RepositoryCertificationRequest) []string {
 
 func certifyRegistrationEvidence(request RepositoryCertificationRequest) error {
 	if request.Discovery != "passive" && request.Discovery != "kubernetes-dns" && len(request.Registrations) == 0 {
-		return fmt.Errorf("%s service %q uses %s discovery but Analyzer could not locate the provider registration and deregistration path; wrap those calls in the neutral SERVICE_REGISTRATION_ENABLED guard below, or use a passive/Kubernetes DNS policy if this process does not register\n\n%s", request.Framework, request.Name, request.Discovery, neutralRegistrationGuardExamples())
+		return fmt.Errorf(`%s service %q cannot be certified because its registration and deregistration path was not found
+  - Discovery: %s
+  - Required switch: SERVICE_REGISTRATION_ENABLED
+  => Guard the registration lifecycle:
+
+%s
+
+  => If this process does not register, use a passive/Kubernetes DNS policy`, request.Framework, request.Name, request.Discovery, neutralRegistrationGuardExample(request.Framework, request.Runtime))
 	}
 	for _, evidence := range request.Registrations {
 		if evidence.Protected { continue }
-		return fmt.Errorf("custom %s registration in %s cannot be trusted; the registration and deregistration calls must be inside a neutral SERVICE_REGISTRATION_ENABLED guard\n\n%s\n\nThe default-enabled branch preserves deployed behavior; Conven injects false for local runs", evidence.Provider, evidence.File, neutralRegistrationGuardExamples())
+		return fmt.Errorf(`custom %s registration cannot be certified because it has no trusted runtime guard
+  - Source: %s
+  - Required switch: SERVICE_REGISTRATION_ENABLED
+  => Guard both registration and deregistration:
+
+%s
+
+The default-enabled branch preserves deployed behavior; Conven injects false for local runs`, evidence.Provider, evidence.File, neutralRegistrationGuardExample(request.Framework, request.Runtime))
 	}
 	return nil
 }
 
-func neutralRegistrationGuardExamples() string {
-	return `Go:
-if !strings.EqualFold(os.Getenv("SERVICE_REGISTRATION_ENABLED"), "false") {
-    register()
+func neutralRegistrationGuardExample(framework string, runtimeName string) string {
+	switch serviceLanguage(framework, runtimeName) {
+	case "go":
+		return `  Go example:
+      if !strings.EqualFold(os.Getenv("SERVICE_REGISTRATION_ENABLED"), "false") {
+          register()
+      }`
+	case "bun":
+		return `  Bun example:
+      if (Bun.env.SERVICE_REGISTRATION_ENABLED !== "false") {
+        await registerService();
+      }`
+	case "node":
+		return `  Node.js example:
+      if (process.env.SERVICE_REGISTRATION_ENABLED !== "false") {
+        await registerService();
+      }`
+	case "python":
+		return `  Python example:
+      if os.getenv("SERVICE_REGISTRATION_ENABLED", "true").lower() != "false":
+          register_service()`
+	default:
+		return `  Runtime contract:
+      Skip registration and deregistration when SERVICE_REGISTRATION_ENABLED=false.`
+	}
 }
 
-Node/Bun:
-if (process.env.SERVICE_REGISTRATION_ENABLED !== "false") {
-  await registerService();
-}
-
-Python:
-if os.getenv("SERVICE_REGISTRATION_ENABLED", "true").lower() != "false":
-    register_service()`
+func serviceLanguage(framework string, runtimeName string) string {
+	switch strings.ToLower(strings.TrimSpace(runtimeName)) {
+	case "go-zero", "go-generic", "kratos", "hertz", "kitex":
+		return "go"
+	case "spring-boot", "quarkus", "micronaut":
+		return "java"
+	case "asgi-uvicorn", "wsgi-gunicorn":
+		return "python"
+	case "bun-http":
+		return "bun"
+	case "nestjs", "node-http":
+		return "node"
+	}
+	switch strings.ToLower(strings.TrimSpace(framework)) {
+	case "go-zero", "go-generic", "kratos", "hertz", "kitex":
+		return "go"
+	case "spring-boot", "quarkus", "micronaut":
+		return "java"
+	case "fastapi", "starlette", "flask", "django":
+		return "python"
+	case "bun-serve", "elysia", "hono":
+		return "bun"
+	case "nestjs", "express", "fastify":
+		return "node"
+	default:
+		return ""
+	}
 }
 
 func certifyGoZeroRegistrationEvidence(request RepositoryCertificationRequest) error {
 	for _, evidence := range request.Registrations {
 		if !evidence.Protected {
-			return fmt.Errorf("go-zero service %q has custom %s registration in %s that bypasses the discovType isolation contract; guard the registration and deregistration path with SERVICE_REGISTRATION_ENABLED or remove the custom registration\n\n%s", request.Name, evidence.Provider, evidence.File, neutralRegistrationGuardExamples())
+			return fmt.Errorf(`go-zero service %q cannot be certified because custom %s registration bypasses the discovType isolation contract
+  - Source: %s
+  - Required switch: SERVICE_REGISTRATION_ENABLED
+  => Guard registration and deregistration, or remove the custom registration:
+
+%s`, request.Name, evidence.Provider, evidence.File, neutralRegistrationGuardExample("go-zero", "go-zero"))
 		}
 	}
 	return nil
@@ -274,21 +346,23 @@ func certifySpringRegistration(request RepositoryCertificationRequest) error {
 		if evidence.Provider != "consul" || evidence.Protected {
 			continue
 		}
-		return fmt.Errorf(`Spring Boot service %q has custom Consul registration in %s that cannot be trusted because Conven could not verify a service.registration.enabled condition on the class that performs registration
+		return fmt.Errorf(`Spring Boot service %q cannot be certified because its custom Consul registration has no trusted runtime guard
+  - Source: %s
+  - Required property: service.registration.enabled
+  => Add this condition to the class that performs registration:
 
-Add this import and condition to that class:
+  Spring Boot example:
+      import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-
-@ConditionalOnProperty(
-    prefix = "service.registration",
-    name = "enabled",
-    havingValue = "true",
-    matchIfMissing = true
-)
-public class ConsulConfig {
-    // existing registration and deregistration code
-}
+      @ConditionalOnProperty(
+          prefix = "service.registration",
+          name = "enabled",
+          havingValue = "true",
+          matchIfMissing = true
+      )
+      public class ConsulConfig {
+          // existing registration and deregistration code
+      }
 
 Conven passes --service.registration.enabled=false for local runs; matchIfMissing=true preserves existing deployments`, request.Name, evidence.File)
 	}

@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,6 +10,30 @@ import (
 	"github.com/leo1394/homebrew-conven/internal/materialize"
 	"github.com/leo1394/homebrew-conven/internal/model"
 )
+
+func TestGoZeroRuntimeContractRejectsUnparsedConfigFlagBeforeStartup(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "api")
+	workdir := filepath.Join(directory, "go")
+	if err := os.MkdirAll(workdir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "go.mod"), []byte("module example.com/api\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mainSource := `package main
+import "flag"
+var configDir = flag.String("f", "../resources", "the config file")
+func main() { start(*configDir) }
+func start(string) {}
+`
+	if err := os.WriteFile(filepath.Join(workdir, "main.go"), []byte(mainSource), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := validateRuntimeContractSource("api", &PlannedConfig{Contract: "go-zero-consul-yaml-overlay"}, directory, workdir)
+	if err == nil || !strings.Contains(err.Error(), "flag.Parse()") {
+		t.Fatalf("unparsed runtime config source error = %v", err)
+	}
+}
 
 func TestRuntimeContractAdaptersResolveByDriverContract(t *testing.T) {
 	tests := []struct {

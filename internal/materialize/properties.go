@@ -22,6 +22,19 @@ func requireExistingGuard(driver Driver, path string, key string) error {
 	return nil
 }
 
+func configPathExists(driver Driver, path string, key string) (bool, error) {
+	if driver == DriverYAMLOverlay {
+		document, err := readYAMLGuardDocument(path)
+		if err != nil {
+			return false, err
+		}
+		_, found, err := yamlValueAtPath(document, key)
+		return found, err
+	}
+	_, found, err := readProperty(path, key)
+	return found, err
+}
+
 func applyConfigPatch(driver Driver, path string, key string, value any) error {
 	if driver == DriverYAMLOverlay {
 		return applyYAMLPatch(path, key, value)

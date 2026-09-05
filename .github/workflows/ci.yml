@@ -23,8 +23,13 @@ jobs:
         run: bash -n install.sh
       - name: Check project plugins are not bundled
         run: test ! -e internal/plugins/builtin/generate-apollo-consul.py
+      - name: Check module graph
+        run: go mod tidy -diff
       - name: Test
         run: go test ./...
+      - name: Test race detector
+        if: runner.os == 'Linux'
+        run: go test -race ./...
       - name: Vet
         run: go vet ./...
       - name: Build
@@ -111,6 +116,8 @@ jobs:
           "$conven_bin" -C "$c_workspace" init
           c_services="$("$conven_bin" -C "$c_workspace" services --list)"
           grep -Fq user-svc <<< "$c_services"
+          completion_services="$("$conven_bin" -C "$c_workspace" __completion candidates services)"
+          grep -Fxq user-svc <<< "$completion_services"
           test -s "$conven_prefix/share/man/man1/conven.1"
           MANPATH="$conven_prefix/share/man" man -w conven | grep -Fq "$conven_prefix/share/man/man1/conven.1"
           completion_dir="$RUNNER_TEMP/conven-completions"
@@ -124,6 +131,15 @@ jobs:
           grep -Fq -- "-C init services" "$completion_dir/conven.bash"
           grep -Fq -- "'-C:run as if conven was started" "$completion_dir/_conven"
           grep -Fq -- "-s C" "$completion_dir/conven.fish"
+          grep -Fq -- "__completion candidates services" "$completion_dir/conven.bash"
+          grep -Fq -- "__completion candidates services" "$completion_dir/_conven"
+          grep -Fq -- "__completion candidates services" "$completion_dir/conven.fish"
+          grep -Fq -- "__completion candidates environments" "$completion_dir/conven.bash"
+          grep -Fq -- "__completion candidates environments" "$completion_dir/_conven"
+          grep -Fq -- "__completion candidates environments" "$completion_dir/conven.fish"
+          grep -Fq -- "__completion candidates plugins" "$completion_dir/conven.bash"
+          grep -Fq -- "__completion candidates plugins" "$completion_dir/_conven"
+          grep -Fq -- "__completion candidates plugins" "$completion_dir/conven.fish"
           bash_top="$(grep -m 1 -F 'compgen -W "' "$completion_dir/conven.bash" | sed -E 's/.*compgen -W "([^"]+)".*/\1/')"
           for command in init services config workspace plugins status doctor help version; do
             case " $bash_top " in

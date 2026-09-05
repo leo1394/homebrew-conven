@@ -4,11 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/leo1394/homebrew-conven/internal/materialize"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
@@ -85,11 +81,9 @@ func runRuntimePreflight(ctx context.Context, plan *Plan, output io.Writer, anno
 			fmt.Fprintln(output, style.Stage("External Consul dependency preflight"))
 		}
 	}
-	if announce && preflightEnabled {
-		printExternalDependencyTargets(output, dependencies)
-	}
 	if err := preflightExternalConsulDependencies(ctx, dependencies); err != nil {
 		if preflightEnabled {
+			fmt.Fprintln(output, style.Detail(err.Error()))
 			if announce {
 				fmt.Fprintln(output, style.Failure("✗ External Consul dependency preflight failed."))
 			} else {
@@ -106,28 +100,4 @@ func runRuntimePreflight(ctx context.Context, plan *Plan, output io.Writer, anno
 		}
 	}
 	return nil
-}
-
-func printExternalDependencyTargets(output io.Writer, dependencies []ExternalConsulDependency) {
-	style := terminal.New(output)
-	if len(dependencies) == 0 {
-		return
-	}
-	byOwner := make(map[string][]ExternalConsulDependency)
-	owners := make([]string, 0)
-	for _, dependency := range dependencies {
-		if _, found := byOwner[dependency.Owner]; !found {
-			owners = append(owners, dependency.Owner)
-		}
-		byOwner[dependency.Owner] = append(byOwner[dependency.Owner], dependency)
-	}
-	sort.Strings(owners)
-	for _, owner := range owners {
-		references := make([]string, 0, len(byOwner[owner]))
-		for _, dependency := range byOwner[owner] {
-			endpoint := net.JoinHostPort(dependency.Host, strconv.Itoa(dependency.Port))
-			references = append(references, fmt.Sprintf("%s -> %s via %s", style.Identifier(externalDependencyPathLabel(dependency.Path)), style.Identifier(dependency.Key), style.Identifier(endpoint)))
-		}
-		fmt.Fprintln(output, style.Detail(style.Identifier(owner)+": "+strings.Join(references, ", ")))
-	}
 }

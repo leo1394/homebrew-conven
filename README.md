@@ -108,11 +108,11 @@ the session and blocks the next fresh start.
 > **Local isolation is not data isolation.** Local services still use the
 > remote databases, Kafka brokers, unselected RPC clients, and background jobs
 > present in their runtime configuration. They may write data or consume
-> messages. Conven does not sandbox those effects. Recognized Kafka consumers
-> must have a neutral guard. Until unified local routing for asynchronous
-> workloads is implemented, Conven temporarily injects
-> `SERVICE_KAFKA_CONSUMERS_ENABLED=true`; a service environment may explicitly
-> set it to `false` when consumer isolation is required.
+> messages. Conven does not sandbox those effects. Until unified local routing
+> for asynchronous workloads is implemented, Conven defaults
+> `SERVICE_KAFKA_CONSUMERS_ENABLED` to `true` and does not require a source
+> guard. Only an explicit `false` requests Kafka consumer isolation; Conven
+> then verifies that the service can honor the switch before startup.
 
 Runner-only services with no `kinds` do not receive the same adapter-backed
 isolation guarantee. Project-defined `prepare` and `build` commands also run
@@ -148,7 +148,7 @@ Conven, and installs it to `~/.local/bin`. Add that directory to `PATH` if
 prompted. Run the command again to upgrade. To choose a version or destination:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.1 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.2 bash
 curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
@@ -307,8 +307,8 @@ validates and replaces the complete manifest; it is not a YAML merge.
 
 1. Resolve the nearest `.conven/conven.yaml` and selected environment.
 2. Select services, resolve every dependency edge, and build start groups.
-3. Validate local-service, endpoint, remote, and disabled routes plus isolation
-   and paths.
+3. Validate local-service, endpoint, remote, and disabled routes plus isolation,
+   runtime configuration consumption, local module replacements, and paths.
 4. Check the readiness of referenced external endpoints.
 5. Reuse or establish the environment connection and materialize runtime config.
 6. Run prepare, build, start, and health checks, verify listener ownership and
@@ -342,14 +342,18 @@ Apollo application.yml
   → server patch
   → services.portal-api-service.config.patches
   → dependency-routing patch
+  → workspace.disabledBindings patch for bindings that exist
   → local-isolation guard
   → runtime/current
 ```
 
 The second pipeline also defines precedence: each later patch operates on the
 result of the previous stage. `services.portal-api-service.config.patches` is
-a concrete example of a service-scoped manifest patch. The local-isolation
-guard enforces and verifies final listener and registration behavior, while
+a concrete example of a service-scoped manifest patch.
+`workspace.disabledBindings` disables matching clients only when they exist in
+the fetched configuration; it never creates a missing binding. The
+local-isolation guard enforces and verifies final listener and registration
+behavior, while
 Consul preflight checks the remote dependencies that remain enabled in the
 final runtime configuration.
 

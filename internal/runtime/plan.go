@@ -125,6 +125,40 @@ func BuildRestartPlan(workspace *WorkspaceData, options CommonOptions, selected 
 	return buildPlan(workspace, options, selected, false, true)
 }
 
+func ValidateServiceRuntimeSource(workspace *WorkspaceData, name string) error {
+	service, found := workspace.Manifest.Services[name]
+	if !found || service.Discovery.Certifier == "" {
+		return nil
+	}
+	_, policy, found := policyForService(workspace.Manifest, service)
+	if !found {
+		return nil
+	}
+	directory := service.Path
+	if !filepath.IsAbs(directory) {
+		directory = filepath.Join(workspace.Root, directory)
+	}
+	workdir := service.Runner.Workdir
+	if workdir == "" {
+		workdir = "."
+	}
+	for _, kind := range service.EffectiveKinds() {
+		adapter, matched, err := runtimeContractForPolicy(policy, kind)
+		if err != nil {
+			return err
+		}
+		if !matched {
+			continue
+		}
+		implementation, ok := adapter.(runtimeSourceValidator)
+		if !ok {
+			return nil
+		}
+		return implementation.ValidateSource(name, filepath.Clean(directory), workdir)
+	}
+	return nil
+}
+
 func buildPlan(workspace *WorkspaceData, options CommonOptions, selected []string, includeConnection bool, reuseCurrent bool) (*Plan, error) {
 	if len(selected) == 0 {
 		return nil, fmt.Errorf("at least one local service is required")
@@ -365,6 +399,11 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	if err != nil {
 		return PlannedService{}, err
 	}
+	if service.Discovery.Certifier != "" {
+		if err := validateRuntimeContractSource(name, plannedConfig, directory, workdir); err != nil {
+			return PlannedService{}, fmt.Errorf("validate service %s runtime config source: %w", name, err)
+		}
+	}
 	kinds := service.EffectiveKinds()
 	for _, kind := range kinds {
 		if err := validatePlannedIsolation(name, kind, plannedConfig.ForKind(kind)); err != nil {
@@ -378,9 +417,6 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 		if runtimeName == "" {
 			runtimeName = policy.Drivers.Framework
 		}
-	}
-	if err := validatePlannedConsumerIsolation(name, runtimeName, directory, workdir, service); err != nil {
-		return PlannedService{}, err
 	}
 	var registry *model.Registry
 	if service.Discovery.Registry != "" {
@@ -525,6 +561,14 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 			return PlannedService{}, fmt.Errorf("service %s kind %s environment isolation: %w", name, kind, err)
 		}
 	}
+	if err := validatePlannedConsumerIsolation(name, runtimeName, directory, workdir, service, expandedValues); err != nil {
+		return PlannedService{}, fmt.Errorf(`%w
+
+  => To start without Kafka consumer isolation:
+     %s=true conven -C %q services --start --env %q %q
+
+This explicitly allows remote Kafka consumer-group membership for this service`, err, config.KafkaConsumersEnabledEnv, plan.Workspace.Root, plan.EnvironmentName, name)
+	}
 	consumerIsolation, err := applyProtectedConsumerIsolation(name, service, expandedValues)
 	if err != nil {
 		return PlannedService{}, err
@@ -578,7 +622,10 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	}, nil
 }
 
-func validatePlannedConsumerIsolation(name string, runtimeName string, directory string, workdir string, service model.Service) error {
+func validatePlannedConsumerIsolation(name string, runtimeName string, directory string, workdir string, service model.Service, environment map[string]string) error {
+	if !kafkaConsumersDisabled(environment) {
+		return nil
+	}
 	evidence, err := config.InspectKafkaConsumerEvidence(directory, workdir)
 	if err != nil {
 		return fmt.Errorf("service %s Kafka consumer preflight: %w", name, err)
@@ -601,10 +648,18 @@ func validatePlannedConsumerIsolation(name string, runtimeName string, directory
 			return fmt.Errorf("service %s declares discovery.consumers=%s but current source no longer proves that consumer; run conven services --registry to refresh the manifest", name, driver)
 		}
 	}
-	if err := config.ValidateKafkaConsumerEvidence(name, runtimeName, evidence); err != nil {
+	if err := config.ValidateDisabledKafkaConsumerEvidence(name, runtimeName, evidence); err != nil {
 		return err
 	}
 	return nil
+}
+
+func kafkaConsumersDisabled(environment map[string]string) bool {
+	value := environment[config.KafkaConsumersEnabledEnv]
+	if override, found := os.LookupEnv(config.KafkaConsumersEnabledEnv); found {
+		value = override
+	}
+	return strings.EqualFold(strings.TrimSpace(value), "false")
 }
 
 func applyProtectedConsumerIsolation(name string, service model.Service, environment map[string]string) (map[string]ConsumerIsolationEvidence, error) {
@@ -620,11 +675,8 @@ func applyProtectedConsumerIsolation(name string, service model.Service, environ
 			return nil, fmt.Errorf("service %s consumer guard %s is not a supported protected contract", name, driver)
 		}
 		value := config.KafkaConsumersDefaultValue
-		if existing, found := environment[isolation.Env]; found {
-			value = strings.ToLower(strings.TrimSpace(existing))
-		}
-		if value != "true" && value != "false" {
-			return nil, fmt.Errorf("service %s Kafka consumer guard environment %s=%q must be true or false", name, isolation.Env, value)
+		if kafkaConsumersDisabled(environment) {
+			value = "false"
 		}
 		environment[isolation.Env] = value
 		status := "enabled"

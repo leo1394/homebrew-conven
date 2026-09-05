@@ -6,8 +6,14 @@ func Completion(shell string) (string, error) {
 	switch shell {
 	case "bash":
 		return `_conven() {
-    local cur subcommand action options i source_set candidate command_index action_index
+    local cur prev subcommand action options i source_set candidate command_index action_index candidate_kind candidate_scope
+    local -a root_args
     cur="${COMP_WORDS[COMP_CWORD]}"
+    prev=""
+    if [ "$COMP_CWORD" -gt 0 ]; then
+        prev="${COMP_WORDS[COMP_CWORD - 1]}"
+    fi
+    root_args=()
     command_index=0
     for ((i=1; i<COMP_CWORD; )); do
         if [ "${COMP_WORDS[i]}" = "-C" ]; then
@@ -19,6 +25,7 @@ func Completion(shell string) (string, error) {
                 done < <(compgen -d -- "$cur")
                 return
             fi
+            root_args+=("-C" "${COMP_WORDS[i + 1]}")
             ((i += 2))
             continue
         fi
@@ -41,27 +48,37 @@ func Completion(shell string) (string, error) {
     fi
     if [ "$subcommand" = "services" ]; then
         action="${COMP_WORDS[action_index]}"
+        candidate_kind=""
         case "$action" in
-            --list|--status|--dashboard|--cleanup)
+            --list|--status|--cleanup)
                 options="--help"
+                ;;
+            --dashboard)
+                options="--help"
+                candidate_kind="services"
                 ;;
             --registry)
                 options="--prune --help"
                 ;;
             --listen)
                 options="--on --off --help"
+                candidate_kind="services"
                 ;;
             --logs)
                 options="--tail --dashboard --help"
+                candidate_kind="services"
                 ;;
             --start)
                 options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --with-dependencies --skip-build --skip-verify --help"
+                candidate_kind="services"
                 ;;
             --restart)
                 options="--tail --dashboard --skip-build --skip-verify --help"
+                candidate_kind="services"
                 ;;
             --stop)
                 options="--all --force --help"
+                candidate_kind="services"
                 ;;
             --stop-all)
                 options="--force --help"
@@ -74,7 +91,31 @@ func Completion(shell string) (string, error) {
                 fi
                 ;;
         esac
+        if [ "$prev" = "--env" ]; then
+            COMPREPLY=()
+            while IFS= read -r candidate; do
+                [[ "$candidate" == "$cur"* ]] && COMPREPLY+=("$candidate")
+            done < <("${COMP_WORDS[0]}" "${root_args[@]}" __completion candidates environments 2>/dev/null)
+            return
+        fi
+        if [ "$prev" = "--kubeconfig" ]; then
+            compopt -o filenames 2>/dev/null
+            COMPREPLY=()
+            while IFS= read -r candidate; do
+                COMPREPLY+=("$candidate")
+            done < <(compgen -f -- "$cur")
+            return
+        fi
+        if [ "$prev" = "--context" ] || [ "$prev" = "--namespace" ]; then
+            COMPREPLY=()
+            return
+        fi
         COMPREPLY=( $(compgen -W "$options" -- "$cur") )
+        if [ "$candidate_kind" = "services" ] && [[ "$cur" != -* ]]; then
+            while IFS= read -r candidate; do
+                [[ "$candidate" == "$cur"* ]] && COMPREPLY+=("$candidate")
+            done < <("${COMP_WORDS[0]}" "${root_args[@]}" __completion candidates services 2>/dev/null)
+        fi
         return
     fi
     if [ "$subcommand" = "workspace" ]; then
@@ -98,7 +139,9 @@ func Completion(shell string) (string, error) {
                     done
                     COMPREPLY=( $(compgen -W "$options" -- "$cur") )
                     if [ "$source_set" -eq 0 ] && [[ "$cur" != -* ]]; then
-                        COMPREPLY+=( $(compgen -f -- "$cur") )
+                        while IFS= read -r candidate; do
+                            COMPREPLY+=("$candidate")
+                        done < <(compgen -f -- "$cur")
                     fi
                     return
                     ;;
@@ -112,13 +155,27 @@ func Completion(shell string) (string, error) {
     fi
     if [ "$subcommand" = "plugins" ]; then
         action="${COMP_WORDS[action_index]}"
+        candidate_scope=""
+        if [ "$prev" = "--output" ]; then
+            compopt -o filenames 2>/dev/null
+            COMPREPLY=()
+            while IFS= read -r candidate; do
+                COMPREPLY+=("$candidate")
+            done < <(compgen -f -- "$cur")
+            return
+        fi
         if [ "$COMP_CWORD" -eq "$action_index" ]; then
             options="--global --install --list --remove --run --help"
         elif [ "$action" = "--global" ]; then
             if [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
                 options="--run"
-            elif [ "${COMP_WORDS[action_index + 1]}" = "--run" ] && [ "$COMP_CWORD" -gt $((action_index + 2)) ]; then
-                options="--output --disable-bindings"
+            elif [ "${COMP_WORDS[action_index + 1]}" = "--run" ]; then
+                if [ "$COMP_CWORD" -eq $((action_index + 2)) ]; then
+                    options=""
+                    candidate_scope="global"
+                else
+                    options="--output --disable-bindings"
+                fi
             else
                 options=""
             fi
@@ -137,12 +194,24 @@ func Completion(shell string) (string, error) {
         elif [ "$action" = "--run" ]; then
             if [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
                 options="--global --output --disable-bindings"
+                candidate_scope="workspace"
             elif [ "${COMP_WORDS[action_index + 1]}" = "--global" ] && [ "$COMP_CWORD" -eq $((action_index + 2)) ]; then
                 options=""
+                candidate_scope="global"
             else
                 options="--output --disable-bindings"
             fi
-        elif [ "$action" = "--list" ] || [ "$action" = "--remove" ]; then
+        elif [ "$action" = "--remove" ]; then
+            if [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
+                options="--global"
+                candidate_scope="workspace"
+            elif [ "${COMP_WORDS[action_index + 1]}" = "--global" ] && [ "$COMP_CWORD" -eq $((action_index + 2)) ]; then
+                options=""
+                candidate_scope="global"
+            else
+                options=""
+            fi
+        elif [ "$action" = "--list" ]; then
             if [ "$COMP_CWORD" -eq $((action_index + 1)) ]; then
                 options="--global"
             else
@@ -152,6 +221,11 @@ func Completion(shell string) (string, error) {
             options=""
         fi
         COMPREPLY=( $(compgen -W "$options" -- "$cur") )
+        if [ -n "$candidate_scope" ] && [[ "$cur" != -* ]]; then
+            while IFS= read -r candidate; do
+                [[ "$candidate" == "$cur"* ]] && COMPREPLY+=("$candidate")
+            done < <("${COMP_WORDS[0]}" "${root_args[@]}" __completion candidates plugins $([ "$candidate_scope" = "global" ] && printf global) 2>/dev/null)
+        fi
         return
     fi
     case "$subcommand" in
@@ -166,6 +240,25 @@ func Completion(shell string) (string, error) {
             ;;
         doctor)
             options="--env --dev --test --kubeconfig --context --namespace --help"
+            if [ "$prev" = "--env" ]; then
+                COMPREPLY=()
+                while IFS= read -r candidate; do
+                    [[ "$candidate" == "$cur"* ]] && COMPREPLY+=("$candidate")
+                done < <("${COMP_WORDS[0]}" "${root_args[@]}" __completion candidates environments 2>/dev/null)
+                return
+            fi
+            if [ "$prev" = "--kubeconfig" ]; then
+                compopt -o filenames 2>/dev/null
+                COMPREPLY=()
+                while IFS= read -r candidate; do
+                    COMPREPLY+=("$candidate")
+                done < <(compgen -f -- "$cur")
+                return
+            fi
+            if [ "$prev" = "--context" ] || [ "$prev" = "--namespace" ]; then
+                COMPREPLY=()
+                return
+            fi
             ;;
         help|version)
             options=""
@@ -181,9 +274,35 @@ complete -F _conven conven
 	case "zsh":
 		return `#compdef conven
 
+_conven_service_names() {
+    local -a values
+    values=("${(@f)$("$conven_executable" "${conven_root_args[@]}" __completion candidates services 2>/dev/null)}")
+    _describe 'service' values
+}
+
+_conven_environment_names() {
+    local -a values
+    values=("${(@f)$("$conven_executable" "${conven_root_args[@]}" __completion candidates environments 2>/dev/null)}")
+    _describe 'environment' values
+}
+
+_conven_plugin_names() {
+    local -a values
+    values=("${(@f)$("$conven_executable" "${conven_root_args[@]}" __completion candidates plugins 2>/dev/null)}")
+    _describe 'plugin' values
+}
+
+_conven_global_plugin_names() {
+    local -a values
+    values=("${(@f)$("$conven_executable" "${conven_root_args[@]}" __completion candidates plugins global 2>/dev/null)}")
+    _describe 'global plugin' values
+}
+
 _conven() {
-    local -a commands root_candidates plugin_scope
-    local action scan
+    local -a commands root_candidates plugin_scope conven_root_args
+    local action scan conven_executable
+    conven_executable=$words[1]
+    conven_root_args=()
     commands=(
         'init:initialize a Conven workspace'
         'services:manage workspace services'
@@ -205,6 +324,7 @@ _conven() {
             _directories
             return
         fi
+        conven_root_args+=(-C $words[scan+1])
         (( scan += 2 ))
     done
     if (( scan == CURRENT )); then
@@ -246,23 +366,23 @@ _conven() {
                         '--on[listen on all interfaces]' \
                         '--off[restore loopback-only listening]' \
                         '--help[show command help]' \
-                        '*:service:'
+                        '*:service:_conven_service_names'
                     ;;
                 --logs)
                     _arguments \
                         '--tail[stream aggregated logs as plain text]' \
                         '--dashboard[open the interactive log dashboard]' \
                         '--help[show command help]' \
-                        '*:service:'
+                        '*:service:_conven_service_names'
                     ;;
                 --dashboard)
                     _arguments \
                         '--help[show command help]' \
-                        '*:service:'
+                        '*:service:_conven_service_names'
                     ;;
                 --start)
                     _arguments \
-                        '--env[environment profile]:environment:' \
+                        '--env[environment profile]:environment:_conven_environment_names' \
                         '--dev[use the dev environment profile]' \
                         '--test[use the test environment profile]' \
                         '--kubeconfig[kubeconfig path]:file:_files' \
@@ -274,7 +394,7 @@ _conven() {
                         '--skip-build[skip build when artifacts are reusable]' \
                         '--skip-verify[skip health, listener, and registry verification]' \
                         '--help[show command help]' \
-                        '*:service:'
+                        '*:service:_conven_service_names'
                     ;;
                 --restart)
                     _arguments \
@@ -283,14 +403,14 @@ _conven() {
                         '--skip-build[skip build when artifacts are reusable]' \
                         '--skip-verify[skip health, listener, and registry verification]' \
                         '--help[show command help]' \
-                        '*:service:'
+                        '*:service:_conven_service_names'
                     ;;
                 --stop)
                     _arguments \
                         '--all[stop every service and release the workspace connection]' \
                         '--force[bypass identity checks and recover saved process groups]' \
                         '--help[show command help]' \
-                        '*:service:'
+                        '*:service:_conven_service_names'
                     ;;
                 --stop-all)
                     _arguments \
@@ -388,7 +508,7 @@ _conven() {
                 --remove)
                     _arguments \
                         $plugin_scope \
-                        '1:plugin:'
+                        '1:plugin:_conven_plugin_names'
                     ;;
                 --run)
                     if [[ $words[2] == --global ]]; then
@@ -396,12 +516,12 @@ _conven() {
                         (( CURRENT -= 1 ))
                         if (( CURRENT == 2 )); then
                             _arguments \
-                                '1:global plugin:'
+                                '1:global plugin:_conven_global_plugin_names'
                         else
                             _arguments \
                                 '--output[generator output path; omit the value for application.yaml]::output file:_files' \
                                 '--disable-bindings[replace disabled bindings for this generator run]:binding:' \
-                                '1:global plugin:' \
+                                '1:global plugin:_conven_global_plugin_names' \
                                 '*:plugin argument:'
                         fi
                     elif [[ $words[2] == --* ]]; then
@@ -414,7 +534,7 @@ _conven() {
                             $plugin_scope \
                             '--output[generator output path; omit the value for application.yaml]::output file:_files' \
                             '--disable-bindings[replace disabled bindings for this generator run]:binding:' \
-                            '1::plugin:' \
+                            '1::plugin:_conven_plugin_names' \
                             '*:plugin argument:'
                     fi
                     ;;
@@ -427,12 +547,12 @@ _conven() {
                         (( CURRENT -= 1 ))
                         if (( CURRENT == 2 )); then
                             _arguments \
-                                '1:global plugin:'
+                                '1:global plugin:_conven_global_plugin_names'
                         else
                             _arguments \
                                 '--output[generator output path; omit the value for application.yaml]::output file:_files' \
                                 '--disable-bindings[replace disabled bindings for this generator run]:binding:' \
-                                '1:global plugin:' \
+                                '1:global plugin:_conven_global_plugin_names' \
                                 '*:plugin argument:'
                         fi
                     fi
@@ -443,7 +563,7 @@ _conven() {
                             '--global[force a named user-global plugin run]' \
                             '--install[install a Python plugin]:Python plugin file:_files -g "*.py"' \
                             '--list[list installed plugins]' \
-                            '--remove[remove an installed plugin]:plugin:' \
+                            '--remove[remove an installed plugin]:plugin:_conven_plugin_names' \
                             '--run[run an installed plugin]' \
                             '--help[show command help]'
                     else
@@ -454,7 +574,7 @@ _conven() {
             ;;
         doctor)
             _arguments \
-                '--env[environment profile]:environment:' \
+                '--env[environment profile]:environment:_conven_environment_names' \
                 '--dev[use the dev environment profile]' \
                 '--test[use the test environment profile]' \
                 '--kubeconfig[kubeconfig path]:file:_files' \
@@ -477,7 +597,22 @@ _conven() {
 compdef _conven conven
 `, nil
 	case "fish":
-		return `function __conven_command_tokens
+		return `function __conven_completion_candidates
+    set -l raw_tokens (commandline -opc)
+    set -l root_args
+    set -l index 2
+    while test $index -le (count $raw_tokens)
+        if test "$raw_tokens[$index]" = -C; and test (math $index + 1) -le (count $raw_tokens)
+            set -a root_args -C "$raw_tokens[(math $index + 1)]"
+            set index (math $index + 2)
+            continue
+        end
+        break
+    end
+    command $raw_tokens[1] $root_args __completion candidates $argv 2>/dev/null
+end
+
+function __conven_command_tokens
     set -l tokens (commandline -opc)
     set -l normalized $tokens[1]
     set -l index 2
@@ -530,6 +665,15 @@ function __conven_services_action
     test "$tokens[3]" = "$argv[1]"
 end
 
+function __conven_services_name_position
+    set -l tokens (__conven_command_tokens)
+    __conven_services_action "$argv[1]"; or return 1
+    if contains -- $tokens[-1] --env --kubeconfig --context --namespace
+        return 1
+    end
+    return 0
+end
+
 function __conven_services_without_action
     set -l tokens (__conven_command_tokens)
     test (count $tokens) -eq 2; or return 1
@@ -561,6 +705,13 @@ function __conven_plugins_scope_position
     test (count $tokens) -eq 3
 end
 
+function __conven_plugins_global_name_position
+    set -l tokens (__conven_command_tokens)
+    __conven_plugins_action "$argv[1]"; or return 1
+    test (count $tokens) -eq 4; or return 1
+    test "$tokens[4]" = --global
+end
+
 function __conven_plugins_global_without_action
     set -l tokens (__conven_command_tokens)
     test (count $tokens) -eq 3; or return 1
@@ -571,6 +722,14 @@ end
 function __conven_plugins_global_run
     set -l tokens (__conven_command_tokens)
     test (count $tokens) -ge 5; or return 1
+    test "$tokens[2]" = plugins; or return 1
+    test "$tokens[3]" = --global; or return 1
+    test "$tokens[4]" = --run
+end
+
+function __conven_plugins_global_run_name_position
+    set -l tokens (__conven_command_tokens)
+    test (count $tokens) -eq 4; or return 1
     test "$tokens[2]" = plugins; or return 1
     test "$tokens[3]" = --global; or return 1
     test "$tokens[4]" = --run
@@ -641,14 +800,19 @@ complete -c conven -n '__conven_plugins_scope_position --install' -l global -d '
 complete -c conven -n '__conven_plugins_scope_position --list' -l global -d 'List only user-global plugins'
 complete -c conven -n '__conven_plugins_scope_position --remove' -l global -d 'Remove from the user-global plugin directory'
 complete -c conven -n '__conven_plugins_scope_position --run' -l global -d 'Force the user-global plugin scope'
-complete -c conven -n '__conven_plugins_run_arguments' -l output -d 'Generator output path; omit its value for application.yaml'
+complete -c conven -n '__conven_plugins_run_arguments' -l output -F -d 'Generator output path; omit its value for application.yaml'
 complete -c conven -n '__conven_plugins_run_arguments' -l disable-bindings -r -d 'Replace disabled bindings for this generator run'
-complete -c conven -n '__conven_plugins_global_run' -l output -d 'Generator output path; omit its value for application.yaml'
+complete -c conven -n '__conven_plugins_global_run' -l output -F -d 'Generator output path; omit its value for application.yaml'
 complete -c conven -n '__conven_plugins_global_run' -l disable-bindings -r -d 'Replace disabled bindings for this generator run'
-complete -c conven -n '__conven_using_subcommand doctor' -l env -r -d 'Environment profile'
+complete -c conven -f -n '__conven_plugins_scope_position --remove' -a '(__conven_completion_candidates plugins)' -d 'Installed plugin'
+complete -c conven -f -n '__conven_plugins_global_name_position --remove' -a '(__conven_completion_candidates plugins global)' -d 'User-global plugin'
+complete -c conven -f -n '__conven_plugins_scope_position --run' -a '(__conven_completion_candidates plugins)' -d 'Installed plugin'
+complete -c conven -f -n '__conven_plugins_global_name_position --run' -a '(__conven_completion_candidates plugins global)' -d 'User-global plugin'
+complete -c conven -f -n '__conven_plugins_global_run_name_position' -a '(__conven_completion_candidates plugins global)' -d 'User-global plugin'
+complete -c conven -n '__conven_using_subcommand doctor' -l env -r -a '(__conven_completion_candidates environments)' -d 'Environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l dev -d 'Use the dev environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l test -d 'Use the test environment profile'
-complete -c conven -n '__conven_using_subcommand doctor' -l kubeconfig -r -d 'Kubeconfig path'
+complete -c conven -n '__conven_using_subcommand doctor' -l kubeconfig -r -F -d 'Kubeconfig path'
 complete -c conven -n '__conven_using_subcommand doctor' -l context -r -d 'Kubeconfig context'
 complete -c conven -n '__conven_using_subcommand doctor' -l namespace -r -d 'Kubernetes namespace'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l list -d 'List services declared by the workspace'
@@ -667,10 +831,10 @@ complete -c conven -n '__conven_services_action --listen' -l on -d 'Listen on al
 complete -c conven -n '__conven_services_action --listen' -l off -d 'Restore loopback-only listening'
 complete -c conven -n '__conven_services_action --logs' -l tail -d 'Stream aggregated logs as plain text'
 complete -c conven -n '__conven_services_action --logs' -l dashboard -d 'Open the interactive log dashboard'
-complete -c conven -n '__conven_services_action --start' -l env -r -d 'Environment profile'
+complete -c conven -n '__conven_services_action --start' -l env -r -a '(__conven_completion_candidates environments)' -d 'Environment profile'
 complete -c conven -n '__conven_services_action --start' -l dev -d 'Use the dev environment profile'
 complete -c conven -n '__conven_services_action --start' -l test -d 'Use the test environment profile'
-complete -c conven -n '__conven_services_action --start' -l kubeconfig -r -d 'Kubeconfig path'
+complete -c conven -n '__conven_services_action --start' -l kubeconfig -r -F -d 'Kubeconfig path'
 complete -c conven -n '__conven_services_action --start' -l context -r -d 'Kubeconfig context'
 complete -c conven -n '__conven_services_action --start' -l namespace -r -d 'Kubernetes namespace'
 complete -c conven -n '__conven_services_action --start' -l tail -d 'Stream aggregated logs as plain text'
@@ -685,6 +849,12 @@ complete -c conven -n '__conven_services_action --restart' -l skip-verify -d 'Sk
 complete -c conven -n '__conven_services_action --stop' -l all -d 'Stop every service and release the workspace connection'
 complete -c conven -n '__conven_services_action --stop' -l force -d 'Bypass identity checks and recover saved process groups'
 complete -c conven -n '__conven_services_action --stop-all' -l force -d 'Bypass identity checks and recover saved process groups'
+complete -c conven -f -n '__conven_services_name_position --listen' -a '(__conven_completion_candidates services)' -d 'Workspace service'
+complete -c conven -f -n '__conven_services_name_position --logs' -a '(__conven_completion_candidates services)' -d 'Workspace service'
+complete -c conven -f -n '__conven_services_name_position --dashboard' -a '(__conven_completion_candidates services)' -d 'Workspace service'
+complete -c conven -f -n '__conven_services_name_position --start' -a '(__conven_completion_candidates services)' -d 'Workspace service'
+complete -c conven -f -n '__conven_services_name_position --restart' -a '(__conven_completion_candidates services)' -d 'Workspace service'
+complete -c conven -f -n '__conven_services_name_position --stop' -a '(__conven_completion_candidates services)' -d 'Workspace service'
 `, nil
 	default:
 		return "", fmt.Errorf("unsupported completion shell %q", shell)

@@ -87,7 +87,7 @@ func (adapter ApolloAdapter) Application(ctx context.Context, input SourceInput)
 	parsed.RawQuery = query.Encode()
 	attempts := input.Apollo.Attempts
 	if attempts == 0 {
-		attempts = 1
+		attempts = 3
 	}
 	timeout := input.Apollo.Timeout
 	if timeout == 0 {
@@ -100,6 +100,9 @@ func (adapter ApolloAdapter) Application(ctx context.Context, input SourceInput)
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		retryDelay := input.Apollo.RetryDelay
+		if retryDelay == 0 {
+			retryDelay = time.Duration(1<<(attempt-1)) * 250 * time.Millisecond
+		}
 		requestContext, cancel := context.WithTimeout(ctx, timeout)
 		request, err := http.NewRequestWithContext(requestContext, http.MethodGet, parsed.String(), nil)
 		if err != nil {

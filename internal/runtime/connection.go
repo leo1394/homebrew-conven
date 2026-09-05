@@ -65,6 +65,7 @@ const connectionLeaseGrace = 5 * time.Minute
 const connectionDiagnosticLogLines = 12
 const connectionDiagnosticProbeTimeout = 750 * time.Millisecond
 const connectionExitReapGrace = 500 * time.Millisecond
+const connectionReadinessStableProbes = 2
 
 func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath string, lease string, output io.Writer) (*ConnectionProcess, error) {
 	if config.Driver == "" || config.Driver == "none" {
@@ -122,7 +123,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 			}
 		}
 	}
-	if endpointsReady(ctx, config.Readiness) {
+	if endpointsStable(ctx, config.Readiness) {
 		if record == nil && config.Driver == "ktctl" {
 			active, err := activeConnectionRecords(lease, "ktctl")
 			if err != nil {
@@ -206,6 +207,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 	waitContext, cancel := context.WithTimeout(ctx, config.Timeout)
 	defer cancel()
 	var lastEndpointDiagnostics []connectionEndpointDiagnostic
+	consecutiveReady := 0
 	for {
 		if err := waitContext.Err(); err != nil {
 			failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, err, logPath)
@@ -231,6 +233,11 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 		var ready bool
 		lastEndpointDiagnostics, ready = probeConnectionEndpoints(waitContext, config.Readiness)
 		if ready {
+			consecutiveReady++
+		} else {
+			consecutiveReady = 0
+		}
+		if consecutiveReady >= connectionReadinessStableProbes {
 			process.Managed = true
 			record := &connectionRecord{
 				Version:      1,
@@ -720,6 +727,25 @@ func runningConnectionCommandPIDs(expectedExecutable string) ([]int, error) {
 func endpointsReady(ctx context.Context, endpoints []ConnectionEndpoint) bool {
 	_, ready := probeConnectionEndpoints(ctx, endpoints)
 	return ready
+}
+
+func endpointsStable(ctx context.Context, endpoints []ConnectionEndpoint) bool {
+	for attempt := 0; attempt < connectionReadinessStableProbes; attempt++ {
+		if !endpointsReady(ctx, endpoints) {
+			return false
+		}
+		if attempt+1 == connectionReadinessStableProbes {
+			return true
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+	return false
 }
 
 func probeConnectionEndpoints(ctx context.Context, endpoints []ConnectionEndpoint) ([]connectionEndpointDiagnostic, bool) {

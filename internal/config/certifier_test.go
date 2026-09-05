@@ -79,6 +79,20 @@ func TestCertifyRepositoryUsesSuppliedImplementationWithoutCoreChanges(t *testin
 	}
 }
 
+func TestCertifyRepositoryAllowsUnguardedKafkaConsumerByDefault(t *testing.T) {
+	implementation := testRepositoryCertifier{name: "go-local", framework: "go-zero", policy: "go-local"}
+	certification, certified, err := CertifyRepository(&model.Manifest{}, RepositoryCertificationRequest{
+		Name:      "events",
+		Framework: "go-zero",
+		Discovery: "consul",
+		Kind:      "rpc",
+		Consumers: []RepositoryConsumerEvidence{{Driver: "kafka", File: "handler/kq_routes.go:14"}},
+	}, implementation)
+	if err != nil || !certified {
+		t.Fatalf("certification = %#v, certified = %t, error = %v", certification, certified, err)
+	}
+}
+
 func TestCertifyRepositoryRejectsMultipleImplementations(t *testing.T) {
 	request := RepositoryCertificationRequest{Name: "customer-service", Framework: "python", Discovery: "none", Kind: "http"}
 	first := testRepositoryCertifier{name: "python-a", framework: "python", policy: "python-local"}
@@ -116,9 +130,14 @@ func TestGoZeroCertifierReportsRepositoryLocationAndFix(t *testing.T) {
 	if err == nil {
 		t.Fatal("unguarded go-zero custom registration was certified")
 	}
-	for _, expected := range []string{"orders-service", "internal/registry/client.go:42", "SERVICE_REGISTRATION_ENABLED", "Go:", "Node/Bun:", "Python:"} {
+	for _, expected := range []string{"orders-service", "internal/registry/client.go:42", "SERVICE_REGISTRATION_ENABLED", "Go example:"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Fatalf("certification error is missing %q: %v", expected, err)
+		}
+	}
+	for _, unexpected := range []string{"Node.js example:", "Bun example:", "Python example:"} {
+		if strings.Contains(err.Error(), unexpected) {
+			t.Fatalf("go-zero registration error includes unrelated %q guidance: %v", unexpected, err)
 		}
 	}
 }
@@ -182,8 +201,8 @@ func (certifier testRepositoryCertifier) Certify(_ *model.Manifest, _ Repository
 	return certifier.policy, nil
 }
 
-func TestCertifierRejectsUnguardedKafkaConsumerWithFix(t *testing.T) {
-	err := certifyKafkaConsumerEvidence(RepositoryCertificationRequest{
+func TestDisabledKafkaConsumerValidationReportsLanguageSpecificFix(t *testing.T) {
+	err := certifyDisabledKafkaConsumerEvidence(RepositoryCertificationRequest{
 		Name:      "visit-plan-mgr-service",
 		Framework: "go-zero",
 		Consumers: []RepositoryConsumerEvidence{{
@@ -192,11 +211,51 @@ func TestCertifierRejectsUnguardedKafkaConsumerWithFix(t *testing.T) {
 		}},
 	})
 	if err == nil {
-		t.Fatal("unguarded Kafka consumer was certified")
+		t.Fatal("unguarded Kafka consumer was accepted while disabling consumers")
 	}
 	for _, expected := range []string{"visit-plan-mgr-service", "handler/kq_routes.go:14", "SERVICE_KAFKA_CONSUMERS_ENABLED", "strings.EqualFold"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Fatalf("Kafka consumer certification error is missing %q: %v", expected, err)
 		}
+	}
+	for _, unexpected := range []string{"@ConditionalOnProperty(", "process.env.", "Bun.env.", "os.getenv("} {
+		if strings.Contains(err.Error(), unexpected) {
+			t.Fatalf("Go Kafka consumer certification error includes unrelated %q guidance: %v", unexpected, err)
+		}
+	}
+}
+
+func TestKafkaConsumerGuardFixMatchesServiceLanguage(t *testing.T) {
+	for _, test := range []struct {
+		framework  string
+		runtime    string
+		want       string
+		unexpected string
+	}{
+		{framework: "spring-boot", want: "@ConditionalOnProperty(", unexpected: "strings.EqualFold"},
+		{framework: "nestjs", want: "process.env.SERVICE_KAFKA_CONSUMERS_ENABLED", unexpected: "@ConditionalOnProperty("},
+		{framework: "bun-serve", want: "Bun.env.SERVICE_KAFKA_CONSUMERS_ENABLED", unexpected: "process.env."},
+		{framework: "fastapi", want: "os.getenv(\"SERVICE_KAFKA_CONSUMERS_ENABLED\"", unexpected: "strings.EqualFold"},
+		{framework: "hono", runtime: "node-http", want: "process.env.SERVICE_KAFKA_CONSUMERS_ENABLED", unexpected: "Bun.env."},
+		{framework: "hono", runtime: "bun-http", want: "Bun.env.SERVICE_KAFKA_CONSUMERS_ENABLED", unexpected: "process.env."},
+	} {
+		name := test.framework
+		if test.runtime != "" {
+			name += "-" + test.runtime
+		}
+		t.Run(name, func(t *testing.T) {
+			err := certifyDisabledKafkaConsumerEvidence(RepositoryCertificationRequest{
+				Name:      "events",
+				Framework: test.framework,
+				Runtime:   test.runtime,
+				Consumers: []RepositoryConsumerEvidence{{Driver: "kafka", File: "consumer:1"}},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Kafka consumer certification error = %v, want %q", err, test.want)
+			}
+			if strings.Contains(err.Error(), test.unexpected) {
+				t.Fatalf("Kafka consumer certification error includes unrelated %q guidance: %v", test.unexpected, err)
+			}
+		})
 	}
 }

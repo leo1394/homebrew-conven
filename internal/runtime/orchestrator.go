@@ -601,10 +601,20 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 }
 
 func Status(ctx context.Context, workspace *WorkspaceData, output io.Writer) error {
+	return printStatus(ctx, workspace, output, true)
+}
+
+func WorkspaceStatus(ctx context.Context, workspace *WorkspaceData, output io.Writer) error {
+	return printStatus(ctx, workspace, output, false)
+}
+
+func printStatus(ctx context.Context, workspace *WorkspaceData, output io.Writer, detailed bool) error {
 	style := terminal.New(output)
-	fmt.Fprintln(output, style.Stage("Conven status"))
-	fmt.Fprintln(output, style.Detail("Runtime: "+workspace.Store.Root))
-	fmt.Fprintln(output, style.Detail("Current: "+workspace.Store.CurrentDir))
+	if detailed {
+		fmt.Fprintln(output, style.Stage("Conven status"))
+		fmt.Fprintln(output, style.Detail("Runtime: "+workspace.Store.Root))
+		fmt.Fprintln(output, style.Detail("Current: "+workspace.Store.CurrentDir))
+	}
 	session, err := workspace.Store.Load()
 	if err != nil {
 		return err

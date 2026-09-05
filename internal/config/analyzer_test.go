@@ -48,6 +48,93 @@ func TestAnalyzeRepositoryMatchesGoSubdirectoryModule(t *testing.T) {
 	assertAnalyzerRunner(t, analysis, "go")
 }
 
+func TestAnalyzeRepositoryRejectsGoZeroConfigFlagWithoutParse(t *testing.T) {
+	repository := newAnalyzerRepository(t, "unparsed-config-service")
+	moduleDirectory := filepath.Join(repository, "go")
+	writeAnalyzerFile(t, filepath.Join(moduleDirectory, "go.mod"), "module example.com/unparsed-config-service\nrequire github.com/tal-tech/go-zero v1.0.0\n")
+	writeAnalyzerFile(t, filepath.Join(moduleDirectory, "main.go"), `package main
+
+import "flag"
+
+type Config struct { Server rest.RestConf }
+
+func main() {
+	configDir := flag.String("f", "../resources", "the config file")
+	start(*configDir)
+}
+
+func start(string) {}
+`)
+
+	_, matched, err := AnalyzeRepository(repository)
+	if err == nil {
+		t.Fatal("unparsed go-zero -f flag was accepted")
+	}
+	if matched {
+		t.Fatal("invalid go-zero repository was reported as matched")
+	}
+	for _, expected := range []string{"unparsed-config-service", "go/main.go", "flag.Parse()", "before reading -f"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("error = %q, missing %q", err, expected)
+		}
+	}
+}
+
+func TestAnalyzeRepositoryAcceptsParsedGoZeroConfigFlag(t *testing.T) {
+	repository := newAnalyzerRepository(t, "parsed-config-service")
+	moduleDirectory := filepath.Join(repository, "go")
+	writeAnalyzerFile(t, filepath.Join(moduleDirectory, "go.mod"), "module example.com/parsed-config-service\nrequire github.com/tal-tech/go-zero v1.0.0\n")
+	writeAnalyzerFile(t, filepath.Join(moduleDirectory, "main.go"), `package main
+
+import "flag"
+
+type Config struct { Server rest.RestConf }
+
+func main() {
+	configDir := flag.String("f", "../resources", "the config file")
+	flag.Parse()
+	start(*configDir)
+}
+
+func start(string) {}
+`)
+
+	if _, matched, err := AnalyzeRepository(repository); err != nil || !matched {
+		t.Fatalf("parsed go-zero repository = matched %t, error %v", matched, err)
+	}
+}
+
+func TestAnalyzeRepositoryRejectsMissingGoLocalReplacement(t *testing.T) {
+	repository := newAnalyzerRepository(t, "missing-module-service")
+	moduleDirectory := filepath.Join(repository, "go")
+	writeAnalyzerFile(t, filepath.Join(moduleDirectory, "go.mod"), "module example.com/missing-module-service\nrequire github.com/tal-tech/go-zero v1.0.0\nreplace github.com/tal-tech/go-zero => ../internal/go-zero\n")
+	writeAnalyzerFile(t, filepath.Join(moduleDirectory, "main.go"), `package main
+
+import "flag"
+
+type Config struct { Server rest.RestConf }
+
+var configDir = flag.String("f", "../resources", "the config file")
+
+func main() {
+	flag.Parse()
+	start(*configDir)
+}
+
+func start(string) {}
+`)
+
+	_, matched, err := AnalyzeRepository(repository)
+	if err == nil || matched {
+		t.Fatalf("missing local replacement = matched %t, error %v", matched, err)
+	}
+	for _, expected := range []string{"../internal/go-zero", "submodule update --init --recursive"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("error = %q, missing %q", err, expected)
+		}
+	}
+}
+
 func TestAnalyzeRepositoryRejectsMultipleAnalyzerMatches(t *testing.T) {
 	repository := newAnalyzerRepository(t, "conflict-service")
 	for _, directory := range []string{repository, filepath.Join(repository, "go")} {
