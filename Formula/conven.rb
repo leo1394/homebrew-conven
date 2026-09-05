@@ -1,17 +1,10 @@
 class Conven < Formula
   desc "Run a focused set of local microservices with remote dependencies"
   homepage "https://github.com/leo1394/homebrew-conven"
-  url "https://github.com/leo1394/homebrew-conven/archive/refs/tags/v1.0.1.tar.gz"
-  sha256 "6576ef79e680b7169a25f4bb18e06b6f74f061a1b47bda9646704910a5997398"
+  url "https://github.com/leo1394/homebrew-conven/archive/refs/tags/v1.0.2.tar.gz"
+  sha256 "e73a68750d0c42fa3ddf7f1051f4a486b849395e3327cb49aaa3b97be5a1817e"
   license "MIT"
   head "https://github.com/leo1394/homebrew-conven.git", branch: "master"
-
-  bottle do
-    root_url "https://github.com/leo1394/homebrew-conven/releases/download/conven-1.0.1"
-    sha256 cellar: :any_skip_relocation, arm64_tahoe:   "e0ec8e4283b9ea60fe31cf6340a2b33e63860a8a3a56fc2a2d6c6e200a742f96"
-    sha256 cellar: :any_skip_relocation, arm64_sequoia: "cccffecb7bfe9b517eb8c5534617cf3da498dd78dde5b27dece80da9cb2382c6"
-    sha256 cellar: :any,                 x86_64_linux:  "5bf93d8f5cff75b012e2e9b9d9c9c834e93692a241b181a8913379a864f98034"
-  end
 
   depends_on "go" => :build
   depends_on "python" => :test
