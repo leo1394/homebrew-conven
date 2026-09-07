@@ -181,7 +181,7 @@ working directory unchanged:
 ```
 
 The action updates the `version` and `versionDate` variables in
-`cmd/conven/main.go`, `VERSION.txt`, and the Formula version assertion, runs the
+`cmd/conven/main.go` and `VERSION.txt`, runs the
 release checks, and validates `.github/workflows/tests.yml` and
 `.github/workflows/publish.yml`. It does not commit, tag, push, open a pull
 request, or dispatch a workflow.
@@ -189,15 +189,15 @@ request, or dispatch a workflow.
 Check every version occurrence:
 
 ```bash
-rg -n "$CONVEN_RELEASE_VERSION|version(Date)? =|assert_equal \"conven " \
+rg -n "$CONVEN_RELEASE_VERSION|version(Date)? =" \
   cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb README.md README-ZH.md
 ```
 
 ## 2. Run local checks
 
-`--prepare --bottle` runs the Go and Formula checks below. Keep the full list available
-for diagnosis and for the repository-specific example checks that are not part
-of the generic publisher:
+`--prepare --bottle` runs the generic Go and Formula checks below. Command,
+configuration, and adapter behavior belongs in the Go test suite instead of
+being duplicated in the Formula or release workflows:
 
 ```bash
 go mod tidy -diff
@@ -206,19 +206,6 @@ go test -race -count=1 ./...
 go vet ./...
 go build -o /tmp/conven-release ./cmd/conven
 /tmp/conven-release --version
-test -f examples/application.yaml
-grep -Eq '^version:[[:space:]]+3$' examples/application.yaml
-grep -Fq 'adapter-smoke:' .github/workflows/ci.yml
-for runtime in jdk17 node22 python bun; do grep -Fq "$runtime" .github/workflows/ci.yml; done
-test ! -e examples/loom.yaml
-test ! -e examples/conven.yaml
-test ! -e examples/workspace/catalog.yaml
-test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
-test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
-test -f examples/workspace/README.md
-test -f internal/plugins/builtin/README.md
-test ! -e internal/plugins/builtin/generate-apollo-consul.py
-
 ruby -c Formula/conven.rb
 brew style Formula/conven.rb
 

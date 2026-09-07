@@ -36,6 +36,12 @@ func materializeRuntimeConfigs(ctx context.Context, plan *Plan, names []string, 
 
 func runRuntimePreflight(ctx context.Context, plan *Plan, output io.Writer, announce bool) error {
 	style := terminal.New(output)
+	if err := preflightDisabledBindings(plan, output, announce); err != nil {
+		return err
+	}
+	if err := preflightRPCClientConfigs(plan); err != nil {
+		return err
+	}
 	preflightEnabled := false
 	for _, name := range plan.Order {
 		service := plan.Services[name]

@@ -38,6 +38,9 @@ type ConnectionConfig struct {
 	Sudo       bool
 	Timeout    time.Duration
 	Readiness  []ConnectionEndpoint
+
+	kubeconfigIdentity string
+	kubeconfigSnapshot []byte
 }
 
 type connectionEndpointDiagnostic struct {
@@ -80,6 +83,16 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 	}
 	if lease == "" {
 		return nil, errors.New("connection lease is empty")
+	}
+	if config.Driver == "ktctl" {
+		if err := validateKtctlConnectionArgs(config.Args); err != nil {
+			return nil, err
+		}
+		var err error
+		config, err = pinKtctlKubernetesTarget(config)
+		if err != nil {
+			return nil, err
+		}
 	}
 	fingerprint := connectionFingerprint(config)
 	unlock, err := acquireConnectionLock(ctx)
@@ -172,6 +185,7 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 			}
 		}
 	}
+	var apiProbe *kubernetesAPIProbe
 	managedArgv, argv, err := buildConnectionCommands(config)
 	if err != nil {
 		return nil, err
@@ -183,6 +197,10 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 		}
 		if len(pids) > 0 {
 			return nil, fmt.Errorf("an unmanaged ktctl connect process is already running with pid %d; wait for it or stop it before Conven starts another", pids[0])
+		}
+		apiProbe, err = newKubernetesAPIProbe(config)
+		if err != nil {
+			return nil, err
 		}
 	}
 	if config.Timeout <= 0 {
@@ -199,45 +217,62 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 			return nil, fmt.Errorf("sudo authorization failed: %w", err)
 		}
 	}
-	process, completed, err := startConnectionObserved(ctx, config.Driver, argv, managedArgv, logPath, fingerprint, config.Sudo)
-	if err != nil {
-		return nil, err
+	if config.Driver == "ktctl" {
+		config.Kubeconfig, err = materializeKtctlKubeconfigSnapshot(config, fingerprint)
+		if err != nil {
+			return nil, err
+		}
+		managedArgv, argv, err = buildConnectionCommands(config)
+		if err != nil {
+			return nil, errors.Join(err, removeKtctlKubeconfigSnapshot(fingerprint))
+		}
+		apiProbe, err = newKubernetesAPIProbe(config)
+		if err != nil {
+			return nil, errors.Join(err, removeKtctlKubeconfigSnapshot(fingerprint))
+		}
 	}
-	fmt.Fprintf(output, "%s %s\n", style.Stage("Waiting for connection readiness"), style.Identifier(config.Driver))
-	waitContext, cancel := context.WithTimeout(ctx, config.Timeout)
-	defer cancel()
-	var lastEndpointDiagnostics []connectionEndpointDiagnostic
-	consecutiveReady := 0
-	for {
-		if err := waitContext.Err(); err != nil {
-			failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, err, logPath)
-			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+	if apiProbe != nil {
+		if err := waitForKubernetesAPIProbe(ctx, apiProbe, output); err != nil {
+			return nil, errors.Join(err, removeKtctlKubeconfigSnapshot(fingerprint))
 		}
-		if exitErr, exited := connectionCommandExit(completed); exited {
-			if contextErr := waitContext.Err(); contextErr != nil {
-				failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath)
-				return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+	}
+	process, err := ensureConnectionAttempts(ctx, config, managedArgv, argv, logPath, lease, fingerprint, apiProbe, output)
+	if process == nil {
+		err = errors.Join(err, removeKtctlKubeconfigSnapshot(fingerprint))
+	}
+	return process, err
+}
+
+func ensureConnectionAttempts(ctx context.Context, config ConnectionConfig, managedArgv []string, argv []string, logPath string, lease string, fingerprint string, apiProbe *kubernetesAPIProbe, output io.Writer) (*ConnectionProcess, error) {
+	style := terminal.New(output)
+	var originalEOFFailure error
+	for attempt := 0; attempt < ktctlConnectionMaxAttempts; attempt++ {
+		attemptManaged := managedArgv
+		attemptArgv := argv
+		attemptID := ""
+		if config.Driver == "ktctl" {
+			var err error
+			attemptID, err = newKtctlAttemptID()
+			if err != nil {
+				return nil, connectionRetryError(originalEOFFailure, err)
 			}
-			failure := connectionExitFailure(config, logPath, exitErr)
-			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
-		}
-		if !connectionProcessAlive(process.PID) {
-			exitErr := waitForConnectionCommandExit(waitContext, completed, connectionExitReapGrace)
-			if contextErr := waitContext.Err(); contextErr != nil {
-				failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath)
-				return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+			attemptConfig := config
+			attemptConfig.Args, err = ktctlArgsForAttempt(config, attemptID)
+			if err != nil {
+				return nil, connectionRetryError(originalEOFFailure, err)
 			}
-			failure := connectionExitFailure(config, logPath, exitErr)
-			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+			attemptManaged, attemptArgv, err = buildConnectionCommands(attemptConfig)
+			if err != nil {
+				return nil, connectionRetryError(originalEOFFailure, err)
+			}
 		}
-		var ready bool
-		lastEndpointDiagnostics, ready = probeConnectionEndpoints(waitContext, config.Readiness)
-		if ready {
-			consecutiveReady++
-		} else {
-			consecutiveReady = 0
+		process, completed, err := startConnectionObserved(ctx, config.Driver, attemptArgv, attemptManaged, logPath, fingerprint, config.Sudo)
+		if err != nil {
+			return nil, connectionRetryError(originalEOFFailure, err)
 		}
-		if consecutiveReady >= connectionReadinessStableProbes {
+		fmt.Fprintf(output, "%s %s\n", style.Stage("Waiting for connection readiness"), style.Identifier(config.Driver))
+		lastEndpointDiagnostics, failure, exitedWithPodCreateEOF := waitForConnectionAttempt(ctx, process, completed, config, logPath)
+		if failure == nil {
 			process.Managed = true
 			record := &connectionRecord{
 				Version:      1,
@@ -248,12 +283,85 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 			if err := saveConnectionRecord(record); err != nil {
 				stopErr := stopConnection(process, false)
 				if stopErr != nil {
-					return process, errors.Join(err, stopErr)
+					return process, connectionRetryError(originalEOFFailure, errors.Join(err, stopErr))
 				}
-				return nil, err
+				return nil, connectionRetryError(originalEOFFailure, err)
 			}
 			fmt.Fprintf(output, "%s %s\n", style.Success("✓ Connection ready:"), style.Identifier(config.Driver))
 			return process, nil
+		}
+		diagnostics := captureConnectionDiagnostics(ctx, config, logPath, lastEndpointDiagnostics)
+		stopErr := stopConnection(process, false)
+		if stopErr != nil {
+			printConnectionDiagnostics(config, logPath, output, diagnostics)
+			return process, connectionRetryError(originalEOFFailure, errors.Join(failure, stopErr))
+		}
+		if config.Driver != "ktctl" || !exitedWithPodCreateEOF || attempt+1 >= ktctlConnectionMaxAttempts {
+			printConnectionDiagnostics(config, logPath, output, diagnostics)
+			return nil, connectionRetryError(originalEOFFailure, failure)
+		}
+		originalEOFFailure = failure
+		if err := ktctlRetrySafetyError(config); err != nil {
+			printConnectionDiagnostics(config, logPath, output, diagnostics)
+			return nil, errors.Join(originalEOFFailure, fmt.Errorf("automatic retry was not safe: %w", err))
+		}
+		if err := waitForKubernetesAPIProbe(ctx, apiProbe, output); err != nil {
+			printConnectionDiagnostics(config, logPath, output, diagnostics)
+			return nil, errors.Join(originalEOFFailure, fmt.Errorf("automatic retry preflight failed: %w", err))
+		}
+		if err := recoverKtctlAttempt(ctx, config, attemptID); err != nil {
+			printConnectionDiagnostics(config, logPath, output, diagnostics)
+			return nil, errors.Join(originalEOFFailure, fmt.Errorf("automatic retry was not safe: %w", err))
+		}
+		if err := waitForKubernetesAPIProbe(ctx, apiProbe, output); err != nil {
+			printConnectionDiagnostics(config, logPath, output, diagnostics)
+			return nil, errors.Join(originalEOFFailure, fmt.Errorf("automatic retry preflight failed after recovery: %w", err))
+		}
+		fmt.Fprintln(output, style.Detail("Pod CREATE EOF recovery cleared attempt-owned Kubernetes state; retrying ktctl once."))
+	}
+	return nil, originalEOFFailure
+}
+
+func connectionRetryError(originalEOFFailure error, failure error) error {
+	if originalEOFFailure == nil {
+		return failure
+	}
+	return errors.Join(originalEOFFailure, fmt.Errorf("automatic retry failed: %w", failure))
+}
+
+func waitForConnectionAttempt(ctx context.Context, process *ConnectionProcess, completed <-chan error, config ConnectionConfig, logPath string) ([]connectionEndpointDiagnostic, error, bool) {
+	waitContext, cancel := context.WithTimeout(ctx, config.Timeout)
+	defer cancel()
+	var lastEndpointDiagnostics []connectionEndpointDiagnostic
+	consecutiveReady := 0
+	for {
+		if err := waitContext.Err(); err != nil {
+			return lastEndpointDiagnostics, fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, err, logPath), false
+		}
+		if exitErr, exited := connectionCommandExit(completed); exited {
+			if contextErr := waitContext.Err(); contextErr != nil {
+				return lastEndpointDiagnostics, fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath), false
+			}
+			_, podCreateEOF := ktctlReportedExit(logPath)
+			return lastEndpointDiagnostics, connectionExitFailure(config, logPath, exitErr), podCreateEOF
+		}
+		if !connectionProcessAlive(process.PID) {
+			exitErr := waitForConnectionCommandExit(waitContext, completed, connectionExitReapGrace)
+			if contextErr := waitContext.Err(); contextErr != nil {
+				return lastEndpointDiagnostics, fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath), false
+			}
+			_, podCreateEOF := ktctlReportedExit(logPath)
+			return lastEndpointDiagnostics, connectionExitFailure(config, logPath, exitErr), podCreateEOF
+		}
+		var ready bool
+		lastEndpointDiagnostics, ready = probeConnectionEndpoints(waitContext, config.Readiness)
+		if ready {
+			consecutiveReady++
+		} else {
+			consecutiveReady = 0
+		}
+		if consecutiveReady >= connectionReadinessStableProbes {
+			return lastEndpointDiagnostics, nil, false
 		}
 		timer := time.NewTimer(500 * time.Millisecond)
 		select {
@@ -262,11 +370,10 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 		case exitErr := <-completed:
 			timer.Stop()
 			if contextErr := waitContext.Err(); contextErr != nil {
-				failure := fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath)
-				return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+				return lastEndpointDiagnostics, fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath), false
 			}
-			failure := connectionExitFailure(config, logPath, exitErr)
-			return failConnectionAttempt(ctx, process, config, logPath, output, failure, lastEndpointDiagnostics)
+			_, podCreateEOF := ktctlReportedExit(logPath)
+			return lastEndpointDiagnostics, connectionExitFailure(config, logPath, exitErr), podCreateEOF
 		case <-timer.C:
 		}
 	}
@@ -308,11 +415,11 @@ func connectionExitFailure(config ConnectionConfig, logPath string, exitErr erro
 	}
 	reportedError, podCreateEOF := ktctlReportedExit(logPath)
 	if podCreateEOF {
-		namespace := "the active Kubernetes namespace"
-		if config.Namespace != "" {
-			namespace = fmt.Sprintf("Kubernetes namespace %q", config.Namespace)
+		namespace := config.Namespace
+		if namespace == "" {
+			namespace = "default"
 		}
-		return fmt.Errorf("%s connection exited before endpoints became reachable; ktctl reported a Kubernetes Pod CREATE EOF, so the remote shadow pod state is unknown and Conven did not retry automatically; inspect %s for ktctl shadow pods before retrying; log: %s", config.Driver, namespace, logPath)
+		return fmt.Errorf("%s connection exited before endpoints became reachable; ktctl reported a Kubernetes Pod CREATE EOF, so the remote shadow pod state is unknown until attempt-owned resources are audited in Kubernetes namespace %q; log: %s", config.Driver, namespace, logPath)
 	}
 	if reportedError && exitErr.Error() == "exit status 0" {
 		return fmt.Errorf("%s connection exited before endpoints became reachable; ktctl reported an error despite returning success; log: %s", config.Driver, logPath)
@@ -777,7 +884,11 @@ func probeConnectionEndpoints(ctx context.Context, endpoints []ConnectionEndpoin
 }
 
 func connectionFingerprint(config ConnectionConfig) string {
-	parts := []string{config.Driver, config.Command, config.Kubeconfig, config.Context, config.Namespace, strconv.FormatBool(config.Sudo)}
+	kubeconfigIdentity := config.Kubeconfig
+	if config.kubeconfigIdentity != "" {
+		kubeconfigIdentity = config.kubeconfigIdentity
+	}
+	parts := []string{config.Driver, config.Command, kubeconfigIdentity, config.Context, config.Namespace, strconv.FormatBool(config.Sudo)}
 	parts = append(parts, config.Args...)
 	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(digest[:8])
@@ -936,7 +1047,15 @@ func validateConnectionForReplacement(ctx context.Context, process *ConnectionPr
 }
 
 func renewRetainedKtctlConnection(ctx context.Context, process *ConnectionProcess, config ConnectionConfig, lease string) (bool, error) {
-	if process == nil || !process.Managed || process.Driver != "ktctl" || config.Driver != "ktctl" || process.Fingerprint != connectionFingerprint(config) {
+	if process == nil || !process.Managed || process.Driver != "ktctl" || config.Driver != "ktctl" {
+		return false, nil
+	}
+	var err error
+	config, err = pinKtctlKubernetesTarget(config)
+	if err != nil {
+		return false, err
+	}
+	if process.Fingerprint != connectionFingerprint(config) {
 		return false, nil
 	}
 	unlock, err := acquireConnectionLock(ctx)
@@ -1189,10 +1308,14 @@ func removeConnectionRecord(fingerprint string) error {
 	if err != nil {
 		return err
 	}
+	var problems []error
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove connection record: %w", err)
+		problems = append(problems, fmt.Errorf("remove connection record: %w", err))
 	}
-	return nil
+	if err := removeKtctlKubeconfigSnapshot(fingerprint); err != nil {
+		problems = append(problems, err)
+	}
+	return errors.Join(problems...)
 }
 
 func pruneConnectionLeases(record *connectionRecord, currentLease string) bool {

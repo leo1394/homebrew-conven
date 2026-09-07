@@ -130,13 +130,23 @@ SHA256 清单校验源码归档，构建 Conven，并安装到 `~/.local/bin`。
 或安装目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.2 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.3 bash
 curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
 Conven 支持 macOS 和 Linux。Homebrew 和 `install.sh` 只安装 Conven，不自动安装
 项目使用的语言运行时和包管理器。只有环境使用 `ktctl` connection driver 时才需要
-安装 `ktctl`；匹配 Homebrew bottle 时，客户端不需要安装 Go。
+安装 `ktctl`；匹配 Homebrew bottle 时，客户端不需要安装 Go。建议同时安装
+`kubectl`，用于快速执行 Kubernetes API 就绪探测，并且它是 ktctl Pod CREATE EOF
+受控单次恢复的必要条件；缺少时 Conven 会使用只读 `ktctl birdseye` 探测就绪状态，
+但在该恢复路径保持失败关闭。每次启动受管 ktctl 前，Conven 会要求 Kubernetes API
+连续三次探测成功。它会把选中的 kubeconfig 一次性读取到权限为 `0600` 的私有快照，
+使门禁、恢复及两次启动不会因源文件变化而切换到其他集群。每次启动都会附加唯一的
+ownership label 和 annotation。若 ktctl 在创建 Pod 时因 EOF 退出，只有明确观察到并按
+UID 前置条件删除该次尝试拥有的资源，且按精确名称和 UID 确认资源已消失，即使标签被
+修改也不会误判，Conven 才会再次执行稳定性门禁并最多重试一次；空结果或含糊结果会
+保持失败关闭。受管启动强制使用本地时间并禁用 ktctl 的 namespace 级过期资源清理，
+避免就绪探测和连接启动额外创建校时 Pod，也避免删除其他用户的 ktctl 资源。
 
 ## 快速上手
 
@@ -314,9 +324,29 @@ Apollo application.yml
 
 第二条链路同时表示覆盖优先级：后面的 patch 基于前一步结果继续处理；
 `services.portal-api-service.config.patches` 是服务级 manifest patch 的具体示例。
-`workspace.disabledBindings` 只禁用拉取配置中实际存在的客户端，不会创建缺失的 binding。
+`workspace.disabledBindings` 表示禁用请求，不会创建缺失的 binding，也不代表应用代码
+已经支持禁用该客户端。编译前，go-zero adapter 会逐一检查所选服务的源码，确认客户端
+初始化有可选配置保护，或配置字段确实未使用。无条件初始化或无法确认时，报告服务、
+binding 和源码位置并停止。go-zero 中清空 `discovType` 不等于禁用：没有保护时仍会
+进入直连或 Etcd 初始化。禁用 binding 中残留的 `target`、`endpoints`/`endpints`、
+Etcd hosts/key 会被拒绝，必须明确移除，不能用假地址代替。不支持的 adapter 不能
+认证已声明客户端的禁用能力。状态页清单只表示禁用请求，不表示认证已通过。
+完全未知的 binding 名称会被拒绝；仅属于未选择服务的已知 binding 可以保留，但不会
+被显示为所选服务已经验证通过。
 本地隔离 guard 强制并校验最终监听和注册行为，Consul preflight 则检查最终运行时配置
 中仍然启用的远程依赖。
+
+服务就绪前退出时会报告“初始化失败”，与就绪检查超时区分。诊断包含退出码、最终
+配置路径和本次启动的致命日志证据，不混入追加日志文件中的上次启动记录。只有日志
+能够明确识别 binding 时才关联具体依赖，不靠初始化顺序猜测。配置错误不会自动
+重启服务或重连 VPN；已有的有限重试仅用于网络预检。
+
+最终 RPC 配置预检还会检查源码声明但未禁用的 go-zero 客户端。必需客户端必须有完整
+的 Consul、直连或 Etcd 路由；只有已验证可选或未使用的客户端允许空配置。
+Endpoints 的 YAML 拼写必须与本地 go-zero 实现一致（部分分支使用 `endpints`），
+不能让服务实际忽略的配置键通过检查。
+此检查通过 `go mod edit -json` 只读解析模块信息，不改写文件、不拉取依赖。
+版本限定、存在歧义或远程的 go-zero replacement 无法认证 endpoint YAML 键，会明确报错。
 
 ### 服务运行时配置契约
 

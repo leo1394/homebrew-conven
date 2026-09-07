@@ -276,6 +276,69 @@ func TestDashboardLogHighlightsOnlyPrefixAndSeverity(t *testing.T) {
 	}
 }
 
+func TestDashboardSearchHighlightsEveryCaseInsensitiveOccurrence(t *testing.T) {
+	rendered := renderDashboardLogFragment("[api] Error then ERROR", 0, len("[api] Error then ERROR"), "error", true)
+	if strings.Count(rendered, dashboardBoldMagenta) != 2 {
+		t.Fatalf("dashboard highlighted %d search matches, want 2: %q", strings.Count(rendered, dashboardBoldMagenta), rendered)
+	}
+	if strings.Contains(rendered, dashboardRed+"Error") || strings.Contains(rendered, dashboardRed+"ERROR") {
+		t.Fatalf("dashboard severity style took precedence over search: %q", rendered)
+	}
+	if !strings.Contains(rendered, dashboardCyan+"[api]"+dashboardReset) {
+		t.Fatalf("dashboard search removed the service prefix style: %q", rendered)
+	}
+	if plainDashboardText(rendered) != "[api] Error then ERROR" {
+		t.Fatalf("dashboard search highlighting changed content: %q", rendered)
+	}
+}
+
+func TestDashboardSearchHighlightsMatchAcrossWrappedFragments(t *testing.T) {
+	const line = "1234567NeEdLe-tail"
+	fragments := dashboardLogFragments(line, 10)
+	if len(fragments) < 2 {
+		t.Fatalf("dashboard did not wrap search fixture: %#v", fragments)
+	}
+	first := renderDashboardLogFragment(line, fragments[0].Start, fragments[0].End, "needle", true)
+	second := renderDashboardLogFragment(line, fragments[1].Start, fragments[1].End, "needle", true)
+	if !strings.Contains(first, dashboardBoldMagenta+"NeE"+dashboardReset) {
+		t.Fatalf("first wrapped fragment did not highlight its match portion: %q", first)
+	}
+	if !strings.Contains(second, dashboardBoldMagenta+"dLe"+dashboardReset) {
+		t.Fatalf("second wrapped fragment did not highlight its match portion: %q", second)
+	}
+	if plainDashboardText(first)+plainDashboardText(second) != line {
+		t.Fatalf("wrapped search highlighting changed content: first=%q second=%q", first, second)
+	}
+}
+
+func TestDashboardSearchClearAndNoColorKeepPlainLogContent(t *testing.T) {
+	const line = "[api] ERROR needle"
+	colored := renderDashboardLogFragment(line, 0, len(line), "", true)
+	if strings.Contains(colored, dashboardBoldMagenta) || !strings.Contains(colored, dashboardRed+"ERROR"+dashboardReset) {
+		t.Fatalf("cleared search retained highlight or lost severity: %q", colored)
+	}
+	plain := renderDashboardLogFragment(line, 0, len(line), "needle", false)
+	if plain != line || dashboardHasSGR(plain) {
+		t.Fatalf("color-disabled search rendering = %q, want plain content", plain)
+	}
+}
+
+func TestDashboardViewRendersAndClearsActiveSearchHighlight(t *testing.T) {
+	history := newDashboardHistory(10)
+	history.Append("[api] first Needle result")
+	view := dashboardView{Follow: true, SearchQuery: "needle", SearchMatch: 0}
+	info := dashboardInfo{Workspace: "local", Color: true}
+	frame := renderDashboardViewFrame(info, 50, 8, history, &view)
+	if !strings.Contains(frame, dashboardBoldMagenta+"Needle"+dashboardReset) {
+		t.Fatalf("dashboard view did not render active search highlight: %q", frame)
+	}
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputEscape}, history, &view, 50, 3)
+	frame = renderDashboardViewFrame(info, 50, 8, history, &view)
+	if strings.Contains(frame, dashboardBoldMagenta) || !strings.Contains(plainDashboardFrame(frame), "Needle") {
+		t.Fatalf("dashboard view did not clear search styling while preserving content: %q", frame)
+	}
+}
+
 func TestDashboardFramesFitTerminalAndKeepLogsVisible(t *testing.T) {
 	info := dashboardInfo{
 		Version:     "0.2.4",
@@ -631,6 +694,112 @@ func TestDashboardLowercaseGResumesFollowAndTracksNewLogs(t *testing.T) {
 	}
 }
 
+func TestDashboardViewportScrollTracksPausedDownAndFollowAppend(t *testing.T) {
+	history := newDashboardHistory(10)
+	for _, line := range []string{"zero", "one", "two", "three", "four"} {
+		history.Append(line)
+	}
+	view := dashboardView{Follow: false, Top: 1, NewLines: 2, SearchMatch: -1}
+	rendered := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, 80, 2)
+
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputDown}, history, &view, 80, 2)
+	if view.Follow || view.Top != 2 {
+		t.Fatalf("first paused down view = %#v", view)
+	}
+	visible := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, 80, 2)
+	if shift, ok := dashboardVisibleRowShift(rendered, visible); !ok || shift != 1 {
+		t.Fatalf("first paused down shift = %d, %t, want 1, true", shift, ok)
+	}
+	rendered = visible
+
+	handleDashboardInput(dashboardInputEvent{Kind: dashboardInputDown}, history, &view, 80, 2)
+	if !view.Follow || view.Top != 3 || view.NewLines != 0 {
+		t.Fatalf("second down did not resume at the latest rows: %#v", view)
+	}
+	visible = dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, 80, 2)
+	if shift, ok := dashboardVisibleRowShift(rendered, visible); !ok || shift != 1 {
+		t.Fatalf("follow resume shift = %d, %t, want 1, true", shift, ok)
+	}
+	rendered = visible
+
+	history.Append("five")
+	view.RecordAppend(history, 0)
+	view.Clamp(history, 80, 2)
+	visible = dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, 80, 2)
+	if shift, ok := dashboardVisibleRowShift(rendered, visible); !ok || shift != 1 {
+		t.Fatalf("follow append shift = %d, %t, want 1, true", shift, ok)
+	}
+}
+
+func TestDashboardLogScrollUsesOnlyLogScreenRegion(t *testing.T) {
+	var output strings.Builder
+	if err := writeDashboardLogScroll(&output, 7, 12, 2); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "\x1b[8;12r\x1b[2S\x1b[r" {
+		t.Fatalf("downward viewport scroll sequence = %q", output.String())
+	}
+	output.Reset()
+	if err := writeDashboardLogScroll(&output, 7, 12, -1); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "\x1b[8;12r\x1b[1T\x1b[r" {
+		t.Fatalf("upward viewport scroll sequence = %q", output.String())
+	}
+}
+
+func TestDashboardPartialScrollDoesNotRewriteOverlappingLogRows(t *testing.T) {
+	history := newDashboardHistory(10)
+	for _, line := range []string{"alpha", "bravo", "charlie"} {
+		history.Append(line)
+	}
+	previous := dashboardRenderState{
+		Width:   80,
+		Height:  3,
+		Visible: dashboardVisibleLogRows(history, dashboardCursor{}, 80, 3),
+	}
+	history.Append("delta")
+	next := dashboardRenderState{
+		Width:   80,
+		Height:  3,
+		Visible: dashboardVisibleLogRows(history, dashboardCursor{Line: 1}, 80, 3),
+	}
+	shift, ok := dashboardVisibleRowShift(previous.Visible, next.Visible)
+	if !ok || shift != 1 {
+		t.Fatalf("dashboard visible row shift = %d, %t, want 1, true", shift, ok)
+	}
+	var output strings.Builder
+	if err := writeDashboardPartialView(&output, dashboardInfo{Color: true}, history, previous, next, shift); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	if !strings.HasPrefix(rendered, "\x1b[1;3r\x1b[1S\x1b[r") {
+		t.Fatalf("partial dashboard did not scroll the log region: %q", rendered)
+	}
+	if strings.Count(rendered, "\x1b[2K") != 1 || strings.Contains(rendered, "bravo") || strings.Contains(rendered, "charlie") {
+		t.Fatalf("partial dashboard rewrote overlapping selected rows: %q", rendered)
+	}
+	if !strings.Contains(rendered, "delta") || strings.Contains(rendered, "\x1b[H") {
+		t.Fatalf("partial dashboard did not limit repaint to the exposed row: %q", rendered)
+	}
+}
+
+func TestDashboardVisibleRowShiftSurvivesWrappedHistoryEviction(t *testing.T) {
+	history := newDashboardHistory(3)
+	history.Append("AAAAABBBBB")
+	history.Append("charlie")
+	history.Append("delta")
+	previous := dashboardVisibleLogRows(history, dashboardCursor{}, 5, 4)
+	if evicted := history.Append("echo"); evicted != 1 {
+		t.Fatalf("dashboard fixture evicted %d lines, want 1", evicted)
+	}
+	next := dashboardVisibleLogRows(history, dashboardCursor{}, 5, 4)
+	shift, ok := dashboardVisibleRowShift(previous, next)
+	if !ok || shift != 2 {
+		t.Fatalf("wrapped eviction shift = %d, %t, want 2, true; previous=%#v next=%#v", shift, ok, previous, next)
+	}
+}
+
 func TestDashboardViewScrollsWithinWrappedLogicalLine(t *testing.T) {
 	history := newDashboardHistory(10)
 	history.Append("AAAAABBBBBCCCCCDDDDD")
@@ -736,6 +905,10 @@ func TestParseDashboardInputEvents(t *testing.T) {
 		{input: "\x1b[F", wantKind: dashboardInputEnd},
 		{input: "\x1b[<64;20;8M", wantKind: dashboardInputUp},
 		{input: "\x1b[<65;20;8M", wantKind: dashboardInputDown},
+		{input: "\x1b[<0;10;20M", wantKind: dashboardInputMouseDown},
+		{input: "\x1b[<32;11;21M", wantKind: dashboardInputMouseDrag},
+		{input: "\x1b[<0;12;22m", wantKind: dashboardInputMouseUp},
+		{input: "\x1b[<3;12;22m", wantKind: dashboardInputMouseUp},
 		{input: "服", wantKind: dashboardInputText, wantText: "服"},
 		{input: "\x1b", incomplete: true},
 		{input: string([]byte{0xe6}), incomplete: true},
@@ -754,6 +927,79 @@ func TestParseDashboardInputEvents(t *testing.T) {
 		if event.Kind != test.wantKind || event.Text != test.wantText || consumed != len(test.input) {
 			t.Fatalf("parse %q = %#v consumed=%d", test.input, event, consumed)
 		}
+		if test.wantKind == dashboardInputMouseDown && (event.Column != 10 || event.Row != 20) {
+			t.Fatalf("parse mouse down coordinates = %#v", event)
+		}
+		if test.wantKind == dashboardInputMouseDrag && (event.Column != 11 || event.Row != 21) {
+			t.Fatalf("parse mouse drag coordinates = %#v", event)
+		}
+		if test.wantKind == dashboardInputMouseUp && (event.Column != 12 || event.Row != 22) {
+			t.Fatalf("parse mouse up coordinates = %#v", event)
+		}
+	}
+}
+
+func TestDashboardHeldSelectionAtBottomAutoScrollsIntoFollowingLines(t *testing.T) {
+	history := newDashboardHistory(10)
+	for _, line := range []string{"line-1", "line-2", "line-3", "line-4", "line-5", "line-6"} {
+		history.Append(line)
+	}
+	view := dashboardView{Follow: false, Top: 0, SearchMatch: -1}
+	const width = 20
+	const rows = 3
+	const bannerRows = 4
+	const height = bannerRows + rows
+
+	if _, changed := handleDashboardMouseInput(dashboardInputEvent{Kind: dashboardInputMouseDown, Column: 1, Row: bannerRows + rows - 1}, history, &view, width, height, bannerRows); !changed {
+		t.Fatal("mouse down did not begin a dashboard selection")
+	}
+	if _, changed := handleDashboardMouseInput(dashboardInputEvent{Kind: dashboardInputMouseDrag, Column: width, Row: height}, history, &view, width, height, bannerRows); !changed {
+		t.Fatal("mouse drag did not extend the dashboard selection")
+	}
+	if !advanceDashboardSelectionDrag(history, &view, width, rows) {
+		t.Fatal("held selection did not auto-scroll at the lower edge")
+	}
+	if view.Top != 1 || view.Selection.Focus.Sequence != 3 {
+		t.Fatalf("first edge scroll view = %#v", view)
+	}
+	if !advanceDashboardSelectionDrag(history, &view, width, rows) {
+		t.Fatal("held selection stopped before the next following line")
+	}
+	if view.Top != 2 || view.Selection.Focus.Sequence != 4 {
+		t.Fatalf("second edge scroll view = %#v", view)
+	}
+
+	selected, changed := handleDashboardMouseInput(dashboardInputEvent{Kind: dashboardInputMouseUp, Column: width, Row: height}, history, &view, width, height, bannerRows)
+	if !changed || selected != "line-2\nline-3\nline-4\nline-5" {
+		t.Fatalf("released selection = %q changed=%t view=%#v", selected, changed, view)
+	}
+	if view.Selection.Active || view.Selection.Edge != 0 {
+		t.Fatalf("released selection remains active: %#v", view.Selection)
+	}
+}
+
+func TestDashboardSelectionUsesDisplayColumnsAndRendersHighlight(t *testing.T) {
+	if offset := dashboardColumnByteOffset("A界B", 3, true); offset != len("A界") {
+		t.Fatalf("wide-character selection offset = %d, want %d", offset, len("A界"))
+	}
+	selection := dashboardSelection{
+		Valid:  true,
+		Anchor: dashboardSelectionPoint{Sequence: 7, Offset: 1},
+		Focus:  dashboardSelectionPoint{Sequence: 7, Offset: len("A界")},
+	}
+	rendered := renderDashboardLogFragmentWithSelection("A界B", 0, len("A界B"), "", false, selection, 7)
+	if !strings.Contains(rendered, dashboardReverse+"界"+dashboardReset) || plainDashboardText(rendered) != "A界B" {
+		t.Fatalf("dashboard selection rendering = %q", rendered)
+	}
+}
+
+func TestDashboardSelectionCopiesWithOSC52(t *testing.T) {
+	var output strings.Builder
+	if err := writeDashboardClipboard(&output, "line"); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "\x1b]52;c;bGluZQ==\x1b\\" {
+		t.Fatalf("dashboard clipboard sequence = %q", output.String())
 	}
 }
 

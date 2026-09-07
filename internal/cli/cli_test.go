@@ -468,6 +468,7 @@ services:
 		"Configured endpoints",
 		"local.postgres: protocol=tcp, address=127.0.0.1:5432, readiness=tcp",
 		"Disabled bindings",
+		"Requested by configuration; per-service disable capability is checked before build.",
 		"aRpc",
 		"zRpc",
 		"No Conven session found.",

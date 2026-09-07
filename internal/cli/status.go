@@ -62,6 +62,7 @@ func (app App) runWorkspaceStatus(arguments []string) int {
 	disabled := append([]string(nil), workspace.Manifest.Workspace.DisabledBindings...)
 	sort.Strings(disabled)
 	fmt.Fprintln(app.Output, style.Stage("Disabled bindings"))
+	fmt.Fprintln(app.Output, style.Detail("Requested by configuration; per-service disable capability is checked before build."))
 	if len(disabled) == 0 {
 		fmt.Fprintln(app.Output, style.Detail("none"))
 	} else {

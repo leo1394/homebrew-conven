@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -23,20 +24,23 @@ import (
 )
 
 const (
-	dashboardHistoryLines = 10000
-	dashboardHistoryBytes = 64 * 1024 * 1024
-	dashboardLineBytes    = 1024 * 1024
-	dashboardFrameInterval = 50 * time.Millisecond
-	dashboardFieldWidth    = 9
-	dashboardReset         = "\x1b[0m"
-	dashboardBold          = "\x1b[1m"
-	dashboardDim           = "\x1b[2m"
-	dashboardCyan          = "\x1b[36m"
-	dashboardBoldCyan      = "\x1b[1;36m"
-	dashboardGreen         = "\x1b[32m"
-	dashboardYellow        = "\x1b[33m"
-	dashboardRed           = "\x1b[31m"
-	dashboardWhite         = "\x1b[37m"
+	dashboardHistoryLines   = 10000
+	dashboardHistoryBytes   = 64 * 1024 * 1024
+	dashboardLineBytes      = 1024 * 1024
+	dashboardFrameInterval  = 50 * time.Millisecond
+	dashboardClipboardBytes = 1024 * 1024
+	dashboardFieldWidth     = 9
+	dashboardReset          = "\x1b[0m"
+	dashboardBold           = "\x1b[1m"
+	dashboardDim            = "\x1b[2m"
+	dashboardCyan           = "\x1b[36m"
+	dashboardBoldCyan       = "\x1b[1;36m"
+	dashboardGreen          = "\x1b[32m"
+	dashboardYellow         = "\x1b[33m"
+	dashboardRed            = "\x1b[31m"
+	dashboardBoldMagenta    = "\x1b[1;35m"
+	dashboardReverse        = "\x1b[7m"
+	dashboardWhite          = "\x1b[37m"
 )
 
 type dashboardSegment struct {
@@ -78,11 +82,12 @@ type TailOptions struct {
 }
 
 type dashboardHistory struct {
-	lines        []string
-	start        int
-	count        int
-	bytes        int
-	maximumBytes int
+	lines         []string
+	start         int
+	count         int
+	bytes         int
+	maximumBytes  int
+	firstSequence int64
 }
 
 type dashboardView struct {
@@ -95,6 +100,21 @@ type dashboardView struct {
 	SearchQuery   string
 	SearchMatch   int
 	SearchMessage string
+	Selection     dashboardSelection
+}
+
+type dashboardSelectionPoint struct {
+	Sequence int64
+	Offset   int
+}
+
+type dashboardSelection struct {
+	Valid  bool
+	Active bool
+	Anchor dashboardSelectionPoint
+	Focus  dashboardSelectionPoint
+	Edge   int
+	Column int
 }
 
 type dashboardCursor struct {
@@ -110,8 +130,18 @@ type dashboardLogFragment struct {
 
 type dashboardVisibleLogRow struct {
 	HistoryIndex int
+	Sequence     int64
 	Offset       int
 	Text         string
+}
+
+type dashboardRenderState struct {
+	Width       int
+	Height      int
+	SearchQuery string
+	Banner      []string
+	Visible     []dashboardVisibleLogRow
+	Selection   dashboardSelection
 }
 
 type dashboardInputKind int
@@ -128,12 +158,17 @@ const (
 	dashboardInputPageDown
 	dashboardInputHome
 	dashboardInputEnd
+	dashboardInputMouseDown
+	dashboardInputMouseDrag
+	dashboardInputMouseUp
 	dashboardInputIgnored
 )
 
 type dashboardInputEvent struct {
-	Kind dashboardInputKind
-	Text string
+	Kind   dashboardInputKind
+	Text   string
+	Column int
+	Row    int
 }
 
 type localIPv4Candidate struct {
@@ -211,7 +246,7 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 	defer func() {
 		var exitErr error
 		if entered {
-			restoreScreen := "\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l"
+			restoreScreen := "\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l"
 			if info.Color {
 				restoreScreen = dashboardReset + restoreScreen
 			}
@@ -226,7 +261,7 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 		}
 		err = errors.Join(err, exitErr, restoreErr)
 	}()
-	if _, err := io.WriteString(output, "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J"); err != nil {
+	if _, err := io.WriteString(output, "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[2J"); err != nil {
 		return fmt.Errorf("dashboard: enter screen: %w", err)
 	}
 	dashboardContext, cancel := context.WithCancel(ctx)
@@ -244,7 +279,27 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 
 	history := newDashboardHistory(dashboardHistoryLines)
 	view := dashboardView{Follow: true, SearchMatch: -1}
-	if err := writeDashboardViewFrame(output, info, width, height, history, &view); err != nil {
+	var rendered dashboardRenderState
+	renderFrame := func(full bool) error {
+		logRows := dashboardLogRows(info, width, height)
+		view.Clamp(history, width, logRows)
+		next := dashboardRenderSnapshot(info, width, height, history, &view)
+		if !full && rendered.Width == width && rendered.Height == height && rendered.SearchQuery == view.SearchQuery && rendered.Selection == next.Selection && len(rendered.Banner) == len(next.Banner) {
+			if shift, ok := dashboardVisibleRowShift(rendered.Visible, next.Visible); ok {
+				if err := writeDashboardPartialView(output, info, history, rendered, next, shift); err != nil {
+					return err
+				}
+				rendered = next
+				return nil
+			}
+		}
+		if err := writeDashboardViewFrame(output, info, width, height, history, &view); err != nil {
+			return err
+		}
+		rendered = next
+		return nil
+	}
+	if err := renderFrame(true); err != nil {
 		return err
 	}
 	dirty := false
@@ -270,6 +325,18 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 				keys = nil
 				continue
 			}
+			if key.Kind == dashboardInputMouseDown || key.Kind == dashboardInputMouseDrag || key.Kind == dashboardInputMouseUp {
+				selected, changed := handleDashboardMouseInput(key, history, &view, width, height, len(rendered.Banner))
+				if selected != "" && len(selected) <= dashboardClipboardBytes {
+					if err := writeDashboardClipboard(output, selected); err != nil {
+						return err
+					}
+				}
+				if changed {
+					dirty = true
+				}
+				continue
+			}
 			if handleDashboardInput(key, history, &view, width, dashboardLogRows(info, width, height)) {
 				return nil
 			}
@@ -286,15 +353,18 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 				height = nextHeight
 			}
 			view.Clamp(history, width, dashboardLogRows(info, width, height))
-			if err := writeDashboardViewFrame(output, info, width, height, history, &view); err != nil {
+			if err := renderFrame(true); err != nil {
 				return err
 			}
 			dirty = false
 		case <-ticker.C:
+			if advanceDashboardSelectionDrag(history, &view, width, dashboardLogRows(info, width, height)) {
+				dirty = true
+			}
 			if !dirty {
 				continue
 			}
-			if err := writeDashboardViewFrame(output, info, width, height, history, &view); err != nil {
+			if err := renderFrame(false); err != nil {
 				return err
 			}
 			dirty = false
@@ -303,7 +373,7 @@ func runDashboard(ctx context.Context, logs []namedLog, info dashboardInfo, inpu
 		}
 	}
 	if dirty {
-		return writeDashboardViewFrame(output, info, width, height, history, &view)
+		return renderFrame(false)
 	}
 	return nil
 }
@@ -348,6 +418,7 @@ func (history *dashboardHistory) dropOldest() {
 	history.lines[history.start] = ""
 	history.start = (history.start + 1) % len(history.lines)
 	history.count--
+	history.firstSequence++
 }
 
 func truncateDashboardHistoryLine(line string) string {
@@ -384,6 +455,12 @@ func (view *dashboardView) RecordAppend(history *dashboardHistory, evicted int) 
 				view.SearchMatch = -1
 				view.SearchMessage = "current match expired"
 			}
+		}
+	}
+	if view.Selection.Valid {
+		first := history.firstSequence
+		if view.Selection.Anchor.Sequence < first || view.Selection.Focus.Sequence < first {
+			view.Selection = dashboardSelection{}
 		}
 	}
 	if !view.Follow {
@@ -468,6 +545,10 @@ func handleDashboardInput(event dashboardInputEvent, history *dashboardHistory, 
 
 	switch event.Kind {
 	case dashboardInputEscape:
+		if view.Selection.Valid {
+			view.Selection = dashboardSelection{}
+			return false
+		}
 		view.SearchQuery = ""
 		view.SearchMatch = -1
 		view.SearchMessage = ""
@@ -756,6 +837,7 @@ func dashboardVisibleLogRows(history *dashboardHistory, cursor dashboardCursor, 
 		for index := first; index < len(fragments) && len(visible) < rows; index++ {
 			visible = append(visible, dashboardVisibleLogRow{
 				HistoryIndex: line,
+				Sequence:     history.firstSequence + int64(line),
 				Offset:       fragments[index].Start,
 				Text:         fragments[index].Text,
 			})
@@ -874,11 +956,22 @@ func parseDashboardInputEvent(data []byte) (dashboardInputEvent, int, bool) {
 				fields := strings.Split(sequence[3:len(sequence)-1], ";")
 				if len(fields) == 3 {
 					button, err := strconv.Atoi(fields[0])
-					if err == nil && button&64 != 0 {
+					column, columnErr := strconv.Atoi(fields[1])
+					row, rowErr := strconv.Atoi(fields[2])
+					if err == nil && columnErr == nil && rowErr == nil && button&64 != 0 {
 						if button&1 == 0 {
 							return dashboardInputEvent{Kind: dashboardInputUp}, end + 1, false
 						}
 						return dashboardInputEvent{Kind: dashboardInputDown}, end + 1, false
+					}
+					if err == nil && columnErr == nil && rowErr == nil && sequence[len(sequence)-1] == 'm' {
+						return dashboardInputEvent{Kind: dashboardInputMouseUp, Column: column, Row: row}, end + 1, false
+					}
+					if err == nil && columnErr == nil && rowErr == nil && button&3 == 0 {
+						if button&32 != 0 {
+							return dashboardInputEvent{Kind: dashboardInputMouseDrag, Column: column, Row: row}, end + 1, false
+						}
+						return dashboardInputEvent{Kind: dashboardInputMouseDown, Column: column, Row: row}, end + 1, false
 					}
 				}
 				return dashboardInputEvent{Kind: dashboardInputIgnored}, end + 1, false
@@ -928,6 +1021,178 @@ func parseDashboardInputEvent(data []byte) (dashboardInputEvent, int, bool) {
 	return dashboardInputEvent{Kind: dashboardInputText, Text: string(character)}, size, false
 }
 
+func handleDashboardMouseInput(event dashboardInputEvent, history *dashboardHistory, view *dashboardView, width int, height int, bannerRows int) (string, bool) {
+	if history.Len() == 0 || height <= bannerRows {
+		return "", false
+	}
+	if event.Kind == dashboardInputMouseDown && (event.Row <= bannerRows || event.Row > height) {
+		return "", false
+	}
+	rows := height - bannerRows
+	point, ok := dashboardSelectionPointAt(history, view, width, rows, bannerRows, event.Column, event.Row, event.Kind != dashboardInputMouseDown)
+	if !ok {
+		return "", false
+	}
+	switch event.Kind {
+	case dashboardInputMouseDown:
+		view.Pause(history, width, rows)
+		view.Selection = dashboardSelection{Valid: true, Active: true, Anchor: point, Focus: point, Column: event.Column}
+		return "", true
+	case dashboardInputMouseDrag:
+		if !view.Selection.Active {
+			return "", false
+		}
+		view.Selection.Focus = point
+		view.Selection.Column = event.Column
+		view.Selection.Edge = dashboardSelectionEdge(event.Row, bannerRows+1, height)
+		return "", true
+	case dashboardInputMouseUp:
+		if !view.Selection.Active {
+			return "", false
+		}
+		view.Selection.Focus = point
+		view.Selection.Active = false
+		view.Selection.Edge = 0
+		return dashboardSelectedText(history, view.Selection), true
+	}
+	return "", false
+}
+
+func dashboardSelectionPointAt(history *dashboardHistory, view *dashboardView, width int, rows int, bannerRows int, column int, row int, after bool) (dashboardSelectionPoint, bool) {
+	visible := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width, rows)
+	if len(visible) == 0 {
+		return dashboardSelectionPoint{}, false
+	}
+	index := row - bannerRows - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(visible) {
+		index = len(visible) - 1
+	}
+	visibleRow := visible[index]
+	offset := visibleRow.Offset + dashboardColumnByteOffset(visibleRow.Text, column, after)
+	return dashboardSelectionPoint{Sequence: visibleRow.Sequence, Offset: offset}, true
+}
+
+func dashboardColumnByteOffset(value string, column int, after bool) int {
+	if column < 1 {
+		column = 1
+	}
+	target := column - 1
+	used := 0
+	for offset, character := range value {
+		characterWidth := dashboardRuneWidth(character)
+		if target < used+characterWidth {
+			if after {
+				return offset + utf8.RuneLen(character)
+			}
+			return offset
+		}
+		used += characterWidth
+	}
+	return len(value)
+}
+
+func dashboardSelectionEdge(row int, firstLogRow int, lastLogRow int) int {
+	if row <= firstLogRow {
+		return -1
+	}
+	if row >= lastLogRow {
+		return 1
+	}
+	return 0
+}
+
+func advanceDashboardSelectionDrag(history *dashboardHistory, view *dashboardView, width int, rows int) bool {
+	if !view.Selection.Active || view.Selection.Edge == 0 || history.Len() == 0 {
+		return false
+	}
+	before := dashboardCursor{Line: view.Top, Offset: view.TopOffset}
+	direction := dashboardInputDown
+	if view.Selection.Edge < 0 {
+		direction = dashboardInputUp
+	}
+	handleDashboardInput(dashboardInputEvent{Kind: direction}, history, view, width, rows)
+	after := dashboardCursor{Line: view.Top, Offset: view.TopOffset}
+	if compareDashboardCursors(before, after) == 0 {
+		return false
+	}
+	visible := dashboardVisibleLogRows(history, after, width, rows)
+	if len(visible) == 0 {
+		return false
+	}
+	index := len(visible) - 1
+	trailing := true
+	if view.Selection.Edge < 0 {
+		index = 0
+		trailing = false
+	}
+	row := visible[index]
+	view.Selection.Focus = dashboardSelectionPoint{
+		Sequence: row.Sequence,
+		Offset:   row.Offset + dashboardColumnByteOffset(row.Text, view.Selection.Column, trailing),
+	}
+	return true
+}
+
+func dashboardSelectedText(history *dashboardHistory, selection dashboardSelection) string {
+	if !selection.Valid || history.Len() == 0 {
+		return ""
+	}
+	start, end := dashboardOrderedSelection(selection)
+	first := history.firstSequence
+	last := first + int64(history.Len()-1)
+	if start.Sequence < first || end.Sequence > last {
+		return ""
+	}
+	var selected strings.Builder
+	for sequence := start.Sequence; sequence <= end.Sequence; sequence++ {
+		line := history.At(int(sequence - first))
+		lineStart := 0
+		lineEnd := len(line)
+		if sequence == start.Sequence {
+			lineStart = start.Offset
+		}
+		if sequence == end.Sequence {
+			lineEnd = end.Offset
+		}
+		if lineStart < 0 {
+			lineStart = 0
+		}
+		if lineEnd > len(line) {
+			lineEnd = len(line)
+		}
+		if lineEnd < lineStart {
+			lineEnd = lineStart
+		}
+		if sequence > start.Sequence {
+			selected.WriteByte('\n')
+		}
+		selected.WriteString(line[lineStart:lineEnd])
+		if selected.Len() > dashboardClipboardBytes {
+			return ""
+		}
+	}
+	return selected.String()
+}
+
+func dashboardOrderedSelection(selection dashboardSelection) (dashboardSelectionPoint, dashboardSelectionPoint) {
+	if selection.Anchor.Sequence < selection.Focus.Sequence ||
+		(selection.Anchor.Sequence == selection.Focus.Sequence && selection.Anchor.Offset <= selection.Focus.Offset) {
+		return selection.Anchor, selection.Focus
+	}
+	return selection.Focus, selection.Anchor
+}
+
+func writeDashboardClipboard(output io.Writer, value string) error {
+	encoded := base64.StdEncoding.EncodeToString([]byte(value))
+	if _, err := fmt.Fprintf(output, "\x1b]52;c;%s\x1b\\", encoded); err != nil {
+		return fmt.Errorf("dashboard: copy selection: %w", err)
+	}
+	return nil
+}
+
 func dashboardLogRows(info dashboardInfo, width int, height int) int {
 	rows := height - len(dashboardBanner(info, width, height))
 	if rows < 1 {
@@ -940,6 +1205,118 @@ func writeDashboardViewFrame(output io.Writer, info dashboardInfo, width int, he
 	frame := renderDashboardViewFrame(info, width, height, history, view)
 	if _, err := io.WriteString(output, frame); err != nil {
 		return fmt.Errorf("dashboard: render: %w", err)
+	}
+	return nil
+}
+
+func dashboardRenderSnapshot(info dashboardInfo, width int, height int, history *dashboardHistory, view *dashboardView) dashboardRenderState {
+	logRows := dashboardLogRows(info, width, height)
+	hint := dashboardViewHint(view, history, logRows, width)
+	banner := dashboardBannerWithHint(info, width, height, hint)
+	renderedBanner := make([]string, 0, len(banner))
+	for _, line := range banner {
+		renderedBanner = append(renderedBanner, renderDashboardLine(line, width, info.Color))
+	}
+	visible := dashboardVisibleLogRows(history, dashboardCursor{Line: view.Top, Offset: view.TopOffset}, width, logRows)
+	return dashboardRenderState{
+		Width:       width,
+		Height:      height,
+		SearchQuery: view.SearchQuery,
+		Banner:      renderedBanner,
+		Visible:     visible,
+		Selection:   view.Selection,
+	}
+}
+
+func dashboardVisibleRowShift(previous []dashboardVisibleLogRow, next []dashboardVisibleLogRow) (int, bool) {
+	if len(previous) == 0 && len(next) == 0 {
+		return 0, true
+	}
+	bestShift := 0
+	bestOverlap := 0
+	for shift := -len(next); shift <= len(previous); shift++ {
+		overlap := 0
+		matches := true
+		for row := range next {
+			source := row + shift
+			if source < 0 || source >= len(previous) {
+				continue
+			}
+			overlap++
+			if previous[source].Sequence != next[row].Sequence || previous[source].Offset != next[row].Offset {
+				matches = false
+				break
+			}
+		}
+		if matches && overlap > bestOverlap {
+			bestShift = shift
+			bestOverlap = overlap
+		}
+	}
+	return bestShift, bestOverlap > 0
+}
+
+func writeDashboardPartialView(output io.Writer, info dashboardInfo, history *dashboardHistory, previous dashboardRenderState, next dashboardRenderState, shift int) error {
+	if len(previous.Banner) != len(next.Banner) {
+		return errors.New("dashboard: partial render requires a stable log region")
+	}
+	if err := writeDashboardLogScroll(output, len(next.Banner), next.Height, shift); err != nil {
+		return err
+	}
+	for row := range next.Banner {
+		if previous.Banner[row] == next.Banner[row] {
+			continue
+		}
+		if err := writeDashboardScreenRow(output, row+1, next.Banner[row]); err != nil {
+			return err
+		}
+	}
+	logRows := next.Height - len(next.Banner)
+	for row := 0; row < logRows; row++ {
+		source := row + shift
+		unchanged := row < len(next.Visible) && source >= 0 && source < len(previous.Visible) &&
+			previous.Visible[source].Sequence == next.Visible[row].Sequence && previous.Visible[source].Offset == next.Visible[row].Offset
+		blank := row >= len(next.Visible) && (source < 0 || source >= len(previous.Visible))
+		if unchanged || blank {
+			continue
+		}
+		value := ""
+		if row < len(next.Visible) {
+			visible := next.Visible[row]
+			line := history.At(visible.HistoryIndex)
+			value = renderDashboardLogFragmentWithSelection(line, visible.Offset, visible.Offset+len(visible.Text), next.SearchQuery, info.Color, next.Selection, visible.Sequence)
+		}
+		if err := writeDashboardScreenRow(output, len(next.Banner)+row+1, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeDashboardScreenRow(output io.Writer, row int, value string) error {
+	if _, err := fmt.Fprintf(output, "\x1b[%d;1H\x1b[2K%s", row, value); err != nil {
+		return fmt.Errorf("dashboard: render row: %w", err)
+	}
+	return nil
+}
+
+func writeDashboardLogScroll(output io.Writer, bannerRows int, height int, distance int) error {
+	logRows := height - bannerRows
+	if distance == 0 || logRows < 1 {
+		return nil
+	}
+	amount := distance
+	direction := 'S'
+	if amount < 0 {
+		amount = -amount
+		direction = 'T'
+	}
+	if amount > logRows {
+		amount = logRows
+	}
+	sequence := fmt.Sprintf("\x1b[%d;%dr\x1b[%d%c\x1b[r", bannerRows+1, height, amount, direction)
+	if _, err := io.WriteString(output, sequence); err != nil {
+		return fmt.Errorf("dashboard: scroll logs: %w", err)
 	}
 	return nil
 }
@@ -963,7 +1340,8 @@ func renderDashboardViewFrame(info dashboardInfo, width int, height int, history
 		if row < len(banner) {
 			frame.WriteString(renderDashboardLine(banner[row], width, info.Color))
 		} else if index := row - len(banner); index < len(visible) {
-			frame.WriteString(renderDashboardLogLine(visible[index].Text, info.Color))
+			line := history.At(visible[index].HistoryIndex)
+			frame.WriteString(renderDashboardLogFragmentWithSelection(line, visible[index].Offset, visible[index].Offset+len(visible[index].Text), view.SearchQuery, info.Color, view.Selection, visible[index].Sequence))
 		}
 		if row+1 < height {
 			frame.WriteString("\r\n")
@@ -1444,8 +1822,28 @@ func renderDashboardLine(line dashboardLine, width int, color bool) string {
 
 func renderDashboardLogLine(value string, color bool) string {
 	line := sanitizeDashboardText(value)
-	if !color || line == "" {
-		return line
+	return renderDashboardLogFragment(line, 0, len(line), "", color)
+}
+
+func renderDashboardLogFragment(value string, start int, end int, query string, color bool) string {
+	return renderDashboardLogFragmentWithSelection(value, start, end, query, color, dashboardSelection{}, 0)
+}
+
+func renderDashboardLogFragmentWithSelection(value string, start int, end int, query string, color bool, selection dashboardSelection, sequence int64) string {
+	line := sanitizeDashboardText(value)
+	if start < 0 {
+		start = 0
+	}
+	if end > len(line) {
+		end = len(line)
+	}
+	if end < start {
+		end = start
+	}
+	fragment := line[start:end]
+	selectionStart, selectionEnd, selected := dashboardSelectionRange(selection, sequence, len(line))
+	if fragment == "" || !color && !selected {
+		return fragment
 	}
 	prefixEnd := 0
 	if strings.HasPrefix(line, "[") {
@@ -1455,22 +1853,116 @@ func renderDashboardLogLine(value string, color bool) string {
 	}
 	remainder := line[prefixEnd:]
 	severityStart, severityEnd, severityStyle := dashboardLogSeverity(remainder)
+	if severityStart >= 0 {
+		severityStart += prefixEnd
+		severityEnd += prefixEnd
+	}
+	searchRanges := dashboardSearchRanges(line, query)
+	searchIndex := 0
+	styleAt := func(offset int) string {
+		style := ""
+		if color {
+			for searchIndex < len(searchRanges) && offset >= searchRanges[searchIndex].End {
+				searchIndex++
+			}
+			if searchIndex < len(searchRanges) && offset >= searchRanges[searchIndex].Start {
+				style = dashboardBoldMagenta
+			} else if offset < prefixEnd {
+				style = dashboardCyan
+			} else if severityStart >= 0 && offset >= severityStart && offset < severityEnd {
+				style = severityStyle
+			}
+		}
+		if selected && offset >= selectionStart && offset < selectionEnd {
+			style += dashboardReverse
+		}
+		return style
+	}
 	var rendered strings.Builder
-	if prefixEnd > 0 {
-		rendered.WriteString(dashboardCyan)
-		rendered.WriteString(line[:prefixEnd])
+	currentStyle := ""
+	for offset, character := range fragment {
+		style := styleAt(start + offset)
+		if style != currentStyle {
+			if currentStyle != "" {
+				rendered.WriteString(dashboardReset)
+			}
+			if style != "" {
+				rendered.WriteString(style)
+			}
+			currentStyle = style
+		}
+		rendered.WriteRune(character)
+	}
+	if currentStyle != "" {
 		rendered.WriteString(dashboardReset)
 	}
-	if severityStart < 0 {
-		rendered.WriteString(remainder)
-		return rendered.String()
-	}
-	rendered.WriteString(remainder[:severityStart])
-	rendered.WriteString(severityStyle)
-	rendered.WriteString(remainder[severityStart:severityEnd])
-	rendered.WriteString(dashboardReset)
-	rendered.WriteString(remainder[severityEnd:])
 	return rendered.String()
+}
+
+func dashboardSelectionRange(selection dashboardSelection, sequence int64, lineBytes int) (int, int, bool) {
+	if !selection.Valid {
+		return 0, 0, false
+	}
+	start, end := dashboardOrderedSelection(selection)
+	if sequence < start.Sequence || sequence > end.Sequence {
+		return 0, 0, false
+	}
+	selectionStart := 0
+	selectionEnd := lineBytes
+	if sequence == start.Sequence {
+		selectionStart = start.Offset
+	}
+	if sequence == end.Sequence {
+		selectionEnd = end.Offset
+	}
+	if selectionStart < 0 {
+		selectionStart = 0
+	}
+	if selectionEnd > lineBytes {
+		selectionEnd = lineBytes
+	}
+	return selectionStart, selectionEnd, selectionEnd > selectionStart
+}
+
+func dashboardSearchRanges(value string, query string) []dashboardLogFragment {
+	query = strings.TrimSpace(query)
+	if value == "" || query == "" {
+		return nil
+	}
+	valueRunes := []rune(value)
+	queryRunes := []rune(query)
+	for index := range valueRunes {
+		valueRunes[index] = unicode.ToLower(valueRunes[index])
+	}
+	for index := range queryRunes {
+		queryRunes[index] = unicode.ToLower(queryRunes[index])
+	}
+	if len(queryRunes) == 0 || len(queryRunes) > len(valueRunes) {
+		return nil
+	}
+	offsets := make([]int, 0, len(valueRunes)+1)
+	for offset := range value {
+		offsets = append(offsets, offset)
+	}
+	offsets = append(offsets, len(value))
+	matches := make([]dashboardLogFragment, 0, 1)
+	for start := 0; start+len(queryRunes) <= len(valueRunes); {
+		matched := true
+		for index := range queryRunes {
+			if valueRunes[start+index] != queryRunes[index] {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			start++
+			continue
+		}
+		end := start + len(queryRunes)
+		matches = append(matches, dashboardLogFragment{Start: offsets[start], End: offsets[end]})
+		start = end
+	}
+	return matches
 }
 
 func dashboardLogSeverity(value string) (int, int, string) {

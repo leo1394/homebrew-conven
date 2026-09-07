@@ -536,6 +536,7 @@ func TestStartRejectsPrepareRedirectedRuntimeBootstrapBeforeStartingService(t *t
 }
 
 func TestRestartExternalConsulPreflightFailsBeforeStoppingOldProcess(t *testing.T) {
+	servicePort := unusedTestTCPPort(t)
 	var passing atomic.Bool
 	passing.Store(true)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -592,7 +593,7 @@ func TestRestartExternalConsulPreflightFailsBeforeStoppingOldProcess(t *testing.
 			"api": {
 				Path:   "api",
 				Kind:   "http",
-				Ports:  map[string]int{"http": 18080},
+				Ports:  map[string]int{"http": servicePort},
 				Runner: model.Runner{Run: []string{launcher}},
 			},
 		},

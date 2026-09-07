@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -157,6 +158,7 @@ func TestStartRunsFromPrepareCreatedRunWorkdir(t *testing.T) {
 }
 
 func TestStartMaterializesConfigBeforePrepareWithoutWritingSource(t *testing.T) {
+	servicePort := unusedTestTCPPort(t)
 	workspaceRoot := t.TempDir()
 	resources := filepath.Join(workspaceRoot, "api", "resources")
 	if err := os.MkdirAll(resources, 0700); err != nil {
@@ -197,9 +199,9 @@ func TestStartMaterializesConfigBeforePrepareWithoutWritingSource(t *testing.T) 
 			"api": {
 				Path:  "api",
 				Kind:  "http",
-				Ports: map[string]int{"http": 18080},
+				Ports: map[string]int{"http": servicePort},
 				Runner: model.Runner{
-					Prepare: []string{"sh", "-c", `grep -q 'port: 18080' "$CONVEN_CONFIG_DIR/application.yaml"`},
+					Prepare: []string{"sh", "-c", `grep -q 'port: ` + strconv.Itoa(servicePort) + `' "$CONVEN_CONFIG_DIR/application.yaml"`},
 					Run:     []string{launcher},
 				},
 			},
@@ -227,9 +229,22 @@ func TestStartMaterializesConfigBeforePrepareWithoutWritingSource(t *testing.T) 
 		t.Fatalf("source application changed: data=%q err=%v", source, err)
 	}
 	runtimeApplication := filepath.Join(workspace.Store.CurrentDir, "configs", "api", "application.yaml")
-	if runtime, err := os.ReadFile(runtimeApplication); err != nil || !strings.Contains(string(runtime), "port: 18080") {
+	if runtime, err := os.ReadFile(runtimeApplication); err != nil || !strings.Contains(string(runtime), "port: "+strconv.Itoa(servicePort)) {
 		t.Fatalf("runtime application was not patched: data=%q err=%v", runtime, err)
 	}
+}
+
+func unusedTestTCPPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
 }
 
 func TestStartDryRunDoesNotFetchOrMaterializeApolloConfig(t *testing.T) {
@@ -513,10 +528,7 @@ func TestReplaceStartKeepsUsableManagedKtctlLease(t *testing.T) {
 			connection.Close()
 		}
 	}()
-	kubeconfig := filepath.Join(workspace.Root, "kubeconfig")
-	if err := os.WriteFile(kubeconfig, []byte("test\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	kubeconfig := writeKubeconfig(t, workspace.Root, "test-context")
 	address := listener.Addr().String()
 	workspace.Manifest.Environments = map[string]model.Environment{
 		"dev": {Connection: model.Connection{
@@ -535,6 +547,10 @@ func TestReplaceStartKeepsUsableManagedKtctlLease(t *testing.T) {
 		Kubeconfig: kubeconfig,
 		Timeout:    2 * time.Second,
 		Readiness:  []ConnectionEndpoint{{Name: "reachable", Address: address}},
+	}
+	connectionConfig, err = pinKtctlKubernetesTarget(connectionConfig)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := workspace.Store.ResetCurrent(); err != nil {
 		t.Fatal(err)
@@ -1146,6 +1162,33 @@ func TestStartRollbackStopsExecServiceAndClearsState(t *testing.T) {
 	}
 	if session != nil {
 		t.Fatalf("successful rollback retained session: %#v", session)
+	}
+}
+
+func TestStartReportsInitializationFailureDiagnostics(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspaceRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspaceRoot, "api"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{
+		Version:   1,
+		Workspace: model.Workspace{Name: "initialization-failure"},
+		Services: map[string]model.Service{
+			"api": {
+				Path:   "api",
+				Runner: model.Runner{Run: []string{"sh", "-c", "printf '2026/09/07 10:11:12 empty etcd hosts\\n'; exit 17"}},
+				Health: model.Health{Type: "tcp", Address: "127.0.0.1:1", Timeout: "2s"},
+			},
+		},
+	})
+	_, err := Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &strings.Builder{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "process exited with code 17") || !strings.Contains(err.Error(), `first fatal log: "2026/09/07 10:11:12 empty etcd hosts"`) {
+		t.Fatalf("startup error = %v", err)
 	}
 }
 

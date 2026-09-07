@@ -133,6 +133,11 @@ func StartService(name string, argv []string, directory string, environment []st
 	command.Stdout = logFile
 	command.Stderr = logFile
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	logOffset, err := logFile.Seek(0, io.SeekEnd)
+	if err != nil {
+		logFile.Close()
+		return ServiceProcess{}, fmt.Errorf("inspect %s log position: %w", name, err)
+	}
 	if err := command.Start(); err != nil {
 		logFile.Close()
 		return ServiceProcess{}, fmt.Errorf("start %s: %w", name, err)
@@ -152,8 +157,13 @@ func StartService(name string, argv []string, directory string, environment []st
 		logFile.Close()
 		return ServiceProcess{}, fmt.Errorf("read %s process identity: %w", name, err)
 	}
+	exit := &serviceProcessExit{done: make(chan struct{}), code: -1}
 	go func() {
 		_ = command.Wait()
+		if command.ProcessState != nil {
+			exit.code = command.ProcessState.ExitCode()
+		}
+		close(exit.done)
 	}()
 	logFile.Close()
 	return ServiceProcess{
@@ -164,6 +174,8 @@ func StartService(name string, argv []string, directory string, environment []st
 		Identity:  identity,
 		LogPath:   logPath,
 		StartedAt: time.Now(),
+		exit:      exit,
+		logOffset: logOffset,
 	}, nil
 }
 

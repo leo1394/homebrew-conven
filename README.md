@@ -148,14 +148,29 @@ Conven, and installs it to `~/.local/bin`. Add that directory to `PATH` if
 prompted. Run the command again to upgrade. To choose a version or destination:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.2 bash
+curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_VERSION=1.0.3 bash
 curl -fsSL https://raw.githubusercontent.com/leo1394/homebrew-conven/master/install.sh | CONVEN_INSTALL_DIR=/absolute/bin bash
 ```
 
 Conven supports macOS and Linux. Homebrew and `install.sh` install Conven only;
 they do not install project language runtimes or package managers. `ktctl` is
 required only when the selected environment uses that connection driver. A
-matching Homebrew bottle does not require Go on the client.
+matching Homebrew bottle does not require Go on the client. `kubectl` is
+recommended for the fast Kubernetes API readiness probe and is required for
+the guarded one-time recovery from an ambiguous ktctl Pod CREATE EOF; without
+it, Conven uses read-only `ktctl birdseye` for readiness and fails closed on
+that recovery path. Before each managed ktctl launch, Conven requires three
+consecutive successful Kubernetes API probes. It reads the selected kubeconfig
+once into a private `0600` snapshot so the gate, recovery, and both launch
+attempts cannot drift to a different cluster if the source file changes. Every
+launch receives a unique ownership label and annotation. If ktctl exits during
+Pod creation with EOF, Conven retries once only when it can observe and delete
+resources owned by that exact attempt using UID preconditions, then confirm the
+exact names and UIDs are absent even if their labels change; an empty or
+ambiguous audit fails closed. It repeats the stability gate immediately before
+retrying. Managed attempts use local time and disable ktctl's namespace-wide
+stale-resource cleanup, so readiness checks and connection startup neither
+create a separate time-rectifier Pod nor delete another user's ktctl resources.
 
 ## Quick start
 
@@ -350,12 +365,39 @@ Apollo application.yml
 The second pipeline also defines precedence: each later patch operates on the
 result of the previous stage. `services.portal-api-service.config.patches` is
 a concrete example of a service-scoped manifest patch.
-`workspace.disabledBindings` disables matching clients only when they exist in
-the fetched configuration; it never creates a missing binding. The
+`workspace.disabledBindings` requests disabling matching clients; it never
+creates a missing binding. This is not proof that application code supports
+disabling that client. Before build, the go-zero adapter checks each selected
+service's source for a guarded optional client or an unused configuration field.
+Unknown or unconditional initialization fails with the service, binding, and
+source location. An empty `discovType` alone is not a disable switch in go-zero:
+without a guard it falls back to direct/Etcd client initialization. Residual
+`target`, `endpoints`/`endpints`, or Etcd hosts/key in a disabled binding are rejected;
+remove those routes explicitly rather than supplying a dummy endpoint. Unsupported
+adapters cannot certify a declared disabled client. The status list shows requests,
+not verified capabilities. Unknown binding names are rejected; a known binding
+owned only by an unselected service is allowed and is not reported as verified
+for the selected services. The
 local-isolation guard enforces and verifies final listener and registration
 behavior, while
 Consul preflight checks the remote dependencies that remain enabled in the
 final runtime configuration.
+
+A service exiting before readiness is reported as an initialization failure,
+separately from a readiness timeout. Diagnostics include the exit code, effective
+configuration path, and fatal log evidence from the current launch (not an earlier
+append-only log segment). A binding is named only when the log identifies it
+unambiguously. Configuration failures do not trigger automatic service restarts
+or VPN reconnection; the existing bounded retries apply to network preflights.
+
+The final RPC configuration preflight also checks source-declared go-zero clients
+that are not disabled. Required clients must have a complete Consul, direct, or
+Etcd route; an empty configuration is allowed only for a proven optional/unused
+client. Endpoint YAML spelling must match the local go-zero implementation
+(`endpints` in some forks), rather than passing a key that the service ignores.
+This check reads module metadata with `go mod edit -json` without rewriting the
+file or fetching dependencies. Version-specific, ambiguous, or remote go-zero
+replacements cannot certify an endpoint YAML key and fail closed.
 
 ### Service runtime configuration contract
 

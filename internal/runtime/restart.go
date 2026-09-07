@@ -209,7 +209,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 				if err := WaitHealthyChecks(ctx, process, service.HealthChecks); err != nil {
 					fmt.Fprintf(output, "%s %s; last log lines:\n", style.Failure("✗ Health check failed:"), style.Identifier(name))
 					ShowLogs(context.Background(), session, []string{name}, false, output)
-					return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
+					return nil, rollbackRestartGroup(workspace, session, processes, started, output, diagnoseStartupFailure(err, process, service))
 				}
 				process.Verification = "healthy"
 				replaceSessionProcess(session, process)

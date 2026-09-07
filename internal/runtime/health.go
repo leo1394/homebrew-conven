@@ -24,6 +24,32 @@ type HealthCheck struct {
 	Timeout     time.Duration
 }
 
+type processInitializationError struct {
+	service  string
+	exitCode int
+}
+
+func (err *processInitializationError) Error() string {
+	if err.exitCode < 0 {
+		return fmt.Sprintf("%s initialization failed: process exited (exit code unavailable or terminated by signal)", err.service)
+	}
+	return fmt.Sprintf("%s initialization failed: process exited with code %d", err.service, err.exitCode)
+}
+
+type readinessTimeoutError struct {
+	service string
+	timeout time.Duration
+	cause   error
+}
+
+func (err *readinessTimeoutError) Error() string {
+	return fmt.Sprintf("%s readiness timed out after %s: %v", err.service, err.timeout, err.cause)
+}
+
+func (err *readinessTimeoutError) Unwrap() error {
+	return err.cause
+}
+
 func WaitHealthy(ctx context.Context, process ServiceProcess, check HealthCheck) error {
 	if check.Timeout <= 0 {
 		check.Timeout = 60 * time.Second
@@ -38,21 +64,24 @@ func WaitHealthy(ctx context.Context, process ServiceProcess, check HealthCheck)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !ProcessAlive(process.PID) {
-			return fmt.Errorf("%s exited before becoming healthy", process.Name)
+		if exitCode, exited := serviceProcessExitCode(process); exited {
+			return &processInitializationError{service: process.Name, exitCode: exitCode}
 		}
 		lastError = checkHealth(healthContext, check)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if exitCode, exited := serviceProcessExitCode(process); exited {
+			return &processInitializationError{service: process.Name, exitCode: exitCode}
+		}
 		if lastError == nil {
-			if !ProcessAlive(process.PID) {
-				return fmt.Errorf("%s exited before becoming healthy", process.Name)
-			}
 			return nil
 		}
 		if healthContext.Err() != nil {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			return fmt.Errorf("%s health check timed out after %s: %w", process.Name, check.Timeout, lastError)
+			return &readinessTimeoutError{service: process.Name, timeout: check.Timeout, cause: lastError}
 		}
 		timer := time.NewTimer(250 * time.Millisecond)
 		select {
@@ -61,6 +90,21 @@ func WaitHealthy(ctx context.Context, process ServiceProcess, check HealthCheck)
 		case <-timer.C:
 		}
 	}
+}
+
+func serviceProcessExitCode(process ServiceProcess) (int, bool) {
+	if process.exit != nil {
+		select {
+		case <-process.exit.done:
+			return process.exit.code, true
+		default:
+			return 0, false
+		}
+	}
+	if !ProcessAlive(process.PID) {
+		return -1, true
+	}
+	return 0, false
 }
 
 func WaitHealthyChecks(ctx context.Context, process ServiceProcess, checks []HealthCheck) error {

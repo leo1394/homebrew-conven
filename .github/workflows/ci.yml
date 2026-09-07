@@ -21,8 +21,6 @@ jobs:
           cache: true
       - name: Check installer syntax
         run: bash -n install.sh
-      - name: Check project plugins are not bundled
-        run: test ! -e internal/plugins/builtin/generate-apollo-consul.py
       - name: Check module graph
         run: go mod tidy -diff
       - name: Test
@@ -35,43 +33,6 @@ jobs:
       - name: Build
         run: go build ./cmd/conven
 
-  adapter-smoke:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        runtime: [jdk17, node22, python, bun]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: actions/setup-java@v4
-        if: matrix.runtime == 'jdk17'
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: actions/setup-node@v4
-        if: matrix.runtime == 'node22'
-        with:
-          node-version: '22'
-      - uses: actions/setup-python@v5
-        if: matrix.runtime == 'python'
-        with:
-          python-version: '3.x'
-      - uses: oven-sh/setup-bun@v2
-        if: matrix.runtime == 'bun'
-      - name: Verify runtime
-        run: |
-          case "${{ matrix.runtime }}" in
-            jdk17) java -version ;;
-            node22) node --version ;;
-            python) python --version ;;
-            bun) bun --version ;;
-          esac
-      - name: Test typed adapter fixtures
-        run: go test ./internal/config -run 'TestTypedAnalyzer|TestKnownDynamicFramework'
-
   homebrew:
     runs-on: macos-latest
     steps:
@@ -81,7 +42,7 @@ jobs:
           mandoc -Tlint docs/conven.1
           ruby -c Formula/conven.rb
           brew style Formula/conven.rb install.sh
-      - name: Install and test stable and HEAD Formula from checkout
+      - name: Install and test HEAD Formula from checkout
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1
         run: |
@@ -96,124 +57,5 @@ jobs:
           # shellcheck disable=SC2016
           ruby -pi -e 'url = "file://" + ENV.fetch("GITHUB_WORKSPACE"); $_ = $_.sub(/^  head .*$/, "  head #{url.inspect}, using: :git, branch: \"conven-ci-head\"")' "$formula"
           grep -F "head \"file://$GITHUB_WORKSPACE\", using: :git, branch: \"conven-ci-head\"" "$formula"
-          brew install "$tap/conven"
-          brew test "$tap/conven"
-          brew uninstall "$tap/conven"
           brew install --HEAD "$tap/conven"
           brew test "$tap/conven"
-
-          conven_prefix="$(brew --prefix "$tap/conven")"
-          conven_bin="$conven_prefix/bin/conven"
-          expected_version="$(<VERSION.txt)"
-          expected_version_date="$(sed -nE 's/^var versionDate = "([0-9]{4}-[0-9]{2}-[0-9]{2})"$/\1/p' cmd/conven/main.go)"
-          test -n "$expected_version_date"
-          version_output="$("$conven_bin" --version)"
-          printf '%s\n' "$version_output"
-          version_metadata="$(tail -n 2 <<< "$version_output")"
-          test "$version_metadata" = "$(printf 'conven version %s (%s)\n%s' "$expected_version" "$expected_version_date" 'https://github.com/leo1394/homebrew-conven')"
-          c_workspace="$RUNNER_TEMP/conven-c-workspace"
-          mkdir -p "$c_workspace"
-          "$conven_bin" -C "$c_workspace" init
-          c_services="$("$conven_bin" -C "$c_workspace" services --list)"
-          grep -Fq user-svc <<< "$c_services"
-          completion_services="$("$conven_bin" -C "$c_workspace" __completion candidates services)"
-          grep -Fxq user-svc <<< "$completion_services"
-          test -s "$conven_prefix/share/man/man1/conven.1"
-          MANPATH="$conven_prefix/share/man" man -w conven | grep -Fq "$conven_prefix/share/man/man1/conven.1"
-          completion_dir="$RUNNER_TEMP/conven-completions"
-          mkdir -p "$completion_dir"
-          "$conven_bin" __completion bash > "$completion_dir/conven.bash"
-          "$conven_bin" __completion zsh > "$completion_dir/_conven"
-          "$conven_bin" __completion fish > "$completion_dir/conven.fish"
-          grep -Fq "complete -F _conven conven" "$completion_dir/conven.bash"
-          grep -Fq "#compdef conven" "$completion_dir/_conven"
-          grep -Fq "complete -c conven" "$completion_dir/conven.fish"
-          grep -Fq -- "-C init services" "$completion_dir/conven.bash"
-          grep -Fq -- "'-C:run as if conven was started" "$completion_dir/_conven"
-          grep -Fq -- "-s C" "$completion_dir/conven.fish"
-          grep -Fq -- "__completion candidates services" "$completion_dir/conven.bash"
-          grep -Fq -- "__completion candidates services" "$completion_dir/_conven"
-          grep -Fq -- "__conven_completion_candidates services" "$completion_dir/conven.fish"
-          grep -Fq -- "__completion candidates environments" "$completion_dir/conven.bash"
-          grep -Fq -- "__completion candidates environments" "$completion_dir/_conven"
-          grep -Fq -- "__conven_completion_candidates environments" "$completion_dir/conven.fish"
-          grep -Fq -- "__completion candidates plugins" "$completion_dir/conven.bash"
-          grep -Fq -- "__completion candidates plugins" "$completion_dir/_conven"
-          grep -Fq -- "__conven_completion_candidates plugins" "$completion_dir/conven.fish"
-          bash_top="$(grep -m 1 -F 'compgen -W "' "$completion_dir/conven.bash" | sed -E 's/.*compgen -W "([^"]+)".*/\1/')"
-          for command in init services config workspace plugins status doctor help version; do
-            case " $bash_top " in
-              *" $command "*) ;;
-              *) echo "missing bash top-level completion: $command" >&2; exit 1 ;;
-            esac
-            grep -Fq "        '$command:" "$completion_dir/_conven"
-            grep -Fq "complete -c conven -f -n '__conven_without_command' -a $command " "$completion_dir/conven.fish"
-          done
-          for command in catalog policy discover list logs start restart stop; do
-            case " $bash_top " in
-              *" $command "*) echo "retained bash top-level completion: $command" >&2; exit 1 ;;
-            esac
-            if grep -Fq "        '$command:" "$completion_dir/_conven"; then
-              echo "retained zsh top-level completion: $command" >&2
-              exit 1
-            fi
-            if grep -Fq "complete -c conven -f -n '__conven_without_command' -a $command " "$completion_dir/conven.fish"; then
-              echo "retained fish top-level completion: $command" >&2
-              exit 1
-            fi
-          done
-          for action in list registry status logs dashboard start restart stop stop-all cleanup listen; do
-            grep -Fq -- "--$action" "$completion_dir/conven.bash"
-            grep -Fq -- "--$action" "$completion_dir/_conven"
-            grep -Fq -- "-l $action" "$completion_dir/conven.fish"
-          done
-          for action in edit validate migrate import reset; do
-            grep -Fq -- "--$action" "$completion_dir/conven.bash"
-            grep -Fq -- "--$action" "$completion_dir/_conven"
-            grep -Fq -- "-l $action" "$completion_dir/conven.fish"
-          done
-          for action in install list remove run; do
-            grep -Fq -- "--$action" "$completion_dir/conven.bash"
-            grep -Fq -- "--$action" "$completion_dir/_conven"
-            grep -Fq -- "-l $action" "$completion_dir/conven.fish"
-          done
-          for shortcut in --dev --test; do
-            grep -Fq -- "$shortcut" "$completion_dir/conven.bash"
-            grep -Fq -- "$shortcut" "$completion_dir/_conven"
-          done
-          grep -Fq -- "-l dev" "$completion_dir/conven.fish"
-          grep -Fq -- "-l test" "$completion_dir/conven.fish"
-          grep -Fq -- "--tail" "$completion_dir/conven.bash"
-          grep -Fq -- "--tail" "$completion_dir/_conven"
-          grep -Fq -- "-l tail" "$completion_dir/conven.fish"
-          grep -Fq -- "--prune" "$completion_dir/conven.bash"
-          grep -Fq -- "--prune" "$completion_dir/_conven"
-          grep -Fq -- "-l prune" "$completion_dir/conven.fish"
-          if grep -Fq -- "--follow" "$completion_dir/conven.bash" "$completion_dir/_conven"; then
-            echo "retained removed --follow completion" >&2
-            exit 1
-          fi
-          if grep -Fq -- "-l follow" "$completion_dir/conven.fish"; then
-            echo "retained removed fish --follow completion" >&2
-            exit 1
-          fi
-          if grep -Fq -- "--workspace" "$completion_dir/conven.bash" "$completion_dir/_conven"; then
-            echo "retained removed --workspace completion" >&2
-            exit 1
-          fi
-          if grep -Fq -- "--config" "$completion_dir/conven.bash" "$completion_dir/_conven"; then
-            echo "retained removed --config completion" >&2
-            exit 1
-          fi
-          if grep -Fq -- "-l workspace" "$completion_dir/conven.fish"; then
-            echo "retained removed fish --workspace completion" >&2
-            exit 1
-          fi
-          if grep -Fq -- "-l config" "$completion_dir/conven.fish"; then
-            echo "retained removed fish --config completion" >&2
-            exit 1
-          fi
-          if grep -Fq "convening" "$completion_dir/conven.bash" "$completion_dir/_conven" "$completion_dir/conven.fish"; then
-            echo "retained removed convening completion" >&2
-            exit 1
-          fi

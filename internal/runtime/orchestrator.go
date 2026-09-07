@@ -319,7 +319,7 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 				if err := WaitHealthyChecks(ctx, process, service.HealthChecks); err != nil {
 					fmt.Fprintf(output, "%s %s; last log lines:\n", style.Failure("✗ Health check failed:"), style.Identifier(name))
 					ShowLogs(context.Background(), session, []string{name}, false, output)
-					return nil, fail(err)
+					return nil, fail(diagnoseStartupFailure(err, process, service))
 				}
 				process.Verification = "healthy"
 				replaceSessionProcess(session, process)
@@ -381,6 +381,10 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		}
 	}
 	for _, process := range session.Services {
+		if exitCode, exited := serviceProcessExitCode(process); exited {
+			failure := &processInitializationError{service: process.Name, exitCode: exitCode}
+			return nil, fail(diagnoseStartupFailure(failure, process, plan.Services[process.Name]))
+		}
 		if !ProcessAlive(process.PID) || VerifyProcess(process) != nil {
 			return nil, fail(fmt.Errorf("%s exited or changed identity during startup", process.Name))
 		}

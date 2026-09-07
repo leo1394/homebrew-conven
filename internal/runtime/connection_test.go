@@ -323,6 +323,8 @@ func TestEnsureConnectionExitReportsStatusLogAndEndpoints(t *testing.T) {
 	address := listener.Addr().String()
 	listener.Close()
 	directory := t.TempDir()
+	writeStableKubectl(t, directory)
+	kubeconfig := writeKubeconfig(t, directory, "test-context")
 	logPath := filepath.Join(directory, "connection.log")
 	ktctl := filepath.Join(directory, "ktctl")
 	if err := os.WriteFile(ktctl, []byte("#!/bin/sh\nprintf '\\033[31mPost /api/v1/namespaces/default/pods: EOF\\033[0m\\n'\nsleep 0.5\nexit 7\n"), 0700); err != nil {
@@ -333,6 +335,8 @@ func TestEnsureConnectionExitReportsStatusLogAndEndpoints(t *testing.T) {
 	process, err := EnsureConnection(context.Background(), ConnectionConfig{
 		Driver:     "ktctl",
 		Command:    ktctl,
+		Kubeconfig: kubeconfig,
+		Context:    "test-context",
 		Timeout:   3 * time.Second,
 		Readiness: []ConnectionEndpoint{{Name: "cluster-api", Address: address}},
 	}, logPath, "exit-diagnostics-workspace", &output)
@@ -374,6 +378,14 @@ func TestEnsureConnectionDoesNotRetryUnknownKtctlPodCreate(t *testing.T) {
 	address := listener.Addr().String()
 	listener.Close()
 	directory := t.TempDir()
+	kubeconfig := writeKubeconfig(t, directory, "test-context")
+	writeKubectl(t, directory, `#!/bin/sh
+case " $* " in
+  *" get --raw=/readyz "*) exit 0 ;;
+  *" get pods,configmaps "*) printf 'not-json\n'; exit 0 ;;
+esac
+exit 1
+`)
 	logPath := filepath.Join(directory, "connection.log")
 	attemptsPath := filepath.Join(directory, "attempts")
 	pidPath := filepath.Join(directory, "pid")
@@ -400,6 +412,8 @@ exit 0
 	process, err := EnsureConnection(context.Background(), ConnectionConfig{
 		Driver:     "ktctl",
 		Command:    ktctl,
+		Kubeconfig: kubeconfig,
+		Context:    "test-context",
 		Namespace:  "test",
 		Timeout:    10 * time.Second,
 		Readiness:  []ConnectionEndpoint{{Name: "cluster-api", Address: address}},
@@ -410,7 +424,7 @@ exit 0
 	if process != nil {
 		t.Fatalf("uncertain Pod creation returned residual process: %#v", process)
 	}
-	for _, expected := range []string{"Kubernetes Pod CREATE EOF", "remote shadow pod state is unknown", "did not retry automatically", "Kubernetes namespace \"test\"", logPath} {
+	for _, expected := range []string{"Kubernetes Pod CREATE EOF", "remote shadow pod state is unknown", "automatic retry was not safe", "malformed JSON", "Kubernetes namespace \"test\"", logPath} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Fatalf("connection error %q does not contain %q", err, expected)
 		}
@@ -445,8 +459,8 @@ exit 0
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) == ".json" {
-			t.Fatalf("uncertain Pod creation retained registry record %q", entry.Name())
+		if extension := filepath.Ext(entry.Name()); extension == ".json" || extension == ".kubeconfig" {
+			t.Fatalf("uncertain Pod creation retained connection state %q", entry.Name())
 		}
 	}
 }
@@ -455,6 +469,8 @@ func TestEnsureConnectionReportsElevatedTargetExit(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	directory := t.TempDir()
+	writeStableKubectl(t, directory)
+	kubeconfig := writeKubeconfig(t, directory, "test-context")
 	fakeSudo := filepath.Join(directory, "sudo")
 	pidPath := filepath.Join(directory, "elevated.pid")
 	script := `#!/bin/sh
@@ -496,6 +512,8 @@ exit 1
 	process, err := EnsureConnection(context.Background(), ConnectionConfig{
 		Driver:     "ktctl",
 		Command:    yesPath,
+		Kubeconfig: kubeconfig,
+		Context:    "test-context",
 		Sudo:       true,
 		Timeout:    3 * time.Second,
 		Readiness:  []ConnectionEndpoint{{Name: "cluster-api", Address: address}},
@@ -548,6 +566,8 @@ func TestEnsureConnectionCancellationWinsOverConcurrentExit(t *testing.T) {
 	address := listener.Addr().String()
 	listener.Close()
 	directory := t.TempDir()
+	writeStableKubectl(t, directory)
+	kubeconfig := writeKubeconfig(t, directory, "test-context")
 	startedPath := filepath.Join(directory, "started")
 	exitPath := filepath.Join(directory, "exit")
 	ktctl := filepath.Join(directory, "ktctl")
@@ -568,12 +588,14 @@ func TestEnsureConnectionCancellationWinsOverConcurrentExit(t *testing.T) {
 		process, err := EnsureConnection(ctx, ConnectionConfig{
 			Driver:     "ktctl",
 			Command:    ktctl,
+			Kubeconfig: kubeconfig,
+			Context:    "test-context",
 			Timeout:    5 * time.Second,
 			Readiness:  []ConnectionEndpoint{{Name: "cancel-target", Address: address}},
 		}, filepath.Join(directory, "connection.log"), "cancel-workspace", &output)
 		done <- result{process: process, err: err}
 	}()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if _, err := os.Stat(startedPath); err == nil {
 			break
@@ -960,6 +982,7 @@ func TestManagedConnectionSecondLeasePreservesOriginalLog(t *testing.T) {
 func TestKtctlRegistryRejectsSecondStateRootConnection(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	directory := t.TempDir()
+	kubeconfig := writeKubeconfig(t, directory, "test-context")
 	service, err := StartService("existing-ktctl", []string{"sleep", "600"}, directory, CommandEnvironment(), filepath.Join(directory, "existing.log"))
 	if err != nil {
 		t.Fatal(err)
@@ -995,6 +1018,8 @@ func TestKtctlRegistryRejectsSecondStateRootConnection(t *testing.T) {
 	process, err := EnsureConnection(context.Background(), ConnectionConfig{
 		Driver:     "ktctl",
 		Command:    "different-ktctl",
+		Kubeconfig: kubeconfig,
+		Context:    "test-context",
 		Timeout:    100 * time.Millisecond,
 		Readiness:  []ConnectionEndpoint{{Name: "closed", Address: address}},
 	}, filepath.Join(directory, "second.log"), "workspace-b", io.Discard)
@@ -1006,6 +1031,7 @@ func TestKtctlRegistryRejectsSecondStateRootConnection(t *testing.T) {
 func TestKtctlRegistryIgnoresManagedCommandConnection(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	directory := t.TempDir()
+	kubeconfig := writeKubeconfig(t, directory, "test-context")
 	service, err := StartService("existing-command", []string{"sleep", "600"}, directory, CommandEnvironment(), filepath.Join(directory, "existing.log"))
 	if err != nil {
 		t.Fatal(err)
@@ -1041,6 +1067,8 @@ func TestKtctlRegistryIgnoresManagedCommandConnection(t *testing.T) {
 	process, err := EnsureConnection(context.Background(), ConnectionConfig{
 		Driver:     "ktctl",
 		Command:    "conven-ktctl-that-does-not-exist",
+		Kubeconfig: kubeconfig,
+		Context:    "test-context",
 		Timeout:    100 * time.Millisecond,
 		Readiness:  []ConnectionEndpoint{{Name: "closed", Address: address}},
 	}, filepath.Join(directory, "second.log"), "workspace-b", io.Discard)

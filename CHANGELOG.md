@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.3 - 2026-09-07
+
+- Harden managed ktctl startup with a pinned private kubeconfig snapshot,
+  consecutive Kubernetes API readiness probes, and one fail-closed retry only
+  after attempt-owned resources are safely audited and removed.
+- Validate disabled go-zero bindings and required RPC client routes against the
+  effective runtime configuration, while reporting startup exits separately
+  from readiness timeouts with focused current-launch diagnostics.
+- Improve Dashboard log navigation with case-insensitive search highlighting,
+  stable content-bound selections, continuous follow, and edge-triggered
+  auto-scroll while extending a held mouse selection beyond the viewport.
+- Keep release gates focused on stable Go, Formula, installer, and packaging
+  contracts so ordinary Conven behavior changes do not require duplicated
+  Homebrew workflow assertions.
+
 ## 1.0.2 - 2026-09-05
 
 - Make remote configuration and endpoint readiness tolerant of short network

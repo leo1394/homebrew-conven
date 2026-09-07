@@ -151,21 +151,21 @@ git ls-remote --tags origin "refs/tags/$CONVEN_RELEASE_TAG"
 )
 ```
 
-该动作更新 `cmd/conven/main.go` 中的 `version` 和 `versionDate` 变量、`VERSION.txt`
-以及 Formula 版本断言，执行发布检查，并校验 `.github/workflows/tests.yml` 和
+该动作更新 `cmd/conven/main.go` 中的 `version` 和 `versionDate` 变量以及 `VERSION.txt`，
+执行发布检查，并校验 `.github/workflows/tests.yml` 和
 `.github/workflows/publish.yml`；不会提交、创建 tag、推送、创建 PR 或调度 workflow。
 
 检查所有版本位置：
 
 ```bash
-rg -n "$CONVEN_RELEASE_VERSION|version(Date)? =|assert_equal \"conven " \
+rg -n "$CONVEN_RELEASE_VERSION|version(Date)? =" \
   cmd/conven/main.go VERSION.txt CHANGELOG.md Formula/conven.rb README.md README-ZH.md
 ```
 
 ## 2. 本地检查
 
-`--prepare --bottle` 会执行下列 Go 和 Formula 检查。保留完整命令，便于诊断，以及执行通用发布
-脚本未包含的仓库专用 example 检查：
+`--prepare --bottle` 会执行下列通用 Go 和 Formula 检查。具体命令、配置和 Adapter
+行为由 Go 测试覆盖，不再复制到 Formula 或发布 workflow 中：
 
 ```bash
 go mod tidy -diff
@@ -174,19 +174,6 @@ go test -race -count=1 ./...
 go vet ./...
 go build -o /tmp/conven-release ./cmd/conven
 /tmp/conven-release --version
-test -f examples/application.yaml
-grep -Eq '^version:[[:space:]]+3$' examples/application.yaml
-grep -Fq 'adapter-smoke:' .github/workflows/ci.yml
-for runtime in jdk17 node22 python bun; do grep -Fq "$runtime" .github/workflows/ci.yml; done
-test ! -e examples/loom.yaml
-test ! -e examples/conven.yaml
-test ! -e examples/workspace/catalog.yaml
-test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC.md
-test -f examples/workspace/CONVEN-WORKSPACE-POLICY-GENERATOR-AI-SPEC-EN.md
-test -f examples/workspace/README.md
-test -f internal/plugins/builtin/README.md
-test ! -e internal/plugins/builtin/generate-apollo-consul.py
-
 ruby -c Formula/conven.rb
 brew style Formula/conven.rb
 

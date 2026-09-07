@@ -46,6 +46,13 @@ type ServiceProcess struct {
 	Listeners         map[string]ListenerEvidence `json:"listeners,omitempty"`
 	Registration      *RegistrationEvidence `json:"registration,omitempty"`
 	ConsumerIsolation map[string]ConsumerIsolationEvidence `json:"consumerIsolation,omitempty"`
+	exit               *serviceProcessExit
+	logOffset          int64
+}
+
+type serviceProcessExit struct {
+	done chan struct{}
+	code int
 }
 
 type ListenerEvidence struct {

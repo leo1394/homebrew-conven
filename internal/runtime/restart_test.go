@@ -157,6 +157,42 @@ func TestRestartOnlyReloadsChangedServicesAndPreservesLogs(t *testing.T) {
 	}
 }
 
+func TestRestartReportsInitializationFailureDiagnostics(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspaceRoot := t.TempDir()
+	serviceDirectory := filepath.Join(workspaceRoot, "api")
+	if err := os.Mkdir(serviceDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := testWorkspace(t, workspaceRoot, &model.Manifest{
+		Version:   1,
+		Workspace: model.Workspace{Name: "restart-initialization-failure"},
+		Services: map[string]model.Service{
+			"api": {
+				Path:   "api",
+				Runner: model.Runner{Run: []string{"sleep", "600"}},
+				Health: model.Health{Type: "process", Timeout: "2s"},
+			},
+		},
+	})
+	var output strings.Builder
+	if _, err := Start(context.Background(), workspace, StartOptions{
+		Common:   CommonOptions{Environment: "dev"},
+		Services: []string{"api"},
+		Output:   &output,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := workspace.Manifest.Services["api"]
+	service.Runner.Run = []string{"sh", "-c", "printf 'FATAL restart configuration failed\\n'; exit 29"}
+	workspace.Manifest.Services["api"] = service
+	output.Reset()
+	_, err := Restart(context.Background(), workspace, RestartOptions{Services: []string{"api"}, Output: &output})
+	if err == nil || !strings.Contains(err.Error(), "process exited with code 29") || !strings.Contains(err.Error(), `first fatal log: "FATAL restart configuration failed"`) {
+		t.Fatalf("restart error = %v", err)
+	}
+}
+
 func TestRestartDoesNotRematerializeUnchangedServiceConfig(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	for _, name := range []string{"api", "order"} {
