@@ -1110,7 +1110,10 @@ func TestEnsureConnectionDoesNotRetryUnsupportedKtctlMode(t *testing.T) {
 func TestEnsureConnectionDoesNotRetryPodCreateEOFWithoutKubectl(t *testing.T) {
 	directory := t.TempDir()
 	kubeconfig := writeKubeconfig(t, directory, "test-context")
-	t.Setenv("PATH", directory+string(os.PathListSeparator)+"/usr/bin:/bin")
+	if err := os.Symlink("/bin/ps", filepath.Join(directory, "ps")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
 	attemptsPath := filepath.Join(directory, "attempts")
 	ktctl := filepath.Join(directory, "ktctl")
 	if err := os.WriteFile(ktctl, []byte(`#!/bin/sh
