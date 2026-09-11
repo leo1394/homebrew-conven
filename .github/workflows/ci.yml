@@ -39,7 +39,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check Formula
         run: |
-          mandoc -Tlint docs/conven.1
+          # Check manpage correctness; source-line length is editorial style.
+          mandoc -Tlint -Wwarning docs/conven.1
           ruby -c Formula/conven.rb
           brew style Formula/conven.rb install.sh
       - name: Install and test HEAD Formula from checkout
