@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.4 - 2026-09-11
+
+- Require a Conven-managed ktctl connection instead of treating reachable TCP
+  endpoints as proof that an unrelated external tunnel is usable.
+- Require ktctl's tunnel-established evidence before declaring connection
+  readiness, and reject proxy Fake-IP addresses from `198.18.0.0/15` with a
+  focused endpoint diagnostic.
+
 ## 1.0.3 - 2026-09-07
 
 - Harden managed ktctl startup with a pinned private kubeconfig snapshot,

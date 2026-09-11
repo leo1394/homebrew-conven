@@ -757,6 +757,71 @@ func TestEnsureConnectionRetriesPodCreateEOFAfterOwnedResidualCleanup(t *testing
 	}
 }
 
+func TestEnsureKtctlDoesNotReuseTCPOnlyExternalConnection(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	writeStableKubectl(t, directory)
+	kubeconfig := writeKubeconfig(t, directory, "test-context")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	startedPath := filepath.Join(directory, "ktctl-started")
+	ktctl := filepath.Join(directory, "ktctl")
+	script := `#!/bin/sh
+printf 'started\n' > "$CONVEN_TEST_KTCTL_STARTED"
+printf 'INF All looks good, now you can access to resources in the kubernetes cluster\n'
+while :; do sleep 1; done
+`
+	if err := os.WriteFile(ktctl, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CONVEN_TEST_KTCTL_STARTED", startedPath)
+	var output bytes.Buffer
+	process, err := EnsureConnection(context.Background(), ConnectionConfig{
+		Driver:     "ktctl",
+		Command:    ktctl,
+		Kubeconfig: kubeconfig,
+		Context:    "test-context",
+		Namespace:  "test",
+		Timeout:    4 * time.Second,
+		Readiness:  []ConnectionEndpoint{{Name: "apollo", Address: listener.Addr().String()}},
+	}, filepath.Join(directory, "connection.log"), "managed-workspace", &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = releaseConnection(context.Background(), process, "managed-workspace", true, io.Discard)
+	}()
+	if !process.Owned || !process.Managed {
+		t.Fatalf("ktctl process = %#v, want owned managed connection", process)
+	}
+	if _, err := os.Stat(startedPath); err != nil {
+		t.Fatalf("ktctl was not started: %v", err)
+	}
+	if strings.Contains(output.String(), "reusing the external connection") {
+		t.Fatalf("TCP-only endpoint was treated as an external ktctl connection: %s", output.String())
+	}
+}
+
+func TestProxyFakeIPRangeIsRejected(t *testing.T) {
+	for _, address := range []string{"198.18.0.1", "198.19.255.254"} {
+		if !isProxyFakeIP(net.ParseIP(address)) {
+			t.Fatalf("proxy Fake-IP %s was accepted", address)
+		}
+	}
+	for _, address := range []string{"198.17.255.255", "198.20.0.1", "10.2.100.92", "::1"} {
+		if isProxyFakeIP(net.ParseIP(address)) {
+			t.Fatalf("non Fake-IP %s was rejected", address)
+		}
+	}
+	diagnostics, ready := probeConnectionEndpoints(context.Background(), []ConnectionEndpoint{{Name: "apollo", Address: "198.18.67.209:8080", rejectProxyFakeIP: true}})
+	if ready || len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Detail, "proxy Fake-IP 198.18.67.209") {
+		t.Fatalf("Fake-IP readiness diagnostics = %#v, ready=%t", diagnostics, ready)
+	}
+}
+
 func TestEnsureConnectionDoesNotRetryPodCreateEOFWithoutObservableResidual(t *testing.T) {
 	directory := t.TempDir()
 	writeStableKubectl(t, directory)
@@ -1342,6 +1407,7 @@ if [ "$attempts" -eq 1 ] || [ "$CONVEN_TEST_SUCCEED_SECOND" != "1" ]; then
   printf 'ERR Exit: Post "https://cluster/api/v1/namespaces/test/pods": EOF\n'
   exit 7
 fi
+printf 'INF All looks good, now you can access to resources in the kubernetes cluster\n'
 exec "$CONVEN_TEST_BINARY" -test.run=^TestConnectionHelperProcess$
 `
 	if err := os.WriteFile(ktctl, []byte(script), 0700); err != nil {

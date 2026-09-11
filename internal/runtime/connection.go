@@ -26,6 +26,8 @@ import (
 type ConnectionEndpoint struct {
 	Name    string
 	Address string
+
+	rejectProxyFakeIP bool
 }
 
 type ConnectionConfig struct {
@@ -69,6 +71,8 @@ const connectionDiagnosticLogLines = 12
 const connectionDiagnosticProbeTimeout = 750 * time.Millisecond
 const connectionExitReapGrace = 500 * time.Millisecond
 const connectionReadinessStableProbes = 2
+const ktctlTunnelReadyMarker = "all looks good, now you can access to resources in the kubernetes cluster"
+const ktctlTunnelEvidenceBytes = 1024 * 1024
 
 func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath string, lease string, output io.Writer) (*ConnectionProcess, error) {
 	if config.Driver == "" || config.Driver == "none" {
@@ -85,6 +89,9 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 		return nil, errors.New("connection lease is empty")
 	}
 	if config.Driver == "ktctl" {
+		for index := range config.Readiness {
+			config.Readiness[index].rejectProxyFakeIP = true
+		}
 		if err := validateKtctlConnectionArgs(config.Args); err != nil {
 			return nil, err
 		}
@@ -163,13 +170,16 @@ func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath stri
 			fmt.Fprintln(output, style.Success("✓ Remote endpoints are reachable through a managed shared connection; lease added."))
 			return &process, nil
 		}
-		fmt.Fprintln(output, style.Success("✓ Remote endpoints are already reachable; reusing the external connection."))
-		return &ConnectionProcess{
-			Driver:      config.Driver,
-			Owned:       false,
-			Managed:     false,
-			Fingerprint: fingerprint,
-		}, nil
+		if config.Driver != "ktctl" {
+			fmt.Fprintln(output, style.Success("✓ Remote endpoints are already reachable; reusing the external connection."))
+			return &ConnectionProcess{
+				Driver:      config.Driver,
+				Owned:       false,
+				Managed:     false,
+				Fingerprint: fingerprint,
+			}, nil
+		}
+		fmt.Fprintln(output, style.Detail("Reachable TCP endpoints do not prove a ktctl tunnel; starting a managed connection."))
 	}
 	if record != nil {
 		return nil, fmt.Errorf("managed %s connection is running but readiness endpoints are unavailable; fingerprint=%s log=%s", record.Process.Driver, fingerprint, record.Process.LogPath)
@@ -355,7 +365,7 @@ func waitForConnectionAttempt(ctx context.Context, process *ConnectionProcess, c
 		}
 		var ready bool
 		lastEndpointDiagnostics, ready = probeConnectionEndpoints(waitContext, config.Readiness)
-		if ready {
+		if ready && (config.Driver != "ktctl" || ktctlTunnelEstablished(logPath)) {
 			consecutiveReady++
 		} else {
 			consecutiveReady = 0
@@ -444,6 +454,19 @@ func ktctlReportedExit(logPath string) (reportedError bool, podCreateEOF bool) {
 		}
 	}
 	return reportedError, podCreateEOF
+}
+
+func ktctlTunnelEstablished(logPath string) bool {
+	file, err := os.Open(logPath)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, ktctlTunnelEvidenceBytes))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(sanitizeDashboardText(string(data))), ktctlTunnelReadyMarker)
 }
 
 func connectionProcessAlive(pid int) bool {
@@ -863,6 +886,19 @@ func probeConnectionEndpoints(ctx context.Context, endpoints []ConnectionEndpoin
 		go func(index int, endpoint ConnectionEndpoint) {
 			defer wait.Done()
 			diagnostic := connectionEndpointDiagnostic{Name: endpoint.Name, Address: endpoint.Address}
+			if endpoint.rejectProxyFakeIP {
+				fakeIP, err := endpointProxyFakeIP(ctx, endpoint.Address)
+				if err != nil {
+					diagnostic.Detail = err.Error()
+					diagnostics[index] = diagnostic
+					return
+				}
+				if fakeIP != "" {
+					diagnostic.Detail = fmt.Sprintf("resolved to proxy Fake-IP %s in reserved range 198.18.0.0/15", fakeIP)
+					diagnostics[index] = diagnostic
+					return
+				}
+			}
 			dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
 			connection, err := dialer.DialContext(ctx, "tcp", endpoint.Address)
 			if err != nil {
@@ -881,6 +917,35 @@ func probeConnectionEndpoints(ctx context.Context, endpoints []ConnectionEndpoin
 		ready = ready && diagnostic.Reachable
 	}
 	return diagnostics, ready
+}
+
+func endpointProxyFakeIP(ctx context.Context, address string) (string, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return "", nil
+	}
+	host = strings.Trim(host, "[]")
+	if ip := net.ParseIP(host); ip != nil {
+		if isProxyFakeIP(ip) {
+			return ip.String(), nil
+		}
+		return "", nil
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return "", err
+	}
+	for _, address := range addresses {
+		if isProxyFakeIP(address.IP) {
+			return address.IP.String(), nil
+		}
+	}
+	return "", nil
+}
+
+func isProxyFakeIP(ip net.IP) bool {
+	ipv4 := ip.To4()
+	return ipv4 != nil && ipv4[0] == 198 && (ipv4[1] == 18 || ipv4[1] == 19)
 }
 
 func connectionFingerprint(config ConnectionConfig) string {
