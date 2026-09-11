@@ -57,8 +57,13 @@ func Completion(shell string) (string, error) {
                 options="--help"
                 candidate_kind="services"
                 ;;
-            --registry)
+            --update|--registry)
                 options="--prune --help"
+                ;;
+            --disable-binding|--enable-binding)
+                options="--help"
+                candidate_kind="bindings"
+                [ "$action" = "--enable-binding" ] && candidate_kind="disabled-bindings"
                 ;;
             --listen)
                 options="--on --off --help"
@@ -85,7 +90,7 @@ func Completion(shell string) (string, error) {
                 ;;
             *)
                 if [ "$COMP_CWORD" -eq "$action_index" ]; then
-                    options="--list --registry --listen --status --logs --dashboard --start --restart --stop --stop-all --cleanup --help"
+                    options="--list --update --registry --listen --disable-binding --enable-binding --status --logs --dashboard --start --restart --stop --stop-all --cleanup --help"
                 else
                     options=""
                 fi
@@ -111,6 +116,11 @@ func Completion(shell string) (string, error) {
             return
         fi
         COMPREPLY=( $(compgen -W "$options" -- "$cur") )
+        if [[ "$candidate_kind" = *bindings ]] && [[ "$cur" != -* ]]; then
+            while IFS= read -r candidate; do
+                [[ "$candidate" == "$cur"* ]] && COMPREPLY+=("$candidate")
+            done < <("${COMP_WORDS[0]}" "${root_args[@]}" __completion candidates "$candidate_kind" 2>/dev/null)
+        fi
         if [ "$candidate_kind" = "services" ] && [[ "$cur" != -* ]]; then
             while IFS= read -r candidate; do
                 [[ "$candidate" == "$cur"* ]] && COMPREPLY+=("$candidate")
@@ -280,6 +290,14 @@ _conven_service_names() {
     _describe 'service' values
 }
 
+_conven_binding_names() {
+    local -a values
+    local kind=bindings
+    [[ "${words[3]}" = --enable-binding ]] && kind=disabled-bindings
+    values=("${(@f)$("$conven_executable" "${conven_root_args[@]}" __completion candidates "$kind" 2>/dev/null)}")
+    _describe 'binding' values
+}
+
 _conven_environment_names() {
     local -a values
     values=("${(@f)$("$conven_executable" "${conven_root_args[@]}" __completion candidates environments 2>/dev/null)}")
@@ -356,10 +374,13 @@ _conven() {
                     _arguments \
                         '--help[show command help]'
                     ;;
-                --registry)
+                --update|--registry)
                     _arguments \
                         '--prune[remove missing direct-child repository services]' \
                         '--help[show command help]'
+                    ;;
+                --disable-binding|--enable-binding)
+                    _arguments '--help[show command help]' '*:binding:_conven_binding_names'
                     ;;
                 --listen)
                     _arguments \
@@ -422,7 +443,10 @@ _conven() {
                         _arguments \
                             '--list[list services declared by the workspace]' \
                             '--registry[update services from child repositories]' \
+                            '--update[synchronize services and application dependencies]' \
                             '--listen[change listener scope for selected services]' \
+                            '--disable-binding[disable workspace bindings]' \
+                            '--enable-binding[remove workspace binding disable requests]' \
                             '--status[show current local service state]' \
                             '--logs[show or stream current session logs]' \
                             '--dashboard[open the interactive log dashboard]' \
@@ -818,6 +842,10 @@ complete -c conven -n '__conven_using_subcommand doctor' -l namespace -r -d 'Kub
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l list -d 'List services declared by the workspace'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l registry -d 'Update services from child repositories'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l listen -d 'Change listener scope for selected services'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l disable-binding -d 'Disable workspace bindings'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l enable-binding -d 'Remove workspace binding disable requests'
+complete -c conven -f -n '__conven_services_name_position --disable-binding' -a '(__conven_completion_candidates bindings)' -d 'Workspace binding'
+complete -c conven -f -n '__conven_services_name_position --enable-binding' -a '(__conven_completion_candidates disabled-bindings)' -d 'Disabled binding'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l status -d 'Show current local service state'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l logs -d 'Show or stream current session logs'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l dashboard -d 'Open the interactive log dashboard'
@@ -827,6 +855,8 @@ complete -c conven -n '__conven_using_subcommand services; and __conven_services
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l stop-all -d 'Stop all services and release the workspace connection'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l cleanup -d 'Remove saved build artifacts and service logs'
 complete -c conven -n '__conven_services_action --registry' -l prune -d 'Remove missing direct-child repository services'
+complete -c conven -n '__conven_services_action --update' -l prune -d 'Remove missing direct-child repository services'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l update -d 'Synchronize services and application dependencies'
 complete -c conven -n '__conven_services_action --listen' -l on -d 'Listen on all interfaces'
 complete -c conven -n '__conven_services_action --listen' -l off -d 'Restore loopback-only listening'
 complete -c conven -n '__conven_services_action --logs' -l tail -d 'Stream aggregated logs as plain text'

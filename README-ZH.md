@@ -257,10 +257,15 @@ conven services --start --dev portal-api-service partner-service
 | `README.md` | 介绍生成文件和 Conven 工作流的 workspace 本地快速上手文档。 |
 
 每个文件仅在缺失时创建；已有普通文件保持不变。`.conven/conven.yaml` 是唯一服务清单。
-`init` 和后续的 `services --registry` 只做静态扫描，不运行构建、不访问网络；它们记录
+`init` 和后续的 `services --update` 只做静态扫描，不运行构建、不访问网络；它们记录
 可以证明的 runner、listener、注册代码、binding 和健康检查，并从 `18080` 开始为新服务
-分配最低未占用端口，已有端口不重新编号。已支持框架但证据不足时 registry 原子失败，
+分配最低未占用端口，已有端口不重新编号。已支持框架但证据不足时更新原子失败，
 完全不支持的仓库则以具体原因列入 skipped repositories。
+
+`services --update` 同时按配置指定的 application YAML 同步依赖：移除已注释或删除的
+binding 及其依赖路由，保留已有显式路由，为新匹配的 provider 在 dev/test 中默认声明
+remote。配置文件缺失时提示并保留依赖；YAML 错误时整次更新失败。修改在下次启动或
+重启时生效。
 
 Conven 支持 Go、Spring Boot、Python、Node.js 和 Bun 的常见 HTTP/RPC 框架，以及
 passive、Kubernetes DNS、Consul、Nacos、Eureka 和 Etcd 契约。它不会猜测完整业务
@@ -451,7 +456,9 @@ route 和 health check；同一进程可以暴露多个 listener。
 | 校验 workspace manifest | `conven workspace --validate` |
 | 迁移旧 manifest | `conven workspace --migrate` |
 | 列出 manifest 中的服务 | `conven services --list` |
-| 刷新扫描到的服务仓库 | `conven services --registry` |
+| 刷新服务并同步 application.yaml 依赖 | `conven services --update` |
+| 禁用 binding（下次启动/重启生效） | `conven services --disable-binding pigeonRpc` |
+| 移除 binding 禁用声明（下次启动/重启生效） | `conven services --enable-binding pigeonRpc` |
 | 开放指定服务供局域网访问 | `conven services --listen --on SERVICE...` |
 | 恢复指定服务仅本机访问 | `conven services --listen --off SERVICE...` |
 | 验证指定环境 | `conven doctor --test` |

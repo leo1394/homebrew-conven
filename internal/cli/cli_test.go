@@ -665,7 +665,7 @@ func TestServicesHelpUsesStdout(t *testing.T) {
 			t.Fatalf("%v help is missing service selection behavior: %q", arguments, output.String())
 		}
 		if !strings.Contains(output.String(), "Manage the local service session") ||
-			!strings.Contains(output.String(), "--registry   Update services from direct-child repositories") {
+			!strings.Contains(output.String(), "--update     Refresh services") {
 			t.Fatalf("%v help is missing action descriptions: %q", arguments, output.String())
 		}
 		if errorOutput.Len() != 0 {
@@ -675,7 +675,7 @@ func TestServicesHelpUsesStdout(t *testing.T) {
 }
 
 func TestServiceActionHelpUsesStdout(t *testing.T) {
-	for _, action := range []string{"--list", "--registry", "--listen", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard", "--cleanup"} {
+	for _, action := range []string{"--list", "--update", "--registry", "--listen", "--start", "--restart", "--status", "--stop", "--stop-all", "--logs", "--dashboard", "--cleanup"} {
 		t.Run(action, func(t *testing.T) {
 			var output bytes.Buffer
 			var errorOutput bytes.Buffer
@@ -684,7 +684,9 @@ func TestServiceActionHelpUsesStdout(t *testing.T) {
 			if code := app.Run([]string{"services", action, "--help"}); code != 0 {
 				t.Fatalf("exit code = %d", code)
 			}
-			if !strings.Contains(output.String(), "conven services "+action) {
+			helpAction := action
+			if action == "--registry" { helpAction = "--update" }
+			if !strings.Contains(output.String(), "conven services "+helpAction) {
 				t.Fatalf("stdout = %q", output.String())
 			}
 			if errorOutput.Len() != 0 {
@@ -3621,7 +3623,7 @@ func TestInitAndRegistryRecognizeDirectChildServices(t *testing.T) {
 		t.Fatalf("registry exit code = %d: %s", code, output.String())
 	}
 	for _, expected := range []string{
-		"==> Service registry scan complete",
+		"==> Service update complete",
 		"  - Discovered services: alpha-service, beta-service",
 		"  - Added services: beta-service",
 		"  - Assigned local ports: beta-service.rpc=18081",
@@ -4356,7 +4358,7 @@ func TestRegistryFailureStatesConvenDidNotUpdateManifest(t *testing.T) {
 	if code := app.Run([]string{"services", "--registry"}); code != 1 {
 		t.Fatalf("registry failure exit code = %d: %s", code, output.String())
 	}
-	if !strings.Contains(output.String(), "services --registry aborted before Conven updated the manifest") {
+	if !strings.Contains(output.String(), "services --update aborted before Conven updated the manifest") {
 		t.Fatalf("registry failure output = %q", output.String())
 	}
 	assertFileContents(t, manifestPath, source)
@@ -4394,7 +4396,7 @@ services:
 	for _, expected := range []string{
 		"Warning: Service registry scan requires review.",
 		"  - Missing repositories kept: removed-service",
-		"  => conven services --registry --prune",
+		"  => conven services --update --prune",
 	} {
 		if !strings.Contains(errorOutput.String(), expected) {
 			t.Fatalf("stderr is missing %q: %q", expected, errorOutput.String())

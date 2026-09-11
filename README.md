@@ -289,12 +289,18 @@ files:
 
 Each file is created only when missing; an existing regular file is preserved.
 `.conven/conven.yaml` is the sole service inventory. `init` and later
-`services --registry` runs perform static analysis only: they do not build or
+`services --update` runs perform static analysis only: they do not build or
 access the network. They record proven runners, listeners, registration code,
 bindings, and health checks, and assign the lowest unused port from `18080` to
 new services without renumbering existing assignments. A known framework with
-insufficient evidence fails the registry update atomically; an unsupported
+insufficient evidence fails the update atomically; an unsupported
 repository is listed under skipped repositories with a concrete reason.
+
+`services --update` also synchronizes dependencies from the configured application
+YAML: commented/deleted bindings and their dependency routes are removed. Existing
+explicit routes are kept; newly matched providers default to remote in dev/test.
+Missing application files are reported without clearing dependencies; invalid YAML
+aborts the entire update. Changes take effect on the next start or restart.
 
 Conven supports common HTTP/RPC frameworks for Go, Spring Boot, Python, Node.js,
 and Bun, plus passive, Kubernetes DNS, Consul, Nacos, Eureka, and Etcd contracts.
@@ -516,7 +522,9 @@ you explicitly use a shell such as `[sh, -c, "..."]`.
 | Validate the workspace manifest | `conven workspace --validate` |
 | Migrate an older manifest | `conven workspace --migrate` |
 | List manifest services | `conven services --list` |
-| Refresh scanned repositories | `conven services --registry` |
+| Refresh services and application dependencies | `conven services --update` |
+| Disable bindings (next start/restart) | `conven services --disable-binding pigeonRpc` |
+| Remove binding disable requests (next start/restart) | `conven services --enable-binding pigeonRpc` |
 | Allow LAN access for selected services | `conven services --listen --on SERVICE...` |
 | Restore loopback-only access | `conven services --listen --off SERVICE...` |
 | Validate one environment | `conven doctor --test` |

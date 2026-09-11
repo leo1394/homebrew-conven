@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.5 - 2026-09-11
+
+- Add new command support for `conven services --update` update conven.yaml
+- Add new command support for `conven services [--disable-binding | --enable-binding] svc`
+
 ## 1.0.4 - 2026-09-11
 
 - Require a Conven-managed ktctl connection instead of treating reachable TCP

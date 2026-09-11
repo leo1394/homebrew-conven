@@ -100,19 +100,19 @@ func (app App) runInit(arguments []string) int {
 }
 
 func (app App) runDiscover(arguments []string) int {
-	flags := flag.NewFlagSet("services --registry", flag.ContinueOnError)
+	flags := flag.NewFlagSet("services --update", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
 	prune := flags.Bool("prune", false, "remove services whose direct-child repository no longer exists")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --registry [--prune]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --update [--prune]")
 		flags.PrintDefaults()
-		fmt.Fprintln(flags.Output(), "\nWithout --prune, manual service configuration is preserved; new services are added and empty discovered facts may be backfilled. Newly identified HTTP/RPC services receive the lowest available local port starting at 18080.")
+		fmt.Fprintln(flags.Output(), "\nSynchronizes bindings and dependencies from each configured application YAML, removing commented/deleted bindings and their routes. Existing ports, runners and explicit resolutions are preserved; new mapped dependencies default to remote outside the local environment. Missing application files are reported and kept unchanged. --prune removes services whose repositories are missing.")
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
 	}
 	if len(flags.Args()) != 0 {
-		return app.fail(errors.New("services --registry does not accept service arguments"))
+		return app.fail(errors.New("services --update does not accept service arguments"))
 	}
 	manifestPath, workspace, err := config.ResolvePath(app.Cwd)
 	if err != nil {
@@ -120,17 +120,17 @@ func (app App) runDiscover(arguments []string) int {
 	}
 	manifest, err := config.Load(manifestPath)
 	if err != nil {
-		return app.fail(fmt.Errorf("services --registry aborted before Conven updated the manifest: %w", err))
+		return app.fail(fmt.Errorf("services --update aborted before Conven updated the manifest: %w", err))
 	}
 	if manifest.Version < 3 {
-		return app.fail(fmt.Errorf("Conven manifest %q uses version %d; run conven workspace --migrate before services --registry", manifestPath, manifest.Version))
+		return app.fail(fmt.Errorf("Conven manifest %q uses version %d; run conven workspace --migrate before services --update", manifestPath, manifest.Version))
 	}
-	result, err := config.DiscoverWorkspace(manifestPath, workspace, *prune)
+	result, err := config.UpdateWorkspace(manifestPath, workspace, *prune)
 	if err != nil {
-		return app.fail(fmt.Errorf("services --registry aborted before Conven updated the manifest: %w", err))
+		return app.fail(fmt.Errorf("services --update aborted before Conven updated the manifest: %w", err))
 	}
 	style := terminal.New(app.Output)
-	fmt.Fprintln(app.Output, style.Stage("Service registry scan complete"))
+	fmt.Fprintln(app.Output, style.Stage("Service update complete"))
 	if len(result.Discovered) == 0 {
 		fmt.Fprintln(app.Output, style.Detail("Discovered services: none"))
 	} else {
@@ -140,7 +140,7 @@ func (app App) runDiscover(arguments []string) int {
 		fmt.Fprintln(app.Output, style.Detail("Added services: "+style.Identifiers(result.Added, ", ")))
 	}
 	if len(result.Updated) > 0 {
-		fmt.Fprintln(app.Output, style.Detail("Backfilled services: "+style.Identifiers(result.Updated, ", ")))
+		fmt.Fprintln(app.Output, style.Detail("Updated services: "+style.Identifiers(result.Updated, ", ")))
 	}
 	if len(result.Assigned) > 0 {
 		fmt.Fprintln(app.Output, style.Detail("Assigned local ports: "+style.Identifiers(result.Assigned, ", ")))
@@ -157,12 +157,13 @@ func (app App) runDiscover(arguments []string) int {
 	} else {
 		fmt.Fprintln(app.Output, style.Detail("Manifest: "+style.Identifier(manifestPath)))
 	}
-	if len(result.Missing) > 0 || len(result.Skipped) > 0 {
+	if len(result.Missing) > 0 || len(result.Skipped) > 0 || len(result.DependencyNotes) > 0 {
 		details := make([]string, 0, 2)
 		actions := make([]string, 0, 1)
+		details = append(details, result.DependencyNotes...)
 		if len(result.Missing) > 0 {
 			details = append(details, "Missing repositories kept: "+strings.Join(result.Missing, ", "))
-			actions = append(actions, "conven services --registry --prune")
+			actions = append(actions, "conven services --update --prune")
 		}
 		if len(result.SkippedDetails) > 0 {
 			details = append(details, "Skipped repositories:")
@@ -174,6 +175,38 @@ func (app App) runDiscover(arguments []string) int {
 		}
 		printWarningBlock(app.Error, "Service registry scan requires review.", details, actions)
 	}
+	return 0
+}
+
+func (app App) runServiceBinding(action string, arguments []string) int {
+	flags := flag.NewFlagSet("services "+action, flag.ContinueOnError)
+	flags.SetOutput(app.Error)
+	flags.Usage = func() {
+		fmt.Fprintf(flags.Output(), "Usage:\n  conven services %s <binding...>\n\nUpdates workspace.disabledBindings; takes effect on the next start or restart.\n", action)
+	}
+	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
+		return code
+	}
+	if len(flags.Args()) == 0 {
+		return app.fail(fmt.Errorf("services %s requires at least one binding", action))
+	}
+	path, _, err := config.ResolvePath(app.Cwd)
+	if err != nil {
+		return app.fail(err)
+	}
+	changed, err := config.SetBindingsDisabled(path, flags.Args(), action == "--disable-binding")
+	if err != nil {
+		return app.fail(err)
+	}
+	stage := "Disabled bindings updated"
+	if !changed {
+		stage = "Disabled bindings unchanged"
+	}
+	style := terminal.New(app.Output)
+	fmt.Fprintln(app.Output, style.Stage(stage))
+	fmt.Fprintln(app.Output, style.Detail("Bindings: "+strings.Join(flags.Args(), ", ")))
+	fmt.Fprintln(app.Output, style.Detail("Manifest: "+path))
+	fmt.Fprintln(app.Output, style.Detail("Runtime: takes effect on the next services --start or --restart; running services were not changed."))
 	return 0
 }
 

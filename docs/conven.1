@@ -180,12 +180,28 @@ The action flag must be the first argument after
 .B \-\-list
 List services declared by the workspace manifest.
 .TP
-.B "\-\-registry [\-\-prune]"
-Conservatively update services from direct-child repositories.
-Existing non-empty manual declarations take precedence.
+.B "\-\-update [\-\-prune]"
+Update services from direct-child repositories and synchronize dependencies from
+the configured application YAML. Remove commented or deleted bindings and their
+dependency resolutions; preserve explicit resolutions and existing ports/runners.
+New mapped dependencies default to remote outside the local environment.
+Missing application files preserve dependencies; invalid YAML aborts the update.
 With
 .BR \-\-prune ,
 remove manifest services whose repositories no longer exist.
+.TP
+.B "\-\-registry [\-\-prune]"
+Compatibility alias for \-\-update.
+.TP
+.B "\-\-disable-binding binding..."
+Add one or more names to workspace.disabledBindings without duplicates.
+The atomic manifest update takes effect on the next start or restart.
+Source disable capability is checked when starting services.
+.TP
+.B "\-\-enable-binding binding..."
+Remove one or more names from workspace.disabledBindings.
+This removes the disable request; it does not establish a remote route.
+Running services are not restarted automatically.
 .TP
 .B "\-\-listen (\-\-on|\-\-off) service..."
 Change the desired listener scope for selected typed HTTP/RPC services.

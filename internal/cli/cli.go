@@ -172,10 +172,12 @@ func (app App) runServices(arguments []string) int {
 		return 0
 	case "--list":
 		return app.runList(remaining)
-	case "--registry":
+	case "--update", "--registry":
 		return app.runDiscover(remaining)
 	case "--listen":
 		return app.runServiceListener(remaining)
+	case "--disable-binding", "--enable-binding":
+		return app.runServiceBinding(action, remaining)
 	case "--status":
 		return app.runStatus(remaining)
 	case "--logs":
@@ -539,13 +541,13 @@ func (app App) runCompletion(arguments []string) int {
 
 func (app App) runCompletionCandidates(arguments []string) int {
 	if len(arguments) < 1 || len(arguments) > 2 {
-		return app.fail(errors.New("__completion candidates requires services, environments, or plugins [global]"))
+		return app.fail(errors.New("__completion candidates requires services, environments, bindings, disabled-bindings, or plugins [global]"))
 	}
 	names := make([]string, 0)
 	switch arguments[0] {
-	case "services", "environments":
+	case "services", "environments", "bindings", "disabled-bindings":
 		if len(arguments) != 1 {
-			return app.fail(errors.New("service and environment completion queries do not accept a scope"))
+			return app.fail(errors.New("service, environment, and binding completion queries do not accept a scope"))
 		}
 		workspace, err := convenruntime.OpenWorkspace(convenruntime.CommonOptions{Cwd: app.Cwd})
 		if err != nil {
@@ -555,9 +557,21 @@ func (app App) runCompletionCandidates(arguments []string) int {
 			for name := range workspace.Manifest.Services {
 				names = append(names, name)
 			}
-		} else {
+		} else if arguments[0] == "environments" {
 			for name := range workspace.Manifest.Environments {
 				names = append(names, name)
+			}
+		} else {
+			names = append(names, workspace.Manifest.Workspace.DisabledBindings...)
+			if arguments[0] == "bindings" {
+				for _, service := range workspace.Manifest.Services {
+					names = append(names, service.Discovery.EffectiveConsumerBindings()...)
+					for _, dependency := range service.Dependencies {
+						if dependency.Binding != "" {
+							names = append(names, dependency.Binding)
+						}
+					}
+				}
 			}
 		}
 	case "plugins":
@@ -1033,8 +1047,11 @@ Manage the local service session for the current workspace.
 
 available actions
    --list       List services declared by the workspace
-   --registry   Update services from direct-child repositories; --prune missing ones
+   --update     Refresh services and synchronize application dependencies; --prune missing ones
+   --registry   Alias for --update
    --listen     Turn all-interfaces listening on or off for selected services
+   --disable-binding  Add bindings to workspace.disabledBindings
+   --enable-binding   Remove bindings from workspace.disabledBindings
    --status     Show the current local service state
    --logs       Show logs; --tail streams plain text, --dashboard opens the UI
    --dashboard  Open the interactive log dashboard

@@ -24,7 +24,7 @@ class Conven < Formula
   test do
     ENV["HOME"] = testpath.to_s
     ENV["LC_ALL"] = "en_US.UTF-8"
-    assert_match "conven version 1.0.4 (2026-09-11)", shell_output("#{bin}/conven --version")
+    assert_match "conven version 1.0.5 (2026-09-11)", shell_output("#{bin}/conven --version")
     assert_predicate bin/"conven", :executable?
     assert_path_exists man1/"conven.1"
     assert_path_exists bash_completion/"conven"

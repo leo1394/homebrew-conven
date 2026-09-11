@@ -52,6 +52,7 @@ type DiscoveryResult struct {
 	Skipped    []string
 	SkippedDetails []string
 	Assigned   []string
+	DependencyNotes []string
 }
 
 type discoveredManifest struct {
@@ -370,6 +371,14 @@ func discoveredEnvironmentServerRoute(runtimeName string, kind string, listenerC
 }
 
 func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (DiscoveryResult, error) {
+	return discoverWorkspace(manifestPath, workspace, prune, false)
+}
+
+func UpdateWorkspace(manifestPath string, workspace string, prune bool) (DiscoveryResult, error) {
+	return discoverWorkspace(manifestPath, workspace, prune, true)
+}
+
+func discoverWorkspace(manifestPath string, workspace string, prune bool, syncDependencies bool) (DiscoveryResult, error) {
 	result := DiscoveryResult{}
 	source, sourceInfo, err := readManifestForUpdate(manifestPath)
 	if err != nil {
@@ -484,6 +493,18 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 
 	candidate := *manifest
 	candidate.Services = services
+	var synchronized []string
+	if syncDependencies {
+		synchronized, result.DependencyNotes, err = synchronizeApplicationDependencies(&candidate, workspace, discovered)
+		if err != nil { return result, err }
+		for _, name := range synchronized {
+			if _, exists := updates[name]; !exists {
+				result.Updated = append(result.Updated, name)
+			}
+			updates[name] = candidate.Services[name]
+		}
+		sort.Strings(result.Updated)
+	}
 	if err := validateManifest(&candidate); err != nil {
 		return result, fmt.Errorf("validate discovered manifest: %w", err)
 	}
@@ -503,6 +524,7 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 	}
 	for _, name := range result.Updated {
 		value := mappingValue(serviceMapping, name)
+		if value == nil { continue } // New services are appended below.
 		if value == nil || value.Kind != yaml.MappingNode {
 			return result, fmt.Errorf("Conven manifest %q service %q must be a mapping", manifestPath, name)
 		}
@@ -517,6 +539,41 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: service.Name},
 			value,
 		)
+	}
+	if len(synchronized) > 0 {
+		for _, name := range synchronized {
+			value := mappingValue(serviceMapping, name)
+			discovery := mappingValue(value, "discovery")
+			if discovery == nil {
+				discovery = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				setMappingValue(value, "discovery", discovery)
+			}
+			bindings := &yaml.Node{}
+			bindings.Encode(candidate.Services[name].Discovery.ConsumerBindings)
+			setMappingValue(discovery, "consumerBindings", bindings)
+			removeMappingEntries(discovery, []string{"bindings"})
+			dependencies := &yaml.Node{}
+			dependencies.Encode(candidate.Services[name].Dependencies)
+			for alias, dependency := range candidate.Services[name].Dependencies {
+				entry := mappingValue(dependencies, alias)
+				if dependency.Env == nil { removeMappingEntries(entry, []string{"env"}) }
+				if dependency.LocalEnv == nil { removeMappingEntries(entry, []string{"localEnv"}) }
+				if dependency.RemoteEnv == nil { removeMappingEntries(entry, []string{"remoteEnv"}) }
+			}
+			setMappingValue(value, "dependencies", dependencies)
+		}
+		environments := mappingValue(document.Content[0], "environments")
+		for name, environment := range candidate.Environments {
+			if environment.Resolutions == nil { continue }
+			value := &yaml.Node{}
+			value.Encode(environment.Resolutions)
+			for owner, entries := range environment.Resolutions {
+				for alias, resolution := range entries {
+					if resolution.Env == nil { removeMappingEntries(mappingValue(mappingValue(value, owner), alias), []string{"env"}) }
+				}
+			}
+			setMappingValue(mappingValue(environments, name), "resolutions", value)
+		}
 	}
 	if err := saveManifestDocument(manifestPath, document, source, sourceInfo, &candidate); err != nil {
 		return result, err
