@@ -7,6 +7,8 @@
 - Require ktctl's tunnel-established evidence before declaring connection
   readiness, and reject proxy Fake-IP addresses from `198.18.0.0/15` with a
   focused endpoint diagnostic.
+- Keep release verification non-interactive and clarify that sudo handles
+  authorization directly without Conven reading or storing passwords.
 
 ## 1.0.3 - 2026-09-07
 

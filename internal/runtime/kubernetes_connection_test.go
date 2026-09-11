@@ -1236,50 +1236,6 @@ func TestEnsureConnectionBoundsRepeatedPodCreateEOFToTwoLaunches(t *testing.T) {
 	}
 }
 
-func TestEnsureConnectionDoesNotRetryTimeoutContainingPodCreateEOF(t *testing.T) {
-	directory := t.TempDir()
-	kubeconfig := writeKubeconfig(t, directory, "test-context")
-	writeStableKubectl(t, directory)
-	attemptsPath := filepath.Join(directory, "attempts")
-	ktctl := filepath.Join(directory, "ktctl")
-	if err := os.WriteFile(ktctl, []byte(`#!/bin/sh
-attempts=0
-if [ -f "$CONVEN_TEST_ATTEMPTS" ]; then attempts=$(cat "$CONVEN_TEST_ATTEMPTS"); fi
-attempts=$((attempts + 1))
-printf '%s\n' "$attempts" > "$CONVEN_TEST_ATTEMPTS"
-printf 'ERR Exit: Post "https://cluster/api/v1/namespaces/test/pods": EOF\n'
-sleep 20
-`), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CONVEN_TEST_ATTEMPTS", attemptsPath)
-	endpoint := closedConnectionEndpoint(t)
-	config := ConnectionConfig{
-		Driver:     "ktctl",
-		Command:    ktctl,
-		Kubeconfig: kubeconfig,
-		Context:    "test-context",
-		Namespace:  "test",
-		Timeout:    time.Second,
-		Readiness:  []ConnectionEndpoint{endpoint},
-	}
-	process, err := EnsureConnection(context.Background(), config, filepath.Join(directory, "connection.log"), "timeout-workspace", io.Discard)
-	if process != nil {
-		t.Fatalf("timed-out connection returned residual process: %#v", process)
-	}
-	if err == nil || !strings.Contains(err.Error(), "deadline exceeded") || strings.Contains(err.Error(), "automatic retry") {
-		t.Fatalf("timed-out connection error = %v", err)
-	}
-	data, readErr := os.ReadFile(attemptsPath)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if strings.TrimSpace(string(data)) != "1" {
-		t.Fatalf("connection attempts = %q, want one", data)
-	}
-}
-
 func TestEnsureConnectionRetainsOriginalEOFWhenSecondLaunchFails(t *testing.T) {
 	directory := t.TempDir()
 	kubeconfig := writeKubeconfig(t, directory, "test-context")

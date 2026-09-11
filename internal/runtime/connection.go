@@ -1038,7 +1038,7 @@ func authorizeElevatedConnectionStop() error {
 func authorizeSudo(ctx context.Context, output io.Writer) error {
 	style := terminal.New(output)
 	terminal.PrintWarningBlock(output, "Sudo authorization required.", []string{
-		"Password input is hidden.",
+		"Authorization is handled directly by sudo; Conven does not read or store the password.",
 	}, nil)
 	validation := exec.CommandContext(ctx, "sudo", "-v")
 	validation.Stdin = os.Stdin
