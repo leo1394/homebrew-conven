@@ -59,9 +59,20 @@ type Plan struct {
 	Apollo           Apollo
 	Patches          []Patch
 	Guards           []Guard
+	BindingFallbacks []BindingFallback
 }
 
 func Materialize(ctx context.Context, plan Plan) error {
+	return materializeWithReport(ctx, plan, nil)
+}
+
+func MaterializeWithReport(ctx context.Context, plan Plan) ([]BindingOrigin, error) {
+	var origins []BindingOrigin
+	err := materializeWithReport(ctx, plan, &origins)
+	return origins, err
+}
+
+func materializeWithReport(ctx context.Context, plan Plan, report *[]BindingOrigin) error {
 	validated, err := validatePlan(plan)
 	if err != nil {
 		return err
@@ -119,6 +130,7 @@ func Materialize(ctx context.Context, plan Plan) error {
 	if err != nil {
 		return err
 	}
+	repositoryApplication := application
 	application, err = adapter.Application(ctx, SourceInput{
 		Application: application,
 		Bootstrap:   bootstrap,
@@ -126,6 +138,11 @@ func Materialize(ctx context.Context, plan Plan) error {
 	})
 	if err != nil {
 		return fmt.Errorf("materialize %s application: %w", validated.SourceDriver, err)
+	}
+	var origins []BindingOrigin
+	if len(validated.BindingFallbacks) > 0 {
+		application, origins, err = mergeBindingFallbacks(application, repositoryApplication, validated.BindingFallbacks)
+		if err != nil { return fmt.Errorf("service %s application %s: %w", validated.Service, validated.Application, err) }
 	}
 	if err := ensurePrivateDirectory(staging, filepath.Dir(applicationPath)); err != nil {
 		return fmt.Errorf("create application directory: %w", err)
@@ -192,10 +209,23 @@ func Materialize(ctx context.Context, plan Plan) error {
 	if err := publishDirectory(staging, validated.TargetDir); err != nil {
 		return err
 	}
+	if report != nil {
+		for index := range origins {
+			for _, patch := range validated.Patches {
+				if patch.File == validated.Application && (patch.Path == origins[index].Binding || strings.HasPrefix(patch.Path, origins[index].Binding+".")) {
+					origins[index].Source = "explicit patch"
+				}
+			}
+		}
+		*report = origins
+	}
 	return nil
 }
 
 func validatePlan(plan Plan) (Plan, error) {
+	if len(plan.BindingFallbacks) > 0 && (plan.SourceDriver != SourceApollo || plan.Driver != DriverYAMLOverlay) {
+		return Plan{}, errors.New("binding fallback requires Apollo YAML")
+	}
 	if strings.TrimSpace(plan.Service) == "" {
 		return Plan{}, errors.New("materialization service is empty")
 	}

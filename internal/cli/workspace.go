@@ -145,6 +145,10 @@ func (app App) runDiscover(arguments []string) int {
 	if len(result.Assigned) > 0 {
 		fmt.Fprintln(app.Output, style.Detail("Assigned local ports: "+style.Identifiers(result.Assigned, ", ")))
 	}
+	if len(result.SourceRepairs) > 0 {
+		fmt.Fprintln(app.Output, style.Stage("Automatic RPC source repairs"))
+		for _, repair := range result.SourceRepairs { fmt.Fprintln(app.Output, style.Detail(repair)) }
+	}
 	if len(result.Pruned) > 0 {
 		fmt.Fprintln(app.Output, style.Detail("Pruned services: "+style.Identifiers(result.Pruned, ", ")))
 	}

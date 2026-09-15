@@ -302,6 +302,24 @@ explicit routes are kept; newly matched providers default to remote in dev/test.
 Missing application files are reported without clearing dependencies; invalid YAML
 aborts the entire update. Changes take effect on the next start or restart.
 
+Unmatched RPC bindings report the consumer, binding, application path, and
+Consul key while retaining remote configuration. Adding the matching provider
+repository lets the next update create the dependency and environment resolutions.
+For go-zero target-only local routes, update also repairs simple client guards
+`if c.Rpc.DiscovType != ""` to accept `c.Rpc.Target != ""`. Each source edit is
+reported with its file and line; formatting is preserved and repeated updates are
+idempotent. Complex guards are reported without editing. Local startup preflight
+checks binding-dependent initialization guards against the generated target route.
+
+For Go/go-zero + Apollo YAML services, edit the repository configuration, run
+`conven services --update`, then `conven services --start`. At startup, only
+recognized RPC bindings **absent from Apollo** are filled from the repository.
+Existing Apollo values (including empty values) retain precedence; local routing
+and disabled bindings are unchanged. This does not bypass Apollo fetch failures
+or copy connection settings into the manifest. Set Policy
+`config.bindingFallback.mode: disabled` to opt out. Restart already-running
+services to apply configuration changes.
+
 Conven supports common HTTP/RPC frameworks for Go, Spring Boot, Python, Node.js,
 and Bun, plus passive, Kubernetes DNS, Consul, Nacos, Eureka, and Etcd contracts.
 It does not infer a complete business dependency graph, organization policy,
@@ -349,6 +367,7 @@ preflight is:
 ```text
 repository resources/application.yaml
   → full-document replacement from Apollo application.yml
+  → repository fallback for recognized RPC bindings absent from Apollo
   → Conven manifest patches
   → runtime/current/application.yaml
   → Consul preflight
@@ -359,6 +378,7 @@ safety guard are applied in this order:
 
 ```text
 Apollo application.yml
+  → repository binding fallback (absent keys only)
   → policy patch
   → server patch
   → services.portal-api-service.config.patches

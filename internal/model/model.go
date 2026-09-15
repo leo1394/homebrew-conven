@@ -30,12 +30,24 @@ type PolicyDrivers struct {
 }
 
 type PolicyConfig struct {
+	BindingFallback  BindingFallback `yaml:"bindingFallback,omitempty"`
 	SourceDir        string        `yaml:"sourceDir"`
 	Application      string        `yaml:"application"`
 	Bootstrap        string        `yaml:"bootstrap"`
 	RuntimeBootstrap string        `yaml:"runtimeBootstrap"`
 	Apollo           ApolloSource  `yaml:"apollo"`
 	Patches          []ConfigPatch `yaml:"patches"`
+}
+
+type BindingFallback struct {
+	Mode string `yaml:"mode"`
+}
+
+func (policy Policy) RepositoryBindingFallbackEnabled() bool {
+	runtime := policy.Drivers.Runtime
+	if runtime == "" { runtime = policy.Drivers.Framework }
+	return runtime == "go-zero" && policy.Drivers.ConfigSource == "apollo" &&
+		policy.Drivers.Materializer == "yaml-overlay" && policy.Config.BindingFallback.Mode != "disabled"
 }
 
 type ApolloSource struct {

@@ -83,6 +83,11 @@ func synchronizeApplicationDependencies(manifest *model.Manifest, workspace stri
 		for alias, dependency := range service.Dependencies {
 			if dependency.Binding != "" {
 				if _, exists := active[dependency.Binding]; !exists { removed[alias] = true; continue }
+				identity := ""
+				if consul, ok := active[dependency.Binding]["consul"].(map[string]interface{}); ok { identity, _ = consul["key"].(string) }
+				provider := dependency.LocalService
+				if provider == "" { provider = alias }
+				if identity != "" && manifest.Services[provider].Discovery.Identity != identity { removed[alias] = true; continue }
 				bound[dependency.Binding] = true
 			}
 			updated.Dependencies[alias] = dependency
@@ -95,11 +100,14 @@ func synchronizeApplicationDependencies(manifest *model.Manifest, workspace stri
 			for _, provider := range ServiceNames(manifest) {
 				entry := manifest.Services[provider]
 				matches := identity != "" && entry.Discovery.Identity == identity
-				for _, alias := range entry.Discovery.ProviderAliases { if alias == binding { matches = true } }
+				if identity == "" { for _, alias := range entry.Discovery.ProviderAliases { if alias == binding { matches = true } } }
 				if matches { providers = append(providers, provider) }
 			}
 			if len(providers) > 1 { return nil, nil, fmt.Errorf("service %s binding %s matches multiple providers: %s", name, binding, strings.Join(providers, ", ")) }
-			if len(providers) == 0 { continue } // Keep the application's remote-only binding.
+			if len(providers) == 0 {
+				notes = append(notes, fmt.Sprintf("service %s binding %s in %s: no workspace provider matched consul.key=%q; remote binding preserved, local dependency not created. Ensure the provider repository is in this workspace and its discovery.identity matches the service registration key", name, binding, path, identity))
+				continue
+			}
 			provider := providers[0]
 			port := "rpc"
 			if manifest.Services[provider].Ports[port] == 0 { return nil, nil, fmt.Errorf("service %s binding %s provider %s has no rpc port", name, binding, provider) }

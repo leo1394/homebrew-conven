@@ -266,6 +266,31 @@ func planServiceConfig(plan *Plan, name string, service model.Service, directory
 			planned.Plan.Guards = append(planned.Plan.Guards, runtimeGuards...)
 		}
 	}
+	if policy.RepositoryBindingFallbackEnabled() {
+		bindings := make(map[string]bool)
+		for _, binding := range service.Discovery.EffectiveConsumerBindings() { bindings[binding] = true }
+		for _, dependency := range service.Dependencies { if dependency.Binding != "" { bindings[dependency.Binding] = true } }
+		for alias, dependency := range service.Dependencies { if plan.Resolutions[name][alias].Mode == "disabled" { delete(bindings, dependency.Binding) } }
+		for _, binding := range plan.Workspace.Manifest.Workspace.DisabledBindings { delete(bindings, binding) }
+		for _, route := range planned.Routes { if route.Local || (route.Mode != "" && route.Mode != "preserve") { delete(bindings, route.Binding) } }
+		if len(bindings) > 0 {
+			workdir, err := config.Expand(service.Runner.Workdir, context)
+			if err != nil { return nil, err }
+			declared, err := config.InspectGoRPCClientBindings(directory, workdir)
+			if err != nil { return nil, fmt.Errorf("service %s repository binding inspection: %w", name, err) }
+			key, keyErr := config.InspectGoRPCClientEndpointYAMLKey(directory, workdir)
+			for _, binding := range declared {
+				if !bindings[binding.YAMLKey] { continue }
+				fallback := materialize.BindingFallback{Binding: binding.YAMLKey, EndpointKey: key}
+				if keyErr != nil { fallback.EndpointKeyError = keyErr.Error() }
+				planned.Plan.BindingFallbacks = append(planned.Plan.BindingFallbacks, fallback)
+				delete(bindings, binding.YAMLKey)
+			}
+			if len(planned.Plan.BindingFallbacks) > 0 {
+				if err := materialize.ValidateBindingFallbackSource(sourceDirectory, application); err != nil { return nil, fmt.Errorf("service %s repository binding source: %w", name, err) }
+			}
+		}
+	}
 	return planned, nil
 }
 

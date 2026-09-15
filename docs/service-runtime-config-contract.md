@@ -5,6 +5,34 @@ source code to know `CONVEN_CONFIG_DIR`. A typed adapter uses each framework's
 native runtime interface, then proves that the process actually honors the
 compiled listener and registration contract.
 
+## Apollo RPC binding repository fallback
+
+Manifest v3 Go/go-zero + Apollo + yaml-overlay policies default to
+`config.bindingFallback.mode: repository-if-missing`; set `disabled` to opt out.
+After editing the configured repository application YAML, run
+`conven services --update` to synchronize topology. The next start or restart
+reads the file afresh without duplicating connection values in the manifest.
+
+- Candidates must be both source-declared `RpcClientConf` fields and manifest
+  consumer/dependency bindings. Only the RPC subtree is copied, never unrelated settings.
+- Only an absent Apollo key permits fallback. Existing values, nulls and empty
+  mappings retain precedence; invalid routes fail instead of being masked.
+- Local replacements and disabled bindings are excluded. Explicit patches and
+  isolation guards still run afterward.
+- Consul, target, Etcd and source-proven endpoint spellings use the same RPC validator.
+- Apollo fetch failures remain failures, not an offline mode. Diagnostics report
+  binding names and origins, not connection values or credentials.
+- Real files are required; duplicate/merge keys, cyclic aliases and multiple YAML
+  documents are rejected.
+
+Update does not contact Apollo or generate configuration patches. A changed Consul
+identity removes the old provider dependency and its environment resolution; a
+unique new provider defaults to remote. Unknown identities remain remote-only
+configuration bindings. Existing explicit mappings without an identity are kept.
+Commenting a repository binding removes its Conven topology, not an existing
+Apollo value. Use `services --disable-binding` and the source disable contract
+to disable that client.
+
 ## Contract layers
 
 - **Analyzer:** static language/framework/build/listener/registration and Kafka

@@ -23,9 +23,11 @@ func materializeRuntimeConfigs(ctx context.Context, plan *Plan, names []string, 
 		if service.Config.Plan.Driver != materialize.DriverEnvironment {
 			fmt.Fprintf(output, "%s %s config\n", style.Stage("Materializing"), style.Identifier(name))
 			fmt.Fprintln(output, style.Detail(fmt.Sprintf("Drivers: %s -> %s", service.Config.Plan.SourceDriver, service.Config.Plan.Driver)))
-			if err := materialize.Materialize(ctx, service.Config.Plan); err != nil {
+			origins, err := materialize.MaterializeWithReport(ctx, service.Config.Plan)
+			if err != nil {
 				return fmt.Errorf("materialize %s config: %w", name, err)
 			}
+			for _, origin := range origins { fmt.Fprintln(output, style.Detail(fmt.Sprintf("Remote route: %s via %s", origin.Binding, origin.Source))) }
 		}
 		if err := verifyServiceIsolation(service); err != nil {
 			return err

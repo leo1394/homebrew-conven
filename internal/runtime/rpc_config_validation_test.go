@@ -9,6 +9,21 @@ import (
 	"github.com/leo1394/homebrew-conven/internal/materialize"
 )
 
+func TestPreflightLocalTargetRejectsDiscoveryOnlyInitialization(t *testing.T) {
+	plan := rpcConfigValidationTestPlan(t, "chatRpc: {target: '127.0.0.1:18090'}\n", false)
+	service := plan.Services["api"]
+	service.Config.Routes = []PlannedRoute{{Binding: "chatRpc", Local: true, Mode: "replace"}}
+	path := filepath.Join(service.Directory, "service.go")
+	if err := os.WriteFile(path, []byte("package service\nfunc use(c Config) { if c.Chat.DiscovType != \"\" { mustNewClient(c.Chat) } }\n"), 0600); err != nil { t.Fatal(err) }
+	err := preflightRPCClientConfigs(plan)
+	if err == nil || !strings.Contains(err.Error(), "service.go:2") || !strings.Contains(err.Error(), "local target initialization") { t.Fatalf("error = %v", err) }
+	service.Config.Routes[0].Local = false
+	if err := preflightRPCClientConfigs(plan); err != nil { t.Fatalf("remote route was affected: %v", err) }
+	service.Config.Routes[0].Local = true
+	if err := os.WriteFile(path, []byte("package service\nfunc use(c Config) { if c.Chat.DiscovType != \"\" || c.Chat.Target != \"\" { mustNewClient(c.Chat) } }\n"), 0600); err != nil { t.Fatal(err) }
+	if err := preflightRPCClientConfigs(plan); err != nil { t.Fatal(err) }
+}
+
 func TestPreflightRPCClientConfigsValidRoutes(t *testing.T) {
 	tests := []struct {
 		name string

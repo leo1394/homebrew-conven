@@ -53,6 +53,7 @@ type DiscoveryResult struct {
 	SkippedDetails []string
 	Assigned   []string
 	DependencyNotes []string
+	SourceRepairs []string
 }
 
 type discoveredManifest struct {
@@ -375,7 +376,13 @@ func DiscoverWorkspace(manifestPath string, workspace string, prune bool) (Disco
 }
 
 func UpdateWorkspace(manifestPath string, workspace string, prune bool) (DiscoveryResult, error) {
-	return discoverWorkspace(manifestPath, workspace, prune, true)
+	result, err := discoverWorkspace(manifestPath, workspace, prune, true)
+	if err != nil { return result, err }
+	manifest, err := Load(manifestPath)
+	if err != nil { return result, err }
+	result.SourceRepairs, err = repairWorkspaceRPCTargetGuards(manifest, workspace, &result.DependencyNotes)
+	if err != nil { result.DependencyNotes = append(result.DependencyNotes, err.Error()) }
+	return result, nil
 }
 
 func discoverWorkspace(manifestPath string, workspace string, prune bool, syncDependencies bool) (DiscoveryResult, error) {

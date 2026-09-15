@@ -4,6 +4,27 @@ Conven 不要求所有语言统一使用 `-f`，也不要求业务源码识别 `
 Adapter 使用框架原生运行时接口，并在启动后证明进程确实遵守编译后的 listener 和注册
 契约。
 
+## Apollo RPC binding 仓库回退
+
+Manifest v3 的 Go/go-zero + Apollo + yaml-overlay 默认启用
+`policy.config.bindingFallback.mode: repository-if-missing`（也可设为 `disabled`）。
+修改配置指定的仓库 application YAML 后执行 `conven services --update` 同步拓扑，
+下次启动或重启重新读取文件，无需在 manifest 中重复填写连接参数。
+
+- 仅处理源码 `RpcClientConf` 声明与清单 consumer/dependency binding 的交集。
+- Apollo 完全没有该键时，才补入仓库中有效的 RPC 子树；不复制数据库等无关字段。
+- Apollo 已有值、`null`、空 mapping 不触发回退；无效路由报错，不用仓库值掩盖。
+- 本地替换和 disabled binding 不参与回退。显式 patches 和隔离 guards 仍随后执行。
+- 支持经过现有 RPC 校验器验证的 Consul、target、Etcd、源码确认拼写的 endpoints。
+- Apollo 请求失败仍失败；回退不是离线配置模式。来源提示只打印 binding 名和来源。
+- 配置文件须为真实文件；重复键、merge key、循环 alias 和多文档 YAML 拒绝处理。
+
+`--update` 不访问 Apollo、不生成配置 patches、不保存连接凭据。Consul identity 改变时，
+旧 provider 依赖及其环境 resolution 被移除，唯一匹配的新 provider 默认走远程；没有
+匹配则保留为远程配置 binding，不猜测本地 provider。没有 identity 的既有显式映射保留。
+注释仓库 binding 只清理 Conven 拓扑，不删除 Apollo 自身已有的配置；要禁用该客户端，
+仍应使用 `services --disable-binding` 并满足源码禁用契约。
+
 ## 契约分层
 
 - **Analyzer**：静态语言、框架、构建、listener、注册和 Kafka consumer 事实。

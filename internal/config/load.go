@@ -659,6 +659,13 @@ func validateLocalPorts(manifest *model.Manifest) error {
 
 func validatePolicy(name string, policy model.Policy, version int) error {
 	prefix := "policies." + name
+	switch policy.Config.BindingFallback.Mode {
+	case "", "disabled":
+	case "repository-if-missing":
+		if !policy.RepositoryBindingFallbackEnabled() { return fmt.Errorf("%s.config.bindingFallback requires go-zero + apollo + yaml-overlay", prefix) }
+	default:
+		return fmt.Errorf("%s.config.bindingFallback.mode must be disabled or repository-if-missing", prefix)
+	}
 	for field, value := range map[string]string{
 		"drivers.runtime":   policy.Drivers.Runtime,
 		"drivers.framework": policy.Drivers.Framework,

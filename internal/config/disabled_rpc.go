@@ -20,6 +20,7 @@ type goRPCSourceFile struct {
 	set        *token.FileSet
 	parsed     *ast.File
 	imports    map[string]string
+	source     []byte
 }
 
 type goRPCBinding struct {
@@ -34,6 +35,7 @@ type goRPCBinding struct {
 type goRPCGuardHelper struct {
 	valid  bool
 	object *ast.Object
+	target goRPCBlankValue
 }
 
 type goRPCConfigCallTarget struct {
@@ -49,6 +51,7 @@ const (
 	goRPCBlankTrue
 	goRPCBlankString
 	goRPCBlankList
+	goRPCNonemptyString
 )
 
 // InspectGoRPCDisableCapabilities proves that requested RPC client bindings are
@@ -208,7 +211,9 @@ func scanGoRPCModule(repository, root string, requested map[string]bool) ([]goRP
 			return nil
 		}
 		set := token.NewFileSet()
-		parsed, err := parser.ParseFile(set, path, nil, 0)
+		source, err := os.ReadFile(path)
+		if err != nil { return err }
+		parsed, err := parser.ParseFile(set, path, source, 0)
 		if err != nil {
 			return fmt.Errorf("parse Go source %s for RPC disable analysis: %w", path, err)
 		}
@@ -228,7 +233,7 @@ func scanGoRPCModule(repository, root string, requested map[string]bool) ([]goRP
 			}
 			imports[name] = value
 		}
-		file := goRPCSourceFile{path: path, relative: filepath.ToSlash(relative), directory: filepath.Dir(path), set: set, parsed: parsed, imports: imports}
+		file := goRPCSourceFile{path: path, relative: filepath.ToSlash(relative), directory: filepath.Dir(path), set: set, parsed: parsed, imports: imports, source: source}
 		files = append(files, file)
 		for _, declaration := range parsed.Decls {
 			generic, ok := declaration.(*ast.GenDecl)
@@ -312,16 +317,21 @@ func collectGoRPCGuardHelpers(files []goRPCSourceFile, packageSymbols map[string
 				continue
 			}
 			valid := false
+			target := goRPCBlankUnknown
 			if len(function.Body.List) == 1 {
 				if returned, ok := function.Body.List[0].(*ast.ReturnStmt); ok && len(returned.Results) == 1 {
 					value, referenced := evaluateGoRPCHelperBlank(returned.Results[0], parameter.Names[0].Obj, !packageSymbols[file.directory]["len"])
 					valid = referenced && value == goRPCBlankFalse
+					target, _ = evaluateGoRPCBlank(returned.Results[0], func(value ast.Expr) (goRPCBlankValue, bool) {
+						fields, ok := goRPCSelectorPath(value, parameter.Names[0].Obj)
+						return goRPCTargetFieldValue(fields, ok)
+					}, !packageSymbols[file.directory]["len"])
 				}
 			}
 			if helpers[file.directory] == nil {
 				helpers[file.directory] = make(map[string]goRPCGuardHelper)
 			}
-			helpers[file.directory][function.Name.Name] = goRPCGuardHelper{valid: valid, object: function.Name.Obj}
+			helpers[file.directory][function.Name.Name] = goRPCGuardHelper{valid: valid, object: function.Name.Obj, target: target}
 		}
 	}
 	return helpers
@@ -387,6 +397,10 @@ func evaluateGoRPCBlank(expression ast.Expr, lookup func(ast.Expr) (goRPCBlankVa
 				return goRPCBlankFalse, referenced
 			}
 		case token.EQL, token.NEQ, token.GTR:
+			if (left == goRPCNonemptyString && right == goRPCBlankString) || (left == goRPCBlankString && right == goRPCNonemptyString) {
+				if value.Op == token.EQL { return goRPCBlankFalse, referenced }
+				if value.Op == token.NEQ { return goRPCBlankTrue, referenced }
+			}
 			if (left == goRPCBlankString && right == goRPCBlankString) || (left == goRPCBlankList && right == goRPCBlankList) {
 				if value.Op == token.EQL {
 					return goRPCBlankTrue, referenced
@@ -473,7 +487,7 @@ func inspectGoRPCFileUses(file goRPCSourceFile, declarations []*goRPCBinding, he
 	return nil
 }
 
-func inspectGoRPCFunction(file goRPCSourceFile, function *ast.FuncDecl, bindingsByType map[string]map[string]*goRPCBinding, helpers map[string]goRPCGuardHelper, packageSymbols map[string]bool, callTargets map[string]goRPCConfigCallTarget, configStructFields map[string]map[string]bool, states map[*goRPCBinding]string) error {
+func inspectGoRPCFunction(file goRPCSourceFile, function *ast.FuncDecl, bindingsByType map[string]map[string]*goRPCBinding, helpers map[string]goRPCGuardHelper, packageSymbols map[string]bool, callTargets map[string]goRPCConfigCallTarget, configStructFields map[string]map[string]bool, states map[*goRPCBinding]string, targetOnly ...bool) error {
 	configObjects := make(map[*ast.Object]map[string]*goRPCBinding)
 	collect := func(fields *ast.FieldList) {
 		if fields == nil {
@@ -599,6 +613,9 @@ func inspectGoRPCFunction(file goRPCSourceFile, function *ast.FuncDecl, bindings
 		stack = append(stack, node)
 		return true
 	})
+	if len(targetOnly) > 0 && targetOnly[0] {
+		return inspectGoRPCTargetUses(file, function, parents, configObjects, carriers, aliases, helpers, !packageSymbols["len"])
+	}
 	var configFailure error
 	ast.Inspect(function.Body, func(node ast.Node) bool {
 		if configFailure != nil {

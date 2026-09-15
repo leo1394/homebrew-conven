@@ -267,6 +267,19 @@ binding 及其依赖路由，保留已有显式路由，为新匹配的 provider
 remote。配置文件缺失时提示并保留依赖；YAML 错误时整次更新失败。修改在下次启动或
 重启时生效。
 
+无法匹配 provider 的 RPC binding 会显示调用方、binding、application 路径和 Consul key，
+并保留远端配置；加入对应 provider 仓库后，再次 update 会自动补齐依赖和环境 resolution。
+对于 go-zero 的 target-only 本地路由，update 还会自动为简单的
+`if c.Rpc.DiscovType != ""` 初始化条件补上 `c.Rpc.Target != ""` 分支，报告源码文件与
+行号，保留原格式，重复执行不再修改。复杂条件只诊断、不自动编辑。启动前会根据生成的
+本地 target 配置检查依赖该 binding 的客户端初始化条件。
+
+Go/go-zero + Apollo YAML 服务修改仓库配置后，执行 `conven services --update`，再
+`conven services --start`。启动时仅为 Apollo **完全缺失**的已识别 RPC binding 补入
+仓库配置；Apollo 已有值（包括空值）仍优先，本地路由和禁用规则不变。此机制不覆盖
+Apollo 获取失败，也不把连接配置复制进 manifest；可用 Policy 的
+`config.bindingFallback.mode: disabled` 关闭。已运行服务需要重启才能应用配置。
+
 Conven 支持 Go、Spring Boot、Python、Node.js 和 Bun 的常见 HTTP/RPC 框架，以及
 passive、Kubernetes DNS、Consul、Nacos、Eureka 和 Etcd 契约。它不会猜测完整业务
 依赖图、公司 Policy、凭据或集群连接信息。具体边界和修复示例见
@@ -309,6 +322,7 @@ Conven 当前不内置任何项目专用插件。`workspace --import` 会验证�
 ```text
 仓库 resources/application.yaml
   → Apollo application.yml 整体替换
+  → 从仓库补入 Apollo 缺失的已识别 RPC binding
   → Conven manifest patches
   → runtime/current/application.yaml
   → Consul preflight
@@ -318,6 +332,7 @@ Conven 当前不内置任何项目专用插件。`workspace --import` 会验证�
 
 ```text
 Apollo application.yml
+  → repository binding fallback（仅缺失键）
   → policy patch
   → server patch
   → services.portal-api-service.config.patches

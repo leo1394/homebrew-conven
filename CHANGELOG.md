@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.6 - 2026-09-15
+
+- Fill recognized Go/go-zero RPC bindings missing from Apollo with current
+  repository configuration, preserving Apollo values, local routing and disabled
+  bindings; report configuration origins without exposing connection values.
+- Synchronize changed Consul provider identities through `services --update`
+  and remove stale dependency resolutions.
+- Validate local Target-based RPC initialization and repair the supported
+  discovery-only guard during service updates while preserving source formatting.
+
 ## 1.0.5 - 2026-09-11
 
 - Add new command support for `conven services --update` update conven.yaml
