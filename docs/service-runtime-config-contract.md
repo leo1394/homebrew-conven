@@ -331,6 +331,14 @@ listener belongs to the target PID, PGID, or child process and observes the
 registry for the configured period. Any unexplained new instance fails closed
 and rolls back processes started by the attempt.
 
+Registry reads retry transient timeouts, EOF/connection failures and HTTP
+429/502/503/504 up to four attempts, with 250ms, 500ms and 1s backoff. Each
+request retains its 5s timeout. After recovery, the full observation period
+starts again against the original pre-start snapshot; failed reads never count
+as isolation evidence. Observation has a total budget of the configured period
+plus 30s. Authentication errors, invalid responses and new instances still fail
+closed; persistent unavailability rolls back startup without deleting registry data.
+
 `--skip-verify` bypasses health, listener, and registry proof together and is
 recorded as `unverified(skip-verify)`.
 

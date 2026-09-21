@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -126,6 +127,25 @@ func (app App) runDiscover(arguments []string) int {
 		return app.fail(fmt.Errorf("Conven manifest %q uses version %d; run conven workspace --migrate before services --update", manifestPath, manifest.Version))
 	}
 	result, err := config.UpdateWorkspace(manifestPath, workspace, *prune)
+	for err != nil {
+		var repair *config.FlagParseRepair
+		if !errors.As(err, &repair) { break }
+		existing := false
+		for _, service := range manifest.Services {
+			path := service.Path
+			if !filepath.IsAbs(path) { path = filepath.Join(workspace, path) }
+			if filepath.Clean(path) == filepath.Clean(repair.Directory) { existing = true; break }
+		}
+		if existing { break }
+		confirm := app.FlagParseRepairConfirmer
+		if confirm == nil { confirm = app.confirmFlagParseRepair }
+		approved, promptErr := confirm(app.Context, repair)
+		if promptErr != nil { return app.fail(promptErr) }
+		if !approved { break }
+		if repairErr := repair.Apply(); repairErr != nil { return app.fail(repairErr) }
+		fmt.Fprintf(app.Output, "Added flag.Parse(): %s:%d (source edit retained even if later checks fail)\n", repair.Path, repair.Line)
+		result, err = config.UpdateWorkspace(manifestPath, workspace, *prune)
+	}
 	if err != nil {
 		return app.fail(fmt.Errorf("services --update aborted before Conven updated the manifest: %w", err))
 	}

@@ -7,19 +7,21 @@
 
 ![Conven — Run changed services locally and keep cluster dependencies connected](assets/conven-banner-en.png)
 
-> **A verifiable local microservice orchestrator.**
+> **Safe, verifiable local service orchestration.**
 >
-> Run selected services locally, route the rest explicitly, and verify runtime isolation.
+> Run only what you change. Reach the rest through the cluster. Pass isolation checks before startup.
 
-Conven is a focused local microservice orchestrator. It runs a selected service
-group locally and keeps the rest reachable through configured endpoints or a
-development cluster. Generated configuration stays outside service repositories.
+Conven lets you change a few services without running the entire system locally.
+Select the services you are working on; keep the rest in the development cluster
+through explicit dependency routes. Supported typed services must pass registration,
+listener, and runtime-configuration isolation checks before startup. Generated
+configuration stays outside service repositories.
 
 - **Start less:** run only the services involved in the current change.
 - **Keep the real topology:** mix local services with remote RPC, databases,
   Kafka, configuration services, and other development dependencies.
-- **Fail closed:** supported typed services do not start unless Conven can
-  verify local registration and listener isolation.
+- **Check before starting:** supported typed services are refused startup if
+  registration, listener, or runtime-configuration isolation cannot be established.
 - **Use any language:** prepare, build, and run steps are argv arrays, not
   Go-specific hooks.
 
@@ -296,6 +298,12 @@ new services without renumbering existing assignments. A known framework with
 insufficient evidence fails the update atomically; an unsupported
 repository is listed under skipped repositories with a concrete reason.
 
+For a newly discovered Go/go-zero service missing `flag.Parse()`,
+`services --update` offers an interactive source repair. Only `y` applies the
+edit and rescans; Enter, `n`, and non-interactive runs leave source unchanged.
+Only simple, unambiguous insertion points are supported, without reformatting.
+Confirmed source edits remain even if a later check fails.
+
 `services --update` also synchronizes dependencies from the configured application
 YAML: commented/deleted bindings and their dependency routes are removed. Existing
 explicit routes are kept; newly matched providers default to remote in dev/test.
@@ -554,6 +562,8 @@ you explicitly use a shell such as `[sh, -c, "..."]`.
 | Inspect the current session | `conven services --status` |
 | Show a log snapshot | `conven services --logs SERVICE...` |
 | Open the Dashboard | `conven services --dashboard SERVICE...` |
+| Open the Web dashboard | `conven services --dashboard --web` |
+| Inspect startup failures | `conven services --diagnose` |
 | Follow plain logs | `conven services --logs --tail SERVICE...` |
 | Stop selected services | `conven services --stop SERVICE...` |
 | Stop the workspace session | `conven services --stop-all` |
@@ -596,6 +606,20 @@ conven services --logs --dashboard
 # Plain continuous stream.
 conven services --logs --tail
 ```
+
+For browser-based routes, health, correlated logs and startup failure details:
+
+```bash
+conven services --start --test --dashboard --web SERVICE...
+conven services --dashboard --web  # reuse the session and its environment
+conven services --diagnose         # inspect the latest startup attempt
+```
+
+The built-in Go server listens only on localhost; no Node installation is needed.
+Closing the browser leaves services running. Startup isolation evidence and current
+health are displayed separately. In an interactive terminal, `--dashboard --web`
+keeps the TUI logs open alongside the browser.
+See [Web dashboard](docs/web-dashboard.md).
 
 Interactive starts and restarts open the Dashboard by default; `--tail` selects
 Plain mode. The Dashboard supports wrapped logs, scrolling, and `/` search.

@@ -13,6 +13,7 @@ import (
 )
 
 type RestartOptions struct {
+	ExpectedSessionToken string
 	Common              CommonOptions
 	Services            []string
 	SkipBuild            bool
@@ -21,7 +22,7 @@ type RestartOptions struct {
 	Output              io.Writer
 }
 
-func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptions) (*Session, error) {
+func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptions) (result *Session, resultErr error) {
 	output := options.Output
 	if output == nil {
 		output = io.Discard
@@ -32,12 +33,45 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		return nil, err
 	}
 	defer unlock()
+	diagnostics, err := beginDiagnostics(workspace, options.Common.Environment, options.Services)
+	if err != nil {
+		return nil, err
+	}
+	diagnosticStage := "restart"
+	diagnosticService := ""
+	var diagnosticPlan *Plan
+	var diagnosticSession *Session
+	diagnosticsFinalized := false
+	if err := diagnostics.startStage("restart", ""); err != nil {
+		return nil, fmt.Errorf("record restart stage: %w", err)
+	}
+	defer func() {
+		if resultErr == nil || diagnosticsFinalized {
+			return
+		}
+		if diagnosticErr := diagnostics.failStage(resultErr); diagnosticErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("record failed restart stage: %w", diagnosticErr))
+		}
+		logTail := diagnosticFailureLog(diagnosticPlan, diagnosticSession, diagnosticStage, diagnosticService)
+		if diagnosticErr := diagnostics.fail(diagnosticStage, diagnosticService, resultErr, logTail); diagnosticErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("finish restart diagnostics: %w", diagnosticErr))
+		}
+		diagnosticsFinalized = true
+	}()
 	session, err := workspace.Store.Load()
 	if err != nil {
 		return nil, err
 	}
 	if session == nil || len(session.Services) == 0 {
 		return nil, errors.New("no running Conven session found; use conven services --start first")
+	}
+	diagnosticSession = session
+	previousAttemptID := session.AttemptID
+	if options.ExpectedSessionToken != "" {
+		token, tokenErr := replacementSessionToken(session)
+		if tokenErr != nil || token != options.ExpectedSessionToken {
+			return nil, errors.New("workspace session changed; refresh the dashboard before retrying")
+		}
 	}
 	if err := workspace.Store.InspectCurrent(); err != nil {
 		return nil, fmt.Errorf("inspect current runtime before restart: %w", err)
@@ -53,9 +87,14 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		}
 	}
 	options.Common.Environment = session.Environment
+	diagnosticStage = "plan"
 	plan, err := BuildRestartPlan(workspace, options.Common, allNames)
 	if err != nil {
 		return nil, err
+	}
+	diagnosticPlan = plan
+	if err := diagnostics.setPlan(plan); err != nil {
+		return nil, fmt.Errorf("record restart plan: %w", err)
 	}
 	if session.Connection != nil {
 		plan.Connection = ConnectionConfig{Driver: session.Connection.Driver}
@@ -74,6 +113,13 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		if err := ensureHotReloadWatcherLocked(workspace, session, options.HotReloadExecutable, output); err != nil {
 			return nil, err
 		}
+		if err := diagnostics.completeStage(); err != nil {
+			return nil, fmt.Errorf("record completed restart stage: %w", err)
+		}
+		if err := diagnostics.succeed(); err != nil {
+			return nil, fmt.Errorf("finish successful restart diagnostics: %w", err)
+		}
+		diagnosticsFinalized = true
 		fmt.Fprintln(output, style.Success("✓ No changed local services to restart."))
 		return session, nil
 	}
@@ -95,6 +141,8 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		return nil, err
 	}
 	for _, name := range targets {
+		diagnosticStage = "prepare"
+		diagnosticService = name
 		service := plan.Services[name]
 		if len(service.Prepare) > 0 {
 			fmt.Fprintf(output, "%s %s\n", style.Stage("Preparing"), style.Identifier(name))
@@ -138,12 +186,17 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 			registryBaselines[name] = baseline
 		}
 	}
+	if err := archiveSessionDiagnosticLogs(workspace, session, targets); err != nil {
+		return nil, fmt.Errorf("archive previous restart logs: %w", err)
+	}
 
 	for index := len(plan.Order) - 1; index >= 0; index-- {
 		name := plan.Order[index]
 		if !targetSet[name] {
 			continue
 		}
+		diagnosticStage = "stop"
+		diagnosticService = name
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -171,6 +224,8 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		}
 		started := make([]string, 0, len(groupTargets))
 		for _, name := range groupTargets {
+			diagnosticStage = "start"
+			diagnosticService = name
 			if err := ctx.Err(); err != nil {
 				return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
 			}
@@ -188,6 +243,7 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 				return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
 			}
 			process.Ports = copyPorts(service.Ports)
+			process.LogOffset = process.logOffset
 			process.ConsumerIsolation = copyConsumerIsolation(service.ConsumerIsolation)
 			if options.SkipVerify {
 				process.Verification = "unverified(skip-verify)"
@@ -204,6 +260,8 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		}
 		if !options.SkipVerify {
 			for _, name := range groupTargets {
+				diagnosticStage = "verify"
+				diagnosticService = name
 				service := plan.Services[name]
 				process := sessionProcess(session, name)
 				if err := WaitHealthyChecks(ctx, process, service.HealthChecks); err != nil {
@@ -265,8 +323,64 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 	if err := ensureHotReloadWatcherLocked(workspace, session, options.HotReloadExecutable, output); err != nil {
 		return nil, err
 	}
+	diagnosticStage = "finalize"
+	diagnosticService = ""
+	session.AttemptID = diagnostics.attempt.ID
+	session.HealthChecks = mergeSessionHealthChecks(session.HealthChecks, sessionHealthChecks(plan), targets)
+	session.RuntimeRoutes = mergeSessionRuntimeRoutes(session.RuntimeRoutes, diagnosticRoutes(plan), targets)
+	if err := workspace.Store.Save(session); err != nil {
+		return nil, errors.Join(err, cleanupRestartAfterDiagnosticsFailure(workspace, session, targets, previousAttemptID, output))
+	}
+	if err := diagnostics.completeStage(); err != nil {
+		failure := fmt.Errorf("record completed restart stage: %w", err)
+		return nil, errors.Join(failure, cleanupRestartAfterDiagnosticsFailure(workspace, session, targets, previousAttemptID, output))
+	}
+	if err := diagnostics.captureLogs(session, targets); err != nil {
+		failure := fmt.Errorf("archive successful restart logs: %w", err)
+		return nil, errors.Join(failure, cleanupRestartAfterDiagnosticsFailure(workspace, session, targets, previousAttemptID, output))
+	}
+	if err := diagnostics.succeed(); err != nil {
+		failure := fmt.Errorf("finish successful restart diagnostics: %w", err)
+		return nil, errors.Join(failure, cleanupRestartAfterDiagnosticsFailure(workspace, session, targets, previousAttemptID, output))
+	}
+	diagnosticsFinalized = true
 	fmt.Fprintln(output, style.Success("✓ Changed local services were restarted."))
 	return session, nil
+}
+
+func cleanupRestartAfterDiagnosticsFailure(workspace *WorkspaceData, session *Session, targets []string, previousAttemptID string, output io.Writer) error {
+	problems := make([]error, 0)
+	if err := stopHotReloadWatcherLocked(session, false, output); err != nil {
+		problems = append(problems, fmt.Errorf("stop hot reload watcher after diagnostics failure: %w", err))
+	}
+	targetSet := make(map[string]bool, len(targets))
+	for _, name := range targets {
+		targetSet[name] = true
+	}
+	remaining := make([]ServiceProcess, 0, len(session.Services))
+	for _, process := range session.Services {
+		if !targetSet[process.Name] {
+			remaining = append(remaining, process)
+			continue
+		}
+		if err := StopProcess(process, 3*time.Second); err != nil {
+			remaining = append(remaining, process)
+			problems = append(problems, fmt.Errorf("stop restarted %s after diagnostics failure: %w", process.Name, err))
+		}
+	}
+	session.Services = remaining
+	session.Selected = filterSelectedServices(session.Selected, remaining)
+	session.AttemptID = previousAttemptID
+	session.HealthChecks = filterSessionHealthChecks(session.HealthChecks, targetSet)
+	session.RuntimeRoutes = filterSessionRuntimeRoutes(session.RuntimeRoutes, targetSet)
+	if len(session.Services) == 0 && session.HotReload == nil && session.Connection == nil {
+		if err := workspace.Store.Clear(); err != nil {
+			problems = append(problems, err)
+		}
+	} else if err := workspace.Store.Save(session); err != nil {
+		problems = append(problems, fmt.Errorf("preserve restart cleanup state: %w", err))
+	}
+	return errors.Join(problems...)
 }
 
 func restartTargets(plan *Plan, session *Session, requested []string) ([]string, map[string]string, map[string]string, error) {

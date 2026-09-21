@@ -54,6 +54,10 @@ func Completion(shell string) (string, error) {
                 options="--help"
                 ;;
             --dashboard)
+                options="--web --help"
+                candidate_kind="services"
+                ;;
+            --diagnose)
                 options="--help"
                 candidate_kind="services"
                 ;;
@@ -74,7 +78,7 @@ func Completion(shell string) (string, error) {
                 candidate_kind="services"
                 ;;
             --start)
-                options="--env --dev --test --kubeconfig --context --namespace --tail --dry-run --with-dependencies --skip-build --skip-verify --help"
+                options="--env --dev --test --kubeconfig --context --namespace --tail --dashboard --web --dry-run --with-dependencies --skip-build --skip-verify --help"
                 candidate_kind="services"
                 ;;
             --restart)
@@ -90,7 +94,7 @@ func Completion(shell string) (string, error) {
                 ;;
             *)
                 if [ "$COMP_CWORD" -eq "$action_index" ]; then
-                    options="--list --update --registry --listen --disable-binding --enable-binding --status --logs --dashboard --start --restart --stop --stop-all --cleanup --help"
+                    options="--list --update --registry --listen --disable-binding --enable-binding --status --logs --dashboard --diagnose --start --restart --stop --stop-all --cleanup --help"
                 else
                     options=""
                 fi
@@ -396,8 +400,9 @@ _conven() {
                         '--help[show command help]' \
                         '*:service:_conven_service_names'
                     ;;
-                --dashboard)
+                --dashboard|--diagnose)
                     _arguments \
+                        '--web[open the local Web dashboard]' \
                         '--help[show command help]' \
                         '*:service:_conven_service_names'
                     ;;
@@ -409,6 +414,8 @@ _conven() {
                         '--kubeconfig[kubeconfig path]:file:_files' \
                         '--context[kubeconfig context]:context:' \
                         '--namespace[Kubernetes namespace]:namespace:' \
+                        '--dashboard[open the dashboard after startup]' \
+                        '--web[use the local Web dashboard with --dashboard]' \
                         '--tail[stream aggregated logs as plain text]' \
                         '--dry-run[show the startup plan]' \
                         '--with-dependencies[also start transitive local service dependencies]' \
@@ -450,6 +457,7 @@ _conven() {
                             '--status[show current local service state]' \
                             '--logs[show or stream current session logs]' \
                             '--dashboard[open the interactive log dashboard]' \
+                            '--diagnose[open startup failure diagnostics in the browser]' \
                             '--start[select and start local services]' \
                             '--restart[restart changed local services]' \
                             '--stop[stop selected local services]' \
@@ -849,6 +857,11 @@ complete -c conven -f -n '__conven_services_name_position --enable-binding' -a '
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l status -d 'Show current local service state'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l logs -d 'Show or stream current session logs'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l dashboard -d 'Open the interactive log dashboard'
+complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l diagnose -d 'Open Web startup diagnostics'
+complete -c conven -n '__conven_services_action --dashboard' -l web -d 'Open the local Web dashboard'
+complete -c conven -n '__conven_services_action --start' -l dashboard -d 'Open the dashboard after startup'
+complete -c conven -n '__conven_services_action --start' -l web -d 'Use the Web dashboard with --dashboard'
+complete -c conven -f -n '__conven_services_name_position --diagnose' -a '(__conven_completion_candidates services)' -d 'Workspace service'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l start -d 'Select and start local services'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l restart -d 'Restart changed local services'
 complete -c conven -n '__conven_using_subcommand services; and __conven_services_without_action' -l stop -d 'Stop selected local services'

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/leo1394/homebrew-conven/internal/model"
@@ -81,6 +83,13 @@ func builtinRegistryObserverAdapters() []RegistrationObserverAdapter {
 }
 
 func snapshotServiceRegistry(ctx context.Context, workspace string, service PlannedService) (*RegistrySnapshot, error) {
+	snapshot, _, err := retryRegistrySnapshot(ctx, func(ctx context.Context) (*RegistrySnapshot, error) {
+		return snapshotServiceRegistryOnce(ctx, workspace, service)
+	})
+	return snapshot, err
+}
+
+func snapshotServiceRegistryOnce(ctx context.Context, workspace string, service PlannedService) (*RegistrySnapshot, error) {
 	if service.Registry == nil || service.RegistryRef == "" || service.RegistryIdentity == "" {
 		return nil, nil
 	}
@@ -97,6 +106,7 @@ func snapshotServiceRegistry(ctx context.Context, workspace string, service Plan
 	if err != nil {
 		return nil, fmt.Errorf("service %s registry observation: %w", service.Name, err)
 	}
+	defer client.CloseIdleConnections()
 	instances, err := adapter.Snapshot(ctx, client, registryBaseAddress(registry.Address), registry, service.RegistryIdentity, values)
 	if err != nil {
 		return nil, fmt.Errorf("service %s registry %s identity %q: %w", service.Name, registry.Driver, service.RegistryIdentity, err)
@@ -116,26 +126,65 @@ func verifyServiceRegistry(ctx context.Context, workspace string, service Planne
 		}
 		duration = parsed
 	}
-	deadline := time.NewTimer(duration)
-	defer deadline.Stop()
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
+	if duration <= 0 {
+		return nil, errors.New("registry observation duration must be positive")
+	}
+	// Recovery must not allow endless startup or turn an observation gap into proof.
+	ctx, cancel := context.WithTimeout(ctx, duration+30*time.Second)
+	defer cancel()
+	interval := 500 * time.Millisecond
+	if duration < interval { interval = duration }
+	var stableSince time.Time
 	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-ticker.C:
-			current, err := snapshotServiceRegistry(ctx, workspace, service)
-			if err != nil {
-				return nil, err
-			}
-			if added := addedRegistryInstances(baseline.Instances, current.Instances); len(added) > 0 {
-				return nil, fmt.Errorf("service %s appeared in %s registry as new instance(s): %s", service.Name, baseline.Driver, strings.Join(added, ", "))
-			}
-		case <-deadline.C:
+		current, recovered, err := retryRegistrySnapshot(ctx, func(ctx context.Context) (*RegistrySnapshot, error) {
+			return snapshotServiceRegistryOnce(ctx, workspace, service)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("registry isolation could not be verified; no isolation evidence was granted: %w", err)
+		}
+		if current == nil { return nil, errors.New("registry observation returned no snapshot") }
+		if added := addedRegistryInstances(baseline.Instances, current.Instances); len(added) > 0 {
+			return nil, fmt.Errorf("service %s appeared in %s registry as new instance(s): %s", service.Name, baseline.Driver, strings.Join(added, ", "))
+		}
+		if stableSince.IsZero() || recovered { stableSince = time.Now() }
+		if time.Since(stableSince) >= duration {
 			return &RegistrationEvidence{Registry: baseline.Registry, Driver: baseline.Driver, Identity: baseline.Identity, Status: "absent", VerifiedAt: time.Now()}, nil
 		}
+		if err := waitRegistryRetry(ctx, interval); err != nil { return nil, err }
 	}
+}
+
+func retryRegistrySnapshot(ctx context.Context, read func(context.Context) (*RegistrySnapshot, error)) (*RegistrySnapshot, bool, error) {
+	for attempt := 0; attempt < 4; attempt++ {
+		if err := ctx.Err(); err != nil { return nil, attempt > 0, err }
+		snapshot, err := read(ctx)
+		if ctx.Err() != nil { return nil, attempt > 0, ctx.Err() }
+		if err == nil { return snapshot, attempt > 0, nil }
+		if !transientRegistryError(err) { return nil, attempt > 0, err }
+		if attempt == 3 { return nil, true, fmt.Errorf("registry unavailable after 4 attempts (bounded retry): %w", err) }
+		if err := waitRegistryRetry(ctx, (250*time.Millisecond)<<attempt); err != nil { return nil, true, err }
+	}
+	panic("unreachable registry retry")
+}
+
+func waitRegistryRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done(): return ctx.Err()
+	case <-timer.C: return nil
+	}
+}
+
+type registryHTTPStatusError struct { code int }
+func (err *registryHTTPStatusError) Error() string { return fmt.Sprintf("registry returned HTTP %d", err.code) }
+
+func transientRegistryError(err error) bool {
+	var status *registryHTTPStatusError
+	if errors.As(err, &status) { return status.code == 429 || status.code == 502 || status.code == 503 || status.code == 504 }
+	var network net.Error
+	if errors.As(err, &network) && (network.Timeout() || network.Temporary()) { return true }
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EPIPE)
 }
 
 func rejectLocalRegistryEntries(service PlannedService, snapshot *RegistrySnapshot) error {
@@ -246,14 +295,13 @@ func registryGET(ctx context.Context, client *http.Client, target string, header
 	if err != nil {
 		var transport *url.Error
 		if errors.As(err, &transport) {
-			return fmt.Errorf("registry request failed: %v", transport.Err)
+			return fmt.Errorf("registry request failed: %w", transport.Err)
 		}
 		return errors.New("registry request failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		return fmt.Errorf("HTTP %s: %s", response.Status, strings.TrimSpace(string(body)))
+		return &registryHTTPStatusError{code: response.StatusCode}
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(result); err != nil {
 		return fmt.Errorf("decode registry response: %w", err)
@@ -399,11 +447,11 @@ func (etcdRegistryObserver) Snapshot(ctx context.Context, client *http.Client, b
 	response, err := client.Do(request)
 	if err != nil {
 		var transport *url.Error
-		if errors.As(err, &transport) { return nil, fmt.Errorf("etcd registry request failed: %v", transport.Err) }
+		if errors.As(err, &transport) { return nil, fmt.Errorf("etcd registry request failed: %w", transport.Err) }
 		return nil, errors.New("etcd registry request failed")
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 { return nil, fmt.Errorf("HTTP %s", response.Status) }
+	if response.StatusCode < 200 || response.StatusCode >= 300 { return nil, &registryHTTPStatusError{code: response.StatusCode} }
 	var payload struct { KVs []struct { Key string `json:"key"`; Value string `json:"value"` } `json:"kvs"` }
 	if err := json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(&payload); err != nil { return nil, err }
 	result := make(map[string]RegistryInstance, len(payload.KVs))

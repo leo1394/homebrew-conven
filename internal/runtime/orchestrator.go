@@ -50,7 +50,7 @@ func ReplaceStart(ctx context.Context, workspace *WorkspaceData, options StartOp
 	return start(ctx, workspace, options, expectedSessionToken)
 }
 
-func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, expectedSessionToken string) (*Session, error) {
+func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, expectedSessionToken string) (result *Session, resultErr error) {
 	output := options.Output
 	if output == nil {
 		output = io.Discard
@@ -74,6 +74,36 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		return nil, err
 	}
 	defer unlock()
+	diagnostics, err := beginDiagnostics(workspace, options.Common.Environment, options.Services)
+	if err != nil {
+		return nil, err
+	}
+	diagnosticStage := "workspace"
+	diagnosticService := ""
+	var diagnosticPlan *Plan
+	var diagnosticSession *Session
+	diagnosticsFinalized := false
+	defer func() {
+		if resultErr == nil || diagnosticsFinalized {
+			return
+		}
+		if diagnosticErr := diagnostics.failStage(resultErr); diagnosticErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("record failed startup stage: %w", diagnosticErr))
+		}
+		logTail := diagnosticFailureLog(diagnosticPlan, diagnosticSession, diagnosticStage, diagnosticService)
+		if diagnosticErr := diagnostics.fail(diagnosticStage, diagnosticService, resultErr, logTail); diagnosticErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("finish startup diagnostics: %w", diagnosticErr))
+		}
+		diagnosticsFinalized = true
+	}()
+	beginDiagnosticStage := func(name string, service string) error {
+		diagnosticStage = name
+		diagnosticService = service
+		return diagnostics.startStage(name, service)
+	}
+	if err := beginDiagnosticStage("workspace", ""); err != nil {
+		return nil, fmt.Errorf("record workspace startup stage: %w", err)
+	}
 	existing, err := workspace.Store.Load()
 	if err != nil {
 		return nil, err
@@ -82,9 +112,25 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 	if err != nil {
 		return nil, err
 	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fmt.Errorf("record completed workspace startup stage: %w", err)
+	}
+	if err := beginDiagnosticStage("plan", ""); err != nil {
+		return nil, fmt.Errorf("record plan startup stage: %w", err)
+	}
 	plan, err := BuildPlan(workspace, options.Common, options.Services)
 	if err != nil {
 		return nil, err
+	}
+	diagnosticPlan = plan
+	if err := diagnostics.setPlan(plan); err != nil {
+		return nil, fmt.Errorf("record startup plan: %w", err)
+	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fmt.Errorf("record completed plan startup stage: %w", err)
+	}
+	if err := beginDiagnosticStage("validation", ""); err != nil {
+		return nil, fmt.Errorf("record validation startup stage: %w", err)
 	}
 	if options.SkipBuild {
 		if err := validateSkipBuild(plan); err != nil {
@@ -104,6 +150,12 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		if err := checkBuildDiskSpaceAndWarn(output, workspace.Root); err != nil {
 			return nil, err
 		}
+	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fmt.Errorf("record completed validation startup stage: %w", err)
+	}
+	if err := beginDiagnosticStage("session-transition", ""); err != nil {
+		return nil, fmt.Errorf("record session transition startup stage: %w", err)
 	}
 	if len(active) > 0 {
 		if err := validateConnectionForReplacement(ctx, existing.Connection, workspace.Store.Root); err != nil {
@@ -145,6 +197,9 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		}
 	}
 	if existing != nil {
+		if err := archiveSessionDiagnosticLogs(workspace, existing, nil); err != nil {
+			return nil, fmt.Errorf("archive previous startup logs: %w", err)
+		}
 		if existing.Connection != nil && !retainedConnection {
 			if err := releaseConnection(context.Background(), existing.Connection, workspace.Store.Root, false, output); err != nil {
 				return nil, fmt.Errorf("release previous workspace connection before replacing stale session: %w", err)
@@ -160,7 +215,13 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 	if err := workspace.Store.ResetCurrent(); err != nil {
 		return nil, err
 	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fmt.Errorf("record completed session transition startup stage: %w", err)
+	}
 	printPlan(output, plan, false)
+	if err := beginDiagnosticStage("endpoints", ""); err != nil {
+		return nil, fmt.Errorf("record endpoint startup stage: %w", err)
+	}
 	endpointNames := dependency.EndpointNames(plan.Resolutions)
 	if len(endpointNames) > 0 {
 		fmt.Fprintln(output, style.Stage("Checking endpoints"))
@@ -168,6 +229,12 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		if err := dependency.CheckEndpoints(ctx, workspace.Root, CommandEnvironment(plan.Environment.Env), plan.Environment, plan.Resolutions); err != nil {
 			return nil, err
 		}
+	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fmt.Errorf("record completed endpoint startup stage: %w", err)
+	}
+	if err := beginDiagnosticStage("connection", ""); err != nil {
+		return nil, fmt.Errorf("record connection startup stage: %w", err)
 	}
 	connection, err := EnsureConnection(ctx, plan.Connection, ConnectionLogPath(workspace.Store.Root), workspace.Store.Root, output)
 	if retainedConnection && !sameConnectionProcess(retainedConnectionSnapshot, connection) {
@@ -181,6 +248,7 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 			failedSession := &Session{
 				Workspace:   workspace.Root,
 				ConfigPath:  workspace.ConfigPath,
+				AttemptID:   diagnostics.attempt.ID,
 				Environment: plan.EnvironmentName,
 				Cluster:     kubeconfigClusterName(plan.Connection.Kubeconfig),
 				CreatedAt:   time.Now(),
@@ -198,10 +266,13 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 	session := &Session{
 		Workspace:   workspace.Root,
 		ConfigPath:  workspace.ConfigPath,
+		AttemptID:   diagnostics.attempt.ID,
 		Environment: plan.EnvironmentName,
 		Cluster:     kubeconfigClusterName(plan.Connection.Kubeconfig),
 		CreatedAt:   time.Now(),
 		Selected:    append([]string(nil), plan.Selected...),
+		HealthChecks: sessionHealthChecks(plan),
+		RuntimeRoutes: diagnosticRoutes(plan),
 		Connection:  connection,
 	}
 	if err := workspace.Store.Save(session); err != nil {
@@ -210,18 +281,83 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		}
 		return nil, errors.Join(err, releaseConnection(context.Background(), connection, workspace.Store.Root, false, output))
 	}
+	diagnosticSession = session
 	fail := func(failure error) error {
-		return failStartup(workspace, session, connection, retainedConnection, output, failure)
+		failureStage := diagnosticStage
+		failureService := diagnosticService
+		logTail := diagnosticFailureLog(plan, session, failureStage, failureService)
+		startedServices := diagnosticSessionServiceNames(session)
+		pendingServices := diagnosticPendingServices(plan.Order, startedServices)
+		diagnosticProblems := make([]error, 0)
+		if err := diagnostics.failStage(failure); err != nil {
+			diagnosticProblems = append(diagnosticProblems, fmt.Errorf("record failed startup stage: %w", err))
+		}
+		if err := diagnostics.captureLogs(session, nil); err != nil {
+			diagnosticProblems = append(diagnosticProblems, fmt.Errorf("archive failed startup logs: %w", err))
+		}
+		diagnosticStage = "cleanup"
+		diagnosticService = ""
+		if err := diagnostics.startStage("cleanup", ""); err != nil {
+			diagnosticProblems = append(diagnosticProblems, fmt.Errorf("record cleanup startup stage: %w", err))
+		}
+		rollbackErr := rollbackSession(workspace, session, connection, retainedConnection, output)
+		remainingServices := diagnosticSessionServiceNames(session)
+		cleanupStatus := "completed"
+		if rollbackErr != nil {
+			cleanupStatus = "incomplete"
+		}
+		if rollbackErr != nil {
+			if err := diagnostics.failStage(rollbackErr); err != nil {
+				diagnosticProblems = append(diagnosticProblems, fmt.Errorf("record failed startup cleanup: %w", err))
+			}
+		} else if err := diagnostics.completeStage(); err != nil {
+			diagnosticProblems = append(diagnosticProblems, fmt.Errorf("record completed startup cleanup: %w", err))
+		}
+		combined := failure
+		if rollbackErr != nil {
+			combined = errors.Join(combined, fmt.Errorf("startup rollback incomplete: %w", rollbackErr))
+		}
+		combined = errors.Join(combined, errors.Join(diagnosticProblems...))
+		cleanupEvidence := diagnosticCleanupEvidence{
+			started: startedServices,
+			pending: pendingServices,
+			rolledBack: diagnosticRolledBackServices(startedServices, remainingServices),
+			remaining: remainingServices,
+			status: cleanupStatus,
+		}
+		if err := diagnostics.failWithCleanup(failureStage, failureService, combined, logTail, cleanupEvidence); err != nil {
+			combined = errors.Join(combined, fmt.Errorf("finish startup diagnostics: %w", err))
+		}
+		diagnosticsFinalized = true
+		return combined
+	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fail(fmt.Errorf("record completed connection startup stage: %w", err))
+	}
+	if err := beginDiagnosticStage("materialize", ""); err != nil {
+		return nil, fail(fmt.Errorf("record materialize startup stage: %w", err))
 	}
 	if err := materializeRuntimeConfigs(ctx, plan, plan.Order, output); err != nil {
 		return nil, fail(err)
 	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fail(fmt.Errorf("record completed materialize startup stage: %w", err))
+	}
+	if err := beginDiagnosticStage("preflight", ""); err != nil {
+		return nil, fail(fmt.Errorf("record preflight startup stage: %w", err))
+	}
 	if err := runRuntimePreflight(ctx, plan, output, true); err != nil {
 		return nil, fail(err)
+	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fail(fmt.Errorf("record completed preflight startup stage: %w", err))
 	}
 	sourceFingerprints := make(map[string]string, len(plan.Order))
 	planFingerprints := make(map[string]string, len(plan.Order))
 	for _, name := range plan.Order {
+		if err := beginDiagnosticStage("fingerprint", name); err != nil {
+			return nil, fail(fmt.Errorf("record %s fingerprint startup stage: %w", name, err))
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, fail(err)
 		}
@@ -236,7 +372,13 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		}
 		sourceFingerprints[name] = sourceFingerprint
 		planFingerprints[name] = planFingerprint
+		if err := diagnostics.completeStage(); err != nil {
+			return nil, fail(fmt.Errorf("record completed %s fingerprint startup stage: %w", name, err))
+		}
 		if len(service.Prepare) > 0 {
+			if err := beginDiagnosticStage("prepare", name); err != nil {
+				return nil, fail(fmt.Errorf("record %s prepare startup stage: %w", name, err))
+			}
 			fmt.Fprintf(output, "%s %s\n", style.Stage("Preparing"), style.Identifier(name))
 			if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
 				return nil, fail(fmt.Errorf("prepare %s: %w", name, err))
@@ -245,8 +387,14 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 			if err := RunForeground(ctx, service.Prepare, service.Workdir, service.Environment, output, prepareLog); err != nil {
 				return nil, fail(fmt.Errorf("prepare %s: %w", name, err))
 			}
+			if err := diagnostics.completeStage(); err != nil {
+				return nil, fail(fmt.Errorf("record completed %s prepare startup stage: %w", name, err))
+			}
 		}
 		if !options.SkipBuild && len(service.Build) > 0 {
+			if err := beginDiagnosticStage("build", name); err != nil {
+				return nil, fail(fmt.Errorf("record %s build startup stage: %w", name, err))
+			}
 			fmt.Fprintf(output, "%s %s\n", style.Stage("Building"), style.Identifier(name))
 			if _, err := checkBuildDiskSpace(workspace.Root); err != nil {
 				return nil, fail(fmt.Errorf("build %s: %w", name, err))
@@ -255,19 +403,37 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 			if err := RunForeground(ctx, service.Build, service.Workdir, service.Environment, output, buildLog); err != nil {
 				return nil, fail(fmt.Errorf("build %s: %w", name, err))
 			}
+			if err := diagnostics.completeStage(); err != nil {
+				return nil, fail(fmt.Errorf("record completed %s build startup stage: %w", name, err))
+			}
+		}
+		if err := beginDiagnosticStage("run-workdir", name); err != nil {
+			return nil, fail(fmt.Errorf("record %s run workdir startup stage: %w", name, err))
 		}
 		if err := inspectRunWorkdir(service); err != nil {
 			return nil, fail(err)
 		}
+		if err := diagnostics.completeStage(); err != nil {
+			return nil, fail(fmt.Errorf("record completed %s run workdir startup stage: %w", name, err))
+		}
+	}
+	if err := beginDiagnosticStage("runtime-preflight", ""); err != nil {
+		return nil, fail(fmt.Errorf("record runtime preflight startup stage: %w", err))
 	}
 	if err := runRuntimePreflight(ctx, plan, output, false); err != nil {
 		return nil, fail(err)
+	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fail(fmt.Errorf("record completed runtime preflight startup stage: %w", err))
 	}
 	started := make(map[string]ServiceProcess, len(plan.Order))
 	observeRuntime := !options.SkipVerify && workspace.Manifest.Version >= 3
 	for _, group := range plan.Groups {
 		registryBaselines := make(map[string]*RegistrySnapshot, len(group))
 		for _, name := range group {
+			if err := beginDiagnosticStage("service-preflight", name); err != nil {
+				return nil, fail(fmt.Errorf("record %s service preflight startup stage: %w", name, err))
+			}
 			service := plan.Services[name]
 			if err := preflightServicePorts(service); err != nil {
 				return nil, fail(err)
@@ -282,11 +448,17 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 				}
 				registryBaselines[name] = baseline
 			}
+			if err := diagnostics.completeStage(); err != nil {
+				return nil, fail(fmt.Errorf("record completed %s service preflight startup stage: %w", name, err))
+			}
 		}
 		if len(group) > 1 {
 			fmt.Fprintf(output, "%s: %s\n", style.Stage("Starting dependency cycle together"), style.Identifier(strings.Join(group, ", ")))
 		}
 		for _, name := range group {
+			if err := beginDiagnosticStage("start", name); err != nil {
+				return nil, fail(fmt.Errorf("record %s start stage: %w", name, err))
+			}
 			if err := ctx.Err(); err != nil {
 				return nil, fail(err)
 			}
@@ -300,6 +472,7 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 				return nil, fail(err)
 			}
 			process.Ports = copyPorts(service.Ports)
+			process.LogOffset = process.logOffset
 			process.ConsumerIsolation = copyConsumerIsolation(service.ConsumerIsolation)
 			if options.SkipVerify {
 				process.Verification = "unverified(skip-verify)"
@@ -311,9 +484,15 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 			if err := workspace.Store.Save(session); err != nil {
 				return nil, fail(err)
 			}
+			if err := diagnostics.completeStage(); err != nil {
+				return nil, fail(fmt.Errorf("record completed %s start stage: %w", name, err))
+			}
 		}
 		if !options.SkipVerify {
 			for _, name := range group {
+				if err := beginDiagnosticStage("verify", name); err != nil {
+					return nil, fail(fmt.Errorf("record %s verification stage: %w", name, err))
+				}
 				service := plan.Services[name]
 				process := started[name]
 				if err := WaitHealthyChecks(ctx, process, service.HealthChecks); err != nil {
@@ -364,6 +543,9 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 				replaceSessionProcess(session, process)
 				started[name] = process
 				fmt.Fprintf(output, "%s %s\n", style.Success("✓ Runtime contract verified:"), style.Identifier(name))
+				if err := diagnostics.completeStage(); err != nil {
+					return nil, fail(fmt.Errorf("record completed %s verification stage: %w", name, err))
+				}
 			}
 		}
 		if err := ctx.Err(); err != nil {
@@ -379,6 +561,9 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		if err := workspace.Store.Save(session); err != nil {
 			return nil, fail(err)
 		}
+	}
+	if err := beginDiagnosticStage("finalize", ""); err != nil {
+		return nil, fail(fmt.Errorf("record final startup stage: %w", err))
 	}
 	for _, process := range session.Services {
 		if exitCode, exited := serviceProcessExitCode(process); exited {
@@ -398,6 +583,16 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 	if err := ensureHotReloadWatcherLocked(workspace, session, options.HotReloadExecutable, output); err != nil {
 		return nil, fail(err)
 	}
+	if err := diagnostics.completeStage(); err != nil {
+		return nil, fail(fmt.Errorf("record completed final startup stage: %w", err))
+	}
+	if err := diagnostics.captureLogs(session, nil); err != nil {
+		return nil, fail(fmt.Errorf("archive successful startup logs: %w", err))
+	}
+	if err := diagnostics.succeed(); err != nil {
+		return nil, fail(fmt.Errorf("finish successful startup diagnostics: %w", err))
+	}
+	diagnosticsFinalized = true
 	fmt.Fprintln(output, style.Success("✓ Local services are ready. Use `conven services --dashboard` or `conven services --logs --tail` to observe them."))
 	return session, nil
 }
@@ -459,21 +654,27 @@ func ensurePrivateDirectory(path string) error {
 }
 
 func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all bool, force bool, output io.Writer) error {
+	err := stop(ctx, workspace, names, all, force, "", output)
+	if all {
+		err = errors.Join(err, StopWebDashboard(ctx, workspace))
+	}
+	return err
+}
+
+func StopWithSessionToken(ctx context.Context, workspace *WorkspaceData, names []string, expectedSessionToken string, output io.Writer) error {
+	if strings.TrimSpace(expectedSessionToken) == "" {
+		return errors.New("stop requires the running session confirmation token")
+	}
+	return stop(ctx, workspace, names, len(names) == 0, false, expectedSessionToken, output)
+}
+
+func stop(ctx context.Context, workspace *WorkspaceData, names []string, all bool, force bool, expectedSessionToken string, output io.Writer) error {
 	if output == nil {
 		output = io.Discard
 	}
 	style := terminal.New(output)
 	if !all && len(names) == 0 {
 		return errors.New("stop requires service names or --all")
-	}
-	if all {
-		snapshot, err := workspace.Store.Load()
-		if err != nil {
-			return err
-		}
-		if err := stopHotReloadWatcherLocked(snapshot, force, io.Discard); err != nil {
-			return fmt.Errorf("stop hot reload watcher before stopping all services: %w", err)
-		}
 	}
 	unlock, err := workspace.Store.Lock()
 	if err != nil {
@@ -483,6 +684,15 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 	session, err := workspace.Store.Load()
 	if err != nil {
 		return err
+	}
+	if expectedSessionToken != "" {
+		if session == nil {
+			return errors.New("workspace session changed; refresh the dashboard before retrying")
+		}
+		token, tokenErr := replacementSessionToken(session)
+		if tokenErr != nil || token != expectedSessionToken {
+			return errors.New("workspace session changed; refresh the dashboard before retrying")
+		}
 	}
 	if session == nil {
 		terminal.PrintWarningBlock(output, "No Conven session found.", nil, nil)
@@ -498,11 +708,6 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 			}
 		}
 		return nil
-	}
-	if all {
-		if err := stopHotReloadWatcherLocked(session, force, output); err != nil {
-			return fmt.Errorf("stop hot reload watcher: %w", err)
-		}
 	}
 	targets := make(map[string]bool)
 	if all {
@@ -521,12 +726,27 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 			targets[name] = true
 		}
 	}
+	archiveNames := names
+	if all {
+		archiveNames = nil
+	}
+	var diagnosticProblem error
+	if err := archiveSessionDiagnosticLogs(workspace, session, archiveNames); err != nil {
+		diagnosticProblem = fmt.Errorf("archive startup logs before stop: %w", err)
+		fmt.Fprintf(output, "%s: %v\n", style.Failure("✗ Error archiving startup diagnostics"), err)
+	}
+	if all {
+		if err := stopHotReloadWatcherLocked(session, force, output); err != nil {
+			return errors.Join(fmt.Errorf("stop hot reload watcher: %w", err), diagnosticProblem)
+		}
+	}
 	failed := make([]string, 0)
 	for index := len(session.Services) - 1; index >= 0; index-- {
 		process := session.Services[index]
 		if !targets[process.Name] {
 			continue
 		}
+		stopStartedAt := time.Now().UTC()
 		fmt.Fprintf(output, "%s %s\n", style.Stage("Stopping"), style.Identifier(process.Name))
 		stopErr := StopProcess(process, 10*time.Second)
 		if stopErr != nil && force && ProcessGroupAlive(process.PGID) {
@@ -537,6 +757,10 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 			fmt.Fprintf(output, "%s %s: %v\n", style.Failure("✗ Error stopping"), style.Identifier(process.Name), stopErr)
 			failed = append(failed, process.Name)
 			delete(targets, process.Name)
+		}
+		if err := appendStopDiagnosticStage(workspace, session.AttemptID, process.Name, stopStartedAt, stopErr); err != nil {
+			diagnosticProblem = errors.Join(diagnosticProblem, fmt.Errorf("record %s stop diagnostics: %w", process.Name, err))
+			fmt.Fprintf(output, "%s %s: %v\n", style.Failure("✗ Error recording stop diagnostics for"), style.Identifier(process.Name), err)
 		}
 	}
 	remaining := make([]ServiceProcess, 0)
@@ -599,9 +823,16 @@ func Stop(ctx context.Context, workspace *WorkspaceData, names []string, all boo
 	}
 	if len(failed) > 0 {
 		sort.Strings(failed)
-		return fmt.Errorf("failed to stop: %s", strings.Join(failed, ", "))
+		return errors.Join(fmt.Errorf("failed to stop: %s", strings.Join(failed, ", ")), diagnosticProblem)
 	}
-	return nil
+	return diagnosticProblem
+}
+
+func WebSessionToken(session *Session) (string, error) {
+	if session == nil {
+		return "", nil
+	}
+	return replacementSessionToken(session)
 }
 
 func Status(ctx context.Context, workspace *WorkspaceData, output io.Writer) error {

@@ -4,11 +4,118 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"path/filepath"
+	"strings"
 
 	"github.com/leo1394/homebrew-conven/internal/materialize"
 	"github.com/leo1394/homebrew-conven/internal/terminal"
 )
+
+func sessionHealthChecks(plan *Plan) []SessionHealthCheck {
+	checks := make([]SessionHealthCheck, 0)
+	for _, name := range plan.Order {
+		for _, check := range plan.Services[name].HealthChecks {
+			if check.Type != "http" && check.Type != "tcp" {
+				continue
+			}
+			snapshot := SessionHealthCheck{
+				Name:    name,
+				Server:  check.Server,
+				Type:    check.Type,
+				Address: check.Address,
+			}
+			if check.Type == "http" {
+				snapshot.URL = safeSessionHealthURL(check.URL)
+				if snapshot.URL == "" {
+					continue
+				}
+			}
+			checks = append(checks, snapshot)
+		}
+	}
+	return checks
+}
+
+func safeSessionHealthURL(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	if parsed.User != nil {
+		return ""
+	}
+	query := parsed.Query()
+	for key := range query {
+		if diagnosticSensitiveKey(key) {
+			return ""
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	parsed.Fragment = ""
+	if strings.Contains(RedactDiagnosticText(parsed.String()), "[REDACTED]") {
+		return ""
+	}
+	return parsed.String()
+}
+
+func mergeSessionHealthChecks(existing []SessionHealthCheck, planned []SessionHealthCheck, targets []string) []SessionHealthCheck {
+	targetSet := make(map[string]bool, len(targets))
+	for _, name := range targets {
+		targetSet[name] = true
+	}
+	merged := make([]SessionHealthCheck, 0, len(existing)+len(planned))
+	for _, check := range existing {
+		if !targetSet[check.Name] {
+			merged = append(merged, check)
+		}
+	}
+	for _, check := range planned {
+		if targetSet[check.Name] {
+			merged = append(merged, check)
+		}
+	}
+	return merged
+}
+
+func mergeSessionRuntimeRoutes(existing []DiagnosticRoute, planned []DiagnosticRoute, targets []string) []DiagnosticRoute {
+	targetSet := make(map[string]bool, len(targets))
+	for _, name := range targets {
+		targetSet[name] = true
+	}
+	merged := make([]DiagnosticRoute, 0, len(existing)+len(planned))
+	for _, route := range existing {
+		if !targetSet[route.Service] {
+			merged = append(merged, route)
+		}
+	}
+	for _, route := range planned {
+		if targetSet[route.Service] {
+			merged = append(merged, route)
+		}
+	}
+	return merged
+}
+
+func filterSessionHealthChecks(existing []SessionHealthCheck, excluded map[string]bool) []SessionHealthCheck {
+	filtered := make([]SessionHealthCheck, 0, len(existing))
+	for _, check := range existing {
+		if !excluded[check.Name] {
+			filtered = append(filtered, check)
+		}
+	}
+	return filtered
+}
+
+func filterSessionRuntimeRoutes(existing []DiagnosticRoute, excluded map[string]bool) []DiagnosticRoute {
+	filtered := make([]DiagnosticRoute, 0, len(existing))
+	for _, route := range existing {
+		if !excluded[route.Service] {
+			filtered = append(filtered, route)
+		}
+	}
+	return filtered
+}
 
 func materializeRuntimeConfigs(ctx context.Context, plan *Plan, names []string, output io.Writer) error {
 	style := terminal.New(output)

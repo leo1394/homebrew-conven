@@ -1,0 +1,1369 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Conven Runtime Console</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <style>
+    :root {
+      --bg: #080c0f;
+      --surface: #0d1317;
+      --surface-raised: #11191e;
+      --line: #263138;
+      --line-strong: #3c4a52;
+      --text: #e9f0f2;
+      --muted: #8c9ba3;
+      --faint: #5e6c73;
+      --cyan: #42d7df;
+      --cyan-soft: #16383c;
+      --green: #70d69b;
+      --amber: #e7bb63;
+      --red: #f07878;
+      --red-soft: #321a1d;
+      --code: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --radius: 3px;
+      --shadow: 0 14px 40px rgba(0, 0, 0, .28);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 300px;
+      background:
+        linear-gradient(rgba(66, 215, 223, .025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(66, 215, 223, .018) 1px, transparent 1px),
+        var(--bg);
+      background-size: 48px 48px;
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+    }
+    button, input, select { font: inherit; }
+    button, a, input, select, summary { outline: none; }
+    :focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--cyan); }
+    button { color: inherit; }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+    .mono { font-family: var(--code); }
+    .muted { color: var(--muted); }
+    .unknown { color: var(--muted); font-style: italic; }
+
+    .shell { width: min(1540px, 100%); margin: 0 auto; padding: 18px 22px 48px; }
+    .masthead {
+      position: sticky; top: 0; z-index: 20;
+      display: grid; grid-template-columns: auto minmax(220px, 1fr) auto; align-items: center; gap: 24px;
+      min-height: 62px; margin: 0 -22px; padding: 9px 22px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(8, 12, 15, .94); backdrop-filter: blur(14px);
+    }
+    .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .brand-mark {
+      width: 25px; height: 25px; display: grid; place-items: center;
+      border: 1px solid var(--cyan); color: var(--cyan); font: 700 13px var(--code);
+      transform: rotate(45deg);
+    }
+    .brand-mark span { transform: rotate(-45deg); }
+    .brand-name { font: 700 13px var(--code); letter-spacing: .16em; }
+    .brand-context { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .section-nav { display: flex; align-items: center; justify-content: center; gap: 4px; }
+    .section-nav a {
+      color: var(--muted); text-decoration: none; font: 600 11px var(--code); letter-spacing: .06em;
+      padding: 8px 9px; border-bottom: 1px solid transparent;
+    }
+    .section-nav a:hover, .section-nav a[aria-current="true"] { color: var(--text); border-color: var(--cyan); }
+    .status-cluster { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+    .mode-badge, .connection-state {
+      display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px;
+      border: 1px solid var(--line); color: var(--muted); font: 600 10px var(--code); letter-spacing: .08em;
+    }
+    .mode-badge { color: var(--amber); border-color: rgba(231, 187, 99, .45); }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+    .dot.live { background: var(--green); box-shadow: 0 0 0 3px rgba(112, 214, 155, .12); }
+    .dot.error { background: var(--red); }
+
+    .banner {
+      display: none; align-items: flex-start; gap: 10px; margin: 18px 0 0; padding: 12px 14px;
+      border: 1px solid rgba(240, 120, 120, .5); background: var(--red-soft); color: #ffd9d9;
+    }
+    .banner.show { display: flex; }
+    .banner strong { display: block; margin-bottom: 2px; }
+
+    .board { display: grid; gap: 18px; margin-top: 18px; }
+    .artboard { scroll-margin-top: 78px; min-width: 0; }
+    .artboard-label {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 7px;
+      color: var(--faint); font: 600 10px var(--code); letter-spacing: .12em; text-transform: uppercase;
+    }
+    .artboard-label::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+    .panel { border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); }
+    .panel-head {
+      min-height: 46px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 10px 13px; border-bottom: 1px solid var(--line);
+    }
+    .panel-title { margin: 0; font: 650 13px var(--code); letter-spacing: .035em; }
+    .panel-head > :first-child { flex: 1; min-width: 170px; }
+    .panel-kicker { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+    .button {
+      min-height: 30px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius);
+      background: #11191d; cursor: pointer; font: 600 11px var(--code); letter-spacing: .02em;
+    }
+    .button:hover:not(:disabled) { border-color: var(--cyan); color: var(--cyan); }
+    .button:disabled { opacity: .45; cursor: not-allowed; }
+    .button.primary { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-soft); }
+    .button.danger { color: var(--red); border-color: rgba(240, 120, 120, .5); }
+    .icon-button { min-width: 31px; padding-inline: 8px; }
+    .field, .select {
+      min-height: 30px; border: 1px solid var(--line-strong); border-radius: var(--radius);
+      background: #091014; color: var(--text); padding: 5px 8px; font: 12px var(--code);
+    }
+    .field::placeholder { color: var(--faint); }
+    .field:focus, .select:focus { border-color: var(--cyan); }
+    .select { appearance: none; padding-right: 25px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 13px) 12px, calc(100% - 9px) 12px; background-size: 4px 4px; background-repeat: no-repeat; }
+
+    .failure-strip {
+      display: none; grid-template-columns: 4px 1fr auto; gap: 13px; align-items: stretch;
+      border-bottom: 1px solid rgba(240, 120, 120, .4); background: #171012; padding: 11px 13px;
+    }
+    .failure-strip.show { display: grid; }
+    .failure-bar { background: var(--red); }
+    .failure-copy strong { display: block; color: #ffbcbc; font: 650 12px var(--code); }
+    .failure-copy span { color: #bca1a3; font-size: 12px; }
+    .overview-grid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; min-height: 265px; }
+    .overview-cell { padding: 15px; border-right: 1px solid var(--line); }
+    .overview-cell:last-child { border-right: 0; }
+    .eyebrow { margin: 0 0 12px; color: var(--muted); font: 600 10px var(--code); letter-spacing: .11em; text-transform: uppercase; }
+    .workspace-name { margin: 0; font: 500 clamp(24px, 4vw, 39px)/1.05 var(--sans); letter-spacing: -.035em; }
+    .workspace-meta { display: flex; flex-wrap: wrap; gap: 6px 13px; margin-top: 12px; color: var(--muted); font: 11px var(--code); }
+    .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 22px; background: var(--line); border: 1px solid var(--line); }
+    .metric { background: var(--surface); padding: 10px; }
+    .metric-value { display: block; font: 500 24px var(--code); }
+    #serviceCount { color: var(--cyan); }
+    #healthyCount { color: var(--green); }
+    #failedCount { color: var(--red); }
+    #environmentMeta { color: var(--amber); background: rgba(231, 187, 99, .12); border: 1px solid rgba(231, 187, 99, .45); padding: 3px 6px; font-weight: 700; }
+    .session-network { margin-top: 14px; }
+    #lanAddress { color: var(--green); }
+    #disabledBindings { color: var(--amber); }
+    .section-toggle { margin-left: auto; flex-shrink: 0; }
+    .panel.is-collapsed { min-height: 0; }
+    .panel.is-collapsed .panel-head { border-bottom: 0; }
+    .metric-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+    .evidence-list, .health-list { display: grid; gap: 2px; }
+    .evidence-row, .health-row {
+      display: grid; grid-template-columns: minmax(86px, 1fr) minmax(0, 1.4fr) auto; gap: 10px;
+      align-items: center; min-height: 34px; padding: 5px 7px; background: #0a1013; font: 11px var(--code);
+    }
+    .evidence-row .proof { color: var(--cyan); text-align: right; }
+    .health-row .message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+    .state { display: inline-flex; align-items: center; gap: 6px; font: 600 10px var(--code); text-transform: uppercase; letter-spacing: .05em; }
+    .state.ok { color: var(--green); }
+    .state.fail { color: var(--red); }
+    .state.warn { color: var(--amber); }
+    .state.unknown { color: var(--muted); font-style: normal; }
+    .connection-card { margin-top: 13px; border-top: 1px solid var(--line); padding-top: 12px; }
+    .kv { display: grid; grid-template-columns: 88px 1fr; gap: 5px 10px; margin: 0; font: 11px var(--code); }
+    .kv dt { color: var(--muted); }
+    .kv dd { margin: 0; overflow-wrap: anywhere; }
+
+    .topology-layout { display: grid; grid-template-columns: minmax(360px, 1.1fr) minmax(370px, .9fr); min-height: 410px; }
+    .map-area { position: relative; border-right: 1px solid var(--line); overflow: auto; max-height: 600px; background: radial-gradient(circle at 50% 45%, rgba(66, 215, 223, .045), transparent 40%); }
+    .topology-layout.list-only { grid-template-columns: 1fr; }
+    .topology-layout.list-only .map-area { display: none; }
+    .map-note { padding: 12px 13px; color: var(--muted); font: 10px var(--code); line-height: 1.7; }
+    .map-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 4px; }
+    .map-legend .running { color: var(--green); }
+    .map-legend .remote { color: var(--amber); }
+    #topologySvg { display: block; width: 100%; height: 410px; }
+    .edge { stroke: var(--line-strong); stroke-width: 1.4; fill: none; }
+    .edge.focus { stroke: var(--cyan); stroke-width: 2; }
+    .node rect { fill: #0d1519; stroke: var(--line-strong); stroke-width: 1; rx: 2; }
+    .node text { fill: var(--text); font: 11px var(--code); pointer-events: none; }
+    .node .node-state { fill: var(--muted); font-size: 9px; }
+    .node.running rect { stroke: var(--green); fill: #10251c; }
+    .node.running .node-state { fill: var(--green); }
+    .node.remote rect { stroke: var(--amber); fill: #282113; stroke-dasharray: 5 3; }
+    .node.remote .node-state { fill: var(--amber); }
+    .node.failed rect { stroke: var(--red); }
+    .edge { stroke: #83969f; marker-end: url(#dependencyArrow); }
+    .edge.remote { stroke-dasharray: 5 3; }
+    .node:hover rect, .node:focus rect, .node.selected rect { stroke: var(--cyan); fill: var(--cyan-soft); }
+    .node.dim { opacity: .24; }
+    .edge.dim { opacity: .12; }
+    .config-side { min-width: 0; }
+    .subtoolbar { display: flex; gap: 7px; padding: 10px; border-bottom: 1px solid var(--line); }
+    .subtoolbar .field { width: 100%; }
+    .service-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .service-table th { color: var(--muted); font: 600 9px var(--code); text-transform: uppercase; letter-spacing: .08em; text-align: left; padding: 8px 9px; border-bottom: 1px solid var(--line); }
+    .service-table td { padding: 9px; border-bottom: 1px solid rgba(38, 49, 56, .62); vertical-align: top; }
+    .service-table tr { cursor: pointer; }
+    .service-table tbody tr:hover, .service-table tbody tr.selected { background: var(--cyan-soft); }
+    .port-list { color: var(--muted); font-family: var(--code); }
+    .route-list { padding: 12px; }
+    .route-list h3 { margin: 0 0 8px; font: 600 10px var(--code); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .route-row { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr) minmax(0, 1.5fr); align-items: start; gap: 8px; padding: 7px 2px; border-top: 1px solid rgba(38, 49, 56, .7); font: 10px/1.6 var(--code); }
+    .route-row > span { min-width: 0; overflow-wrap: anywhere; text-align: left; }
+    .route-row > .route-arrow { color: var(--cyan); text-align: center; }
+    .binding { color: var(--muted); white-space: normal; }
+
+    .logs-panel { min-height: 510px; }
+    .logs-controls { padding: 9px 12px; display: grid; grid-template-columns: minmax(170px, 1fr) repeat(3, minmax(110px, .4fr)) auto; gap: 7px; border-bottom: 1px solid var(--line); }
+    .service-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+    .check-chip { position: relative; }
+    .check-chip input { position: absolute; opacity: 0; pointer-events: none; }
+    .check-chip label { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); padding: 4px 7px; color: var(--muted); font: 10px var(--code); cursor: pointer; }
+    .check-chip input:checked + label { border-color: var(--line-strong); color: var(--text); background: #131b20; }
+    .check-chip input:focus-visible + label { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--cyan); }
+    .filter-summary { margin-left: auto; align-self: center; color: var(--muted); font: 10px var(--code); }
+    .log-frame { position: relative; height: 75vh; min-height: 400px; overflow: auto; overscroll-behavior: contain; background: #070b0e; font: 11px/1.6 var(--code); scrollbar-color: var(--line-strong) transparent; }
+    html.logs-fullscreen { overflow: hidden; scrollbar-gutter: stable; }
+    .logs-panel.is-fullscreen { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; min-height: 0; height: 100vh; height: 100dvh; overflow: hidden; }
+    .logs-panel.is-fullscreen > .panel-head { flex-shrink: 0; }
+    .logs-panel.is-fullscreen > .section-body { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+    .logs-panel.is-fullscreen .log-frame { flex: 1; height: auto; min-height: 0; }
+    .logs-panel.is-fullscreen .logs-controls, .logs-panel.is-fullscreen .service-filters { flex-shrink: 0; max-height: 18vh; overflow: auto; overscroll-behavior: contain; }
+    .logs-panel.is-fullscreen .logs-foot { flex-shrink: 0; }
+    .backlog-row { position: sticky; top: 0; z-index: 2; display: flex; justify-content: center; padding: 6px; background: linear-gradient(#070b0e 50%, transparent); }
+    .log-empty { padding: 60px 20px; text-align: center; color: var(--muted); }
+    .log-row {
+      display: grid; grid-template-columns: 83px 95px 51px minmax(0, 1fr); gap: 10px;
+      padding: 2px 12px; border-left: 2px solid transparent;
+    }
+    .log-row:hover { background: #0f171b; border-left-color: var(--cyan); }
+    .log-time, .log-service, .log-level { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .log-service { color: var(--cyan); }
+    .log-level.error { color: var(--red); }
+    .log-level.warn { color: var(--amber); }
+    .log-text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: #cbd5d8; }
+    mark { background: rgba(231, 187, 99, .24); color: #ffe0a0; }
+    .correlation { display: inline-flex; margin-left: 8px; gap: 4px; vertical-align: baseline; }
+    .correlation button { border: 0; padding: 1px 4px; background: var(--cyan-soft); color: var(--cyan); font: 9px var(--code); cursor: pointer; }
+    .json-details { display: inline; }
+    .json-details summary { display: inline; cursor: pointer; color: var(--cyan); }
+    .json-details pre { margin: 5px 0; padding: 8px; border-left: 1px solid var(--cyan); color: #bac5c8; white-space: pre-wrap; }
+    .unseen {
+      position: absolute; right: 18px; bottom: 14px; z-index: 3; display: none;
+      border-color: var(--cyan); color: var(--cyan); background: #0b1b1e;
+    }
+    .unseen.show { display: block; }
+    .logs-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-top: 1px solid var(--line); color: var(--muted); font: 10px var(--code); }
+
+    .timeline-wrap { overflow-x: auto; }
+    .timeline { min-width: 780px; }
+    .attempt {
+      display: grid; grid-template-columns: 145px 118px minmax(320px, 1fr) 140px; align-items: center; gap: 14px;
+      min-height: 70px; padding: 10px 13px; border-bottom: 1px solid var(--line); cursor: pointer;
+    }
+    .attempt:hover, .attempt.selected { background: #10191d; }
+    .attempt:last-child { border-bottom: 0; }
+    .attempt-id { font: 600 11px var(--code); }
+    .attempt-meta { margin-top: 4px; color: var(--muted); font: 10px var(--code); }
+    .stage-track { display: flex; align-items: center; min-width: 0; }
+    .stage { flex: 1; min-width: 0; }
+    .stage-line { display: block; height: 3px; background: var(--line-strong); }
+    .stage.done .stage-line { background: var(--green); }
+    .stage.failed .stage-line { background: var(--red); }
+    .stage-label { display: block; margin-top: 6px; overflow: hidden; color: var(--muted); font: 9px var(--code); text-overflow: ellipsis; white-space: nowrap; }
+    .attempt-failure { color: var(--red); font: 10px/1.45 var(--code); overflow-wrap: anywhere; }
+    .attempt-failure .failure-context, .attempt-failure .failure-guidance { display: block; margin-top: 3px; color: var(--muted); }
+    .attempt-failure details { margin-top: 4px; color: var(--muted); }
+    .attempt-failure summary { cursor: pointer; color: var(--cyan); }
+    .attempt-failure pre { max-height: 130px; overflow: auto; margin: 5px 0 0; padding: 6px; background: #080d10; color: #bfc9cc; white-space: pre-wrap; }
+
+    dialog {
+      width: min(430px, calc(100vw - 28px)); padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius);
+      background: var(--surface-raised); color: var(--text); box-shadow: 0 24px 80px rgba(0, 0, 0, .6);
+    }
+    dialog::backdrop { background: rgba(0, 0, 0, .72); }
+    .dialog-head { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .dialog-head h2 { margin: 0; font: 650 14px var(--code); }
+    .dialog-body { padding: 16px; color: #c5d0d3; line-height: 1.5; }
+    .dialog-services { margin: 12px 0 0; padding: 10px; background: #080d10; font: 11px var(--code); color: var(--cyan); }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+    .toast {
+      position: fixed; right: 18px; bottom: 18px; z-index: 40; max-width: min(380px, calc(100vw - 36px));
+      padding: 10px 12px; border: 1px solid var(--line-strong); background: #11191e; box-shadow: var(--shadow);
+      font: 11px var(--code); transform: translateY(16px); opacity: 0; pointer-events: none; transition: .16s ease;
+    }
+    .toast.show { transform: none; opacity: 1; }
+
+    @media (max-width: 1020px) {
+      .masthead { grid-template-columns: 1fr auto; }
+      .section-nav { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; overflow-x: auto; }
+      .overview-grid { grid-template-columns: 1fr 1fr; }
+      .overview-cell:first-child { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--line); }
+      .topology-layout { grid-template-columns: 1fr; }
+      .map-area { border-right: 0; border-bottom: 1px solid var(--line); }
+      .logs-controls { grid-template-columns: 1fr 1fr 1fr; }
+      .logs-controls .field:first-child { grid-column: 1 / -1; }
+    }
+    @media (max-width: 680px) {
+      .shell { padding: 10px 10px 35px; }
+      .masthead { margin: 0 -10px; padding: 8px 10px; gap: 10px; }
+      .brand-context, .connection-state span:last-child { display: none; }
+      .mode-badge { padding-inline: 6px; }
+      .section-nav a { padding-inline: 6px; }
+      .overview-grid { display: block; }
+      .overview-cell { border-right: 0; border-bottom: 1px solid var(--line); }
+      .metrics { grid-template-columns: 1fr 1fr 1fr; }
+      .topology-layout { display: block; }
+      .map-area { min-width: 0; }
+      .config-side { overflow-x: auto; }
+      .service-table { min-width: 510px; }
+      .logs-controls { grid-template-columns: 1fr 1fr; }
+      .logs-controls .field:first-child { grid-column: 1 / -1; }
+      .log-row { grid-template-columns: 72px 76px minmax(0, 1fr); gap: 7px; }
+      .log-level { display: none; }
+      .panel-head { align-items: flex-start; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span>C</span></div>
+        <div>
+          <div class="brand-name">CONVEN / RUNTIME</div>
+          <div class="brand-context" id="brandContext">Waiting for session snapshot</div>
+        </div>
+      </div>
+      <nav class="section-nav" aria-label="Dashboard sections">
+        <a href="#overview" aria-current="true">01 Overview</a>
+        <a href="#configuration">02 Configuration</a>
+        <a href="#logs">03 Logs</a>
+        <a href="#attempts">04 Attempts</a>
+      </nav>
+      <div class="status-cluster">
+        <span class="mode-badge" id="modeBadge" hidden>SIMULATED</span>
+        <span class="connection-state"><span class="dot" id="connectionDot"></span><span id="connectionText">CONNECTING</span></span>
+      </div>
+    </header>
+
+    <div class="banner" id="errorBanner" role="alert">
+      <span aria-hidden="true">×</span>
+      <div><strong id="errorTitle">Session unavailable</strong><span id="errorMessage"></span></div>
+    </div>
+
+    <main class="board">
+      <section class="artboard" id="overview" aria-labelledby="overviewTitle">
+        <div class="artboard-label">01 / overview · failure first</div>
+        <div class="panel">
+          <div class="panel-head">
+            <div><h1 class="panel-title" id="overviewTitle">Runtime overview</h1><div class="panel-kicker">Startup evidence and current health are separate observations.</div></div>
+            <div class="toolbar">
+              <button class="button" type="button" data-action="refresh">Refresh</button>
+              <button class="button" type="button" data-action="restart">Restart selected</button>
+              <button class="button danger" type="button" data-action="stop">Stop selected</button>
+            </div>
+          </div>
+          <div class="failure-strip" id="failureStrip">
+            <div class="failure-bar"></div>
+            <div class="failure-copy"><strong id="failureTitle"></strong><span id="failureDetail"></span></div>
+            <button class="button" type="button" id="failureLogsButton">Inspect logs</button>
+          </div>
+          <div class="overview-grid">
+            <div class="overview-cell">
+              <p class="eyebrow">Session identity</p>
+              <h2 class="workspace-name" id="workspaceName">Unknown workspace</h2>
+              <div class="workspace-meta"><span id="environmentMeta">ENV —</span><span id="versionMeta">VERSION —</span><span id="sessionMeta">SESSION —</span></div>
+              <dl class="kv session-network"><dt>LAN</dt><dd id="lanAddress">unknown</dd><dt>Disabled bindings</dt><dd id="disabledBindings">none</dd></dl>
+              <div class="metrics">
+                <div class="metric"><span class="metric-value" id="serviceCount">—</span><span class="metric-label">Services</span></div>
+                <div class="metric"><span class="metric-value" id="healthyCount">—</span><span class="metric-label">Healthy now</span></div>
+                <div class="metric"><span class="metric-value" id="failedCount">—</span><span class="metric-label">Failures</span></div>
+              </div>
+              <div class="connection-card">
+                <p class="eyebrow">Connection</p>
+                <dl class="kv" id="connectionDetails"></dl>
+              </div>
+            </div>
+            <div class="overview-cell">
+              <p class="eyebrow">Startup evidence <span class="muted">· recorded</span></p>
+              <div class="evidence-list" id="evidenceList"></div>
+            </div>
+            <div class="overview-cell">
+              <p class="eyebrow">Current health <span class="muted">· latest check</span></p>
+              <div class="health-list" id="healthList"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard" id="configuration" aria-labelledby="configurationTitle">
+        <div class="artboard-label">02 / configuration · declared topology, not live tracing</div>
+        <div class="panel">
+          <div class="panel-head">
+            <div><h2 class="panel-title" id="configurationTitle">Configuration topology</h2><div class="panel-kicker">Focus a service to inspect declared upstream and downstream bindings.</div></div>
+            <div><button class="button" type="button" id="topologyToggle" aria-pressed="false">List only</button> <button class="button" type="button" id="clearFocusButton">Clear focus</button></div>
+          </div>
+          <div class="topology-layout">
+            <div class="map-area">
+              <div class="map-note">CONFIGURATION MAP · relationships are not request traces<div class="map-legend"><span class="running">● Running locally</span><span class="remote">◌ Remote dependency</span><span>B → A means B serves A (A depends on B)</span></div></div>
+              <svg id="topologySvg" viewBox="0 0 720 410" role="img" aria-labelledby="topologyTitle topologyDesc">
+                <title id="topologyTitle">Configured service topology</title>
+                <desc id="topologyDesc">Select a service node to focus its upstream and downstream routes.</desc>
+              </svg>
+            </div>
+            <div class="config-side">
+              <div class="subtoolbar">
+                <label class="sr-only" for="serviceSearch">Filter services by name</label>
+                <input class="field" id="serviceSearch" type="search" placeholder="Filter service names…" autocomplete="off">
+                <select class="select" id="serviceStateFilter" aria-label="Filter service state">
+                  <option value="">All states</option><option value="running">Running</option><option value="failed">Failed</option><option value="stopped">Stopped</option><option value="unknown">Unknown</option>
+                </select>
+              </div>
+              <table class="service-table">
+                <thead><tr><th scope="col">Service</th><th scope="col">PID</th><th scope="col">State</th><th scope="col">Ports / listeners</th></tr></thead>
+                <tbody id="serviceTableBody"></tbody>
+              </table>
+              <div class="route-list"><h3>Bindings</h3><div id="routeList"></div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard" id="logs" aria-labelledby="logsTitle">
+        <div class="artboard-label">03 / multi-service logs · correlation workspace</div>
+        <div class="panel logs-panel">
+          <div class="panel-head">
+            <div><h2 class="panel-title" id="logsTitle">Logs</h2><div class="panel-kicker" id="logsKicker">Live merge · newest entries follow the session cursor.</div></div>
+            <div class="toolbar">
+              <button class="button" type="button" id="pauseButton" aria-pressed="false">Pause</button>
+              <button class="button" type="button" id="followButton" aria-pressed="true">Follow</button>
+              <button class="button" type="button" id="copyLogsButton">Copy redacted</button>
+              <button class="button" type="button" id="fullscreenLogsButton" aria-pressed="false" aria-controls="logFrame" title="Fill the browser window with logs">Full screen ⛶</button>
+            </div>
+          </div>
+          <div class="logs-controls">
+            <label class="sr-only" for="logQuery">Search log text</label>
+            <input class="field" id="logQuery" type="search" placeholder="Search text…" autocomplete="off">
+            <select class="select" id="levelFilter" aria-label="Filter log level"><option value="">All levels</option><option>error</option><option>warn</option><option>info</option><option>debug</option></select>
+            <select class="select" id="timeFilter" aria-label="Filter log time"><option value="">All time</option><option value="5">Last 5 min</option><option value="15">Last 15 min</option><option value="60">Last hour</option></select>
+            <button class="button" type="button" id="clearLogFilters">Clear filters</button>
+          </div>
+          <div class="service-filters" id="serviceFilters"></div>
+          <div class="log-frame" id="logFrame" tabindex="0" aria-label="Merged service logs" aria-live="off">
+            <div class="backlog-row"><button class="button" type="button" id="loadBacklogButton">Check for new logs</button></div>
+            <div id="logRows"></div>
+            <button class="button unseen" type="button" id="unseenButton"></button>
+          </div>
+          <div class="logs-foot"><span id="logStatus">No entries loaded</span><span id="correlationStatus">No correlation filter</span></div>
+        </div>
+      </section>
+
+      <section class="artboard" id="attempts" aria-labelledby="attemptsTitle">
+        <div class="artboard-label">04 / attempt timeline · startup record</div>
+        <div class="panel">
+          <div class="panel-head">
+            <div><h2 class="panel-title" id="attemptsTitle">Attempt timeline</h2><div class="panel-kicker">Select an attempt to narrow logs; stage status is recorded startup evidence.</div></div>
+            <button class="button" type="button" id="clearAttemptButton">Clear attempt filter</button>
+          </div>
+          <div class="timeline-wrap"><div class="timeline" id="timeline"></div></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="actionDialog" aria-labelledby="dialogTitle">
+    <div class="dialog-head"><h2 id="dialogTitle">Confirm action</h2></div>
+    <div class="dialog-body"><div id="dialogMessage"></div><div class="dialog-services" id="dialogServices"></div></div>
+    <div class="dialog-actions"><button class="button" type="button" id="dialogCancel">Cancel</button><button class="button danger" type="button" id="dialogConfirm">Confirm</button></div>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const isDemo = location.protocol === "file:";
+      const state = {
+        snapshot: null,
+        logs: [],
+        cursor: "",
+        hasMore: true,
+        selectedServices: new Set(),
+        selectionInitialized: false,
+        topologyFocus: "",
+        attemptFilter: "",
+        requestId: "",
+        traceId: "",
+        paused: false,
+        follow: true,
+        unseen: 0,
+        snapshotBackoff: 3000,
+        logBackoff: 1000,
+        snapshotAbort: null,
+        logAbort: null,
+        snapshotTimer: null,
+        logTimer: null,
+        dialogAction: "",
+        dialogRequest: null,
+        dialogTrigger: null,
+        viewHandled: false
+      };
+
+      const $ = (selector) => document.querySelector(selector);
+      const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+      const demoNow = Date.now();
+      const demoSnapshot = {
+        workspace: "checkout-lab",
+        version: "0.4.0-dev",
+        environment: "local",
+        lanAddress: "192.168.1.42",
+        lanInterface: "en0",
+        disabledBindings: ["chatclbtRpc", "dataFactoryRpc", "smartviewMgrRpc"],
+        sessionToken: "demo-session-token",
+        services: [
+          { name: "gateway", pid: 48102, state: "running", ports: { http: 8080 }, listeners: [{ name: "http", address: "loopback", port: 8080 }], verification: "listener verified 09:41:22", health: { status: "healthy", checkedAt: new Date(demoNow - 4000).toISOString(), message: "HTTP 200 · 18ms" } },
+          { name: "catalog", pid: 48118, state: "running", ports: { http: 8081, rpc: 9081 }, listeners: [{ name: "http", address: "loopback", port: 8081 }, { name: "rpc", address: "loopback", port: 9081 }], verification: "2 listeners verified 09:41:24", health: { status: "degraded", checkedAt: new Date(demoNow - 6000).toISOString(), message: "dependency latency 420ms" } },
+          { name: "orders", pid: null, state: "failed", ports: { http: 8082 }, listeners: [], verification: "no listener observed", health: { status: "unhealthy", checkedAt: new Date(demoNow - 9000).toISOString(), message: "process exited before check" } },
+          { name: "worker", pid: 48143, state: "running", ports: {}, listeners: [], verification: "process started; listener not expected", health: { status: "unknown", checkedAt: null, message: "no health probe configured" } }
+        ],
+        routes: [
+          { consumer: "gateway", provider: "catalog", binding: "catalog.http", target: "127.0.0.1:8081", mode: "local" },
+          { consumer: "gateway", provider: "orders", binding: "orders.http", target: "127.0.0.1:8082", mode: "local" },
+          { consumer: "orders", provider: "catalog", binding: "catalog.rpc", target: "127.0.0.1:9081", mode: "local" },
+          { consumer: "worker", provider: "orders", binding: "orders.queue", target: "local binding", mode: "configured" }
+        ],
+        attempts: [
+          { id: "attempt-0042", status: "failed", environment: "local", services: ["orders"], startedAt: new Date(demoNow - 185000).toISOString(), finishedAt: new Date(demoNow - 176000).toISOString(), stages: [{ name: "resolve", status: "completed" }, { name: "materialize", status: "completed" }, { name: "spawn", status: "completed" }, { name: "verify", status: "failed" }, { name: "cleanup", status: "completed" }], failure: { stage: "verify", service: "orders", error: "listener could not be verified", nextStep: "inspect the captured listener error", retrySafety: "safe after resolving the port conflict", logTail: ["WARN retrying listener bind", "ERROR listener verification failed"] } },
+          { id: "attempt-0041", status: "succeeded", environment: "local", services: ["gateway", "catalog", "worker"], startedAt: new Date(demoNow - 640000).toISOString(), finishedAt: new Date(demoNow - 623000).toISOString(), stages: [{ name: "resolve", status: "done" }, { name: "materialize", status: "done" }, { name: "spawn", status: "done" }, { name: "verify", status: "done" }], failure: "" },
+          { id: "attempt-0040", status: "cancelled", environment: "local", services: ["catalog"], startedAt: new Date(demoNow - 1450000).toISOString(), finishedAt: new Date(demoNow - 1444000).toISOString(), stages: [{ name: "resolve", status: "done" }, { name: "materialize", status: "done" }, { name: "spawn", status: "cancelled" }], failure: "cancelled by operator" }
+        ],
+        connection: { driver: "kubernetes", status: "connected", cluster: "dev-sandbox", namespace: "conven-local" }
+      };
+
+      const demoLogs = [
+        ["gateway", "INFO", "server listening on loopback:8080", "req-a184", "tr-921c"],
+        ["catalog", "INFO", "{\"event\":\"listener.ready\",\"protocol\":\"rpc\",\"port\":9081}", "", "tr-921c"],
+        ["orders", "WARN", "retrying listener bind after 250ms", "", "tr-b201"],
+        ["gateway", "INFO", "GET /v1/catalog 200 18ms", "req-a184", "tr-921c"],
+        ["catalog", "WARN", "inventory dependency slow: 420ms", "req-a184", "tr-921c"],
+        ["orders", "ERROR", "listen tcp 127.0.0.1:8082: bind: address already in use", "", "tr-b201"],
+        ["worker", "INFO", "consumer ready; waiting for local binding", "", ""],
+        ["orders", "ERROR", "process exited with status 1", "", "tr-b201"]
+      ].map((item, index) => ({ id: `demo-${index + 1}`, service: item[0], text: item[2], time: new Date(demoNow - (demoLogsLength() - index) * 13000).toISOString(), level: item[1].toLowerCase(), requestId: item[3], traceId: item[4], attempt: index > 4 ? "attempt-0042" : "attempt-0041" }));
+
+      function demoLogsLength() { return 8; }
+
+      function readToken() {
+        const params = new URLSearchParams(location.hash.replace(/^#/, ""));
+        const fragmentToken = params.get("token");
+        if (fragmentToken) {
+          sessionStorage.setItem("conven.sessionToken", fragmentToken);
+          history.replaceState(null, "", location.pathname + location.search);
+        }
+        return fragmentToken || sessionStorage.getItem("conven.sessionToken") || "";
+      }
+
+      function setConnection(kind, text) {
+        $("#connectionDot").className = `dot ${kind || ""}`.trim();
+        $("#connectionText").textContent = text;
+      }
+
+      function showError(title, message) {
+        $("#errorTitle").textContent = title;
+        $("#errorMessage").textContent = message;
+        $("#errorBanner").classList.add("show");
+      }
+
+      function clearError() { $("#errorBanner").classList.remove("show"); }
+
+      function showToast(message) {
+        const toast = $("#toast");
+        toast.textContent = message;
+        toast.classList.add("show");
+        window.clearTimeout(showToast.timer);
+        showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 2400);
+      }
+
+      function formatTime(value, includeDate = false) {
+        if (!value) return "unknown";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "unknown";
+        return new Intl.DateTimeFormat(undefined, includeDate ? { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" } : { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(date);
+      }
+
+      function stateClass(value) {
+        const normalized = String(value || "unknown").toLowerCase();
+        if (["healthy", "running", "succeeded", "completed", "complete", "connected", "done", "verified"].includes(normalized)) return "ok";
+        if (["unhealthy", "failed", "error", "stopped"].includes(normalized)) return "fail";
+        if (["degraded", "warn", "cancelled"].includes(normalized)) return "warn";
+        return "unknown";
+      }
+
+      function stateLabel(value) {
+        const span = document.createElement("span");
+        span.className = `state ${stateClass(value)}`;
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        const label = document.createElement("span");
+        label.textContent = value || "unknown";
+        span.append(dot, label);
+        return span;
+      }
+
+      function appendKV(container, key, value) {
+        const dt = document.createElement("dt");
+        const dd = document.createElement("dd");
+        dt.textContent = key;
+        dd.textContent = value == null || value === "" ? "unknown" : String(value);
+        if (value == null || value === "") dd.className = "unknown";
+        container.append(dt, dd);
+      }
+
+      function renderSnapshot(snapshot) {
+        state.snapshot = snapshot;
+        const services = Array.isArray(snapshot.services) ? snapshot.services : [];
+        const attempts = Array.isArray(snapshot.attempts) ? snapshot.attempts : [];
+        $("#brandContext").textContent = `${snapshot.workspace || "unknown workspace"} · ${snapshot.environment || "unknown environment"}`;
+        $("#workspaceName").textContent = snapshot.workspace || "Unknown workspace";
+        $("#environmentMeta").textContent = `ENV ${snapshot.environment || "unknown"}`;
+        $("#lanAddress").textContent = snapshot.lanAddress ? `${snapshot.lanAddress}${snapshot.lanInterface ? ` (${snapshot.lanInterface})` : ""}` : "unknown";
+        $("#disabledBindings").textContent = Array.isArray(snapshot.disabledBindings) ? (snapshot.disabledBindings.join(", ") || "none") : "unknown";
+        $("#versionMeta").textContent = `VERSION ${snapshot.version || "unknown"}`;
+        $("#sessionMeta").textContent = snapshot.sessionToken ? "SESSION active" : "SESSION none";
+        $("#serviceCount").textContent = String(services.length);
+        $("#healthyCount").textContent = String(services.filter((service) => stateClass(service.health && service.health.status) === "ok").length);
+        $("#failedCount").textContent = String(services.filter((service) => stateClass(service.state) === "fail" || stateClass(service.health && service.health.status) === "fail").length);
+
+        const connection = snapshot.connection || {};
+        const connectionDetails = $("#connectionDetails");
+        connectionDetails.replaceChildren();
+        const fields = Object.entries(connection).filter(([key]) => !/token|secret|password|credential/i.test(key));
+        if (!fields.length) appendKV(connectionDetails, "status", "unknown");
+        fields.forEach(([key, value]) => appendKV(connectionDetails, key, typeof value === "object" ? JSON.stringify(value) : value));
+
+        renderEvidence(services);
+        renderHealth(services);
+        renderFailure(services, attempts);
+        renderServiceFilters(services);
+        renderServiceTable(services);
+        renderTopology(services, snapshot.routes || []);
+        renderRoutes(snapshot.routes || []);
+        renderTimeline(attempts);
+        syncActionButtons();
+        applyRequestedView();
+      }
+
+      function renderEvidence(services) {
+        const container = $("#evidenceList");
+        container.replaceChildren();
+        if (!services.length) return container.append(emptyMessage("No startup evidence reported."));
+        services.forEach((service) => {
+          const row = document.createElement("div"); row.className = "evidence-row";
+          const name = document.createElement("span"); name.textContent = service.name || "unnamed";
+          const proof = document.createElement("span"); proof.className = "proof"; proof.textContent = service.verification || "verification unknown";
+          const pid = document.createElement("span"); pid.className = service.pid == null ? "unknown" : "muted"; pid.textContent = service.pid == null ? "PID ?" : `PID ${service.pid}`;
+          row.append(name, proof, pid); container.append(row);
+        });
+      }
+
+      function renderHealth(services) {
+        const container = $("#healthList");
+        container.replaceChildren();
+        if (!services.length) return container.append(emptyMessage("No health checks reported."));
+        services.forEach((service) => {
+          const health = service.health || {};
+          const row = document.createElement("div"); row.className = "health-row";
+          const name = document.createElement("span"); name.textContent = service.name || "unnamed";
+          const message = document.createElement("span"); message.className = "message"; message.textContent = health.message || "no current health evidence"; message.title = message.textContent;
+          const status = stateLabel(health.status || "unknown"); status.title = health.checkedAt ? `Checked ${formatTime(health.checkedAt, true)}` : "Check time unknown";
+          row.append(name, message, status); container.append(row);
+        });
+      }
+
+      function renderFailure(services, attempts) {
+        const configurationError = state.snapshot && state.snapshot.configurationError;
+        const failedService = services.find((service) => stateClass(service.state) === "fail" || stateClass(service.health && service.health.status) === "fail");
+        const failedAttempt = attempts.find((attempt) => stateClass(attempt.status) === "fail");
+        const strip = $("#failureStrip");
+        if (!configurationError && !failedService && !failedAttempt) { strip.classList.remove("show"); return; }
+        $("#failureTitle").textContent = configurationError ? "Workspace configuration could not be loaded" : failedService ? `${failedService.name || "Service"} is not running cleanly` : `${failedAttempt.id || "Latest attempt"} failed`;
+        $("#failureDetail").textContent = configurationError || (failedAttempt && failedAttempt.failure ? failureSummary(failedAttempt.failure) : (failedService.health && failedService.health.message) || "Failure details unavailable.");
+        $("#failureLogsButton").textContent = configurationError ? "Open configuration" : "Inspect logs";
+        $("#failureLogsButton").dataset.destination = configurationError ? "configuration" : "logs";
+        strip.classList.add("show");
+      }
+
+      function emptyMessage(text) {
+        const div = document.createElement("div"); div.className = "log-empty"; div.textContent = text; return div;
+      }
+
+      function renderServiceFilters(services) {
+        const container = $("#serviceFilters");
+        const previous = new Set(state.selectedServices);
+        container.replaceChildren();
+        services.forEach((service, index) => {
+          const wrap = document.createElement("span"); wrap.className = "check-chip";
+          const input = document.createElement("input"); input.type = "checkbox"; input.id = `service-filter-${index}`; input.value = service.name; input.checked = (!state.selectionInitialized && !previous.size) || previous.has(service.name);
+          const label = document.createElement("label"); label.htmlFor = input.id; label.textContent = service.name;
+          input.addEventListener("change", updateServiceSelection);
+          wrap.append(input, label); container.append(wrap);
+        });
+        const summary = document.createElement("span"); summary.className = "filter-summary"; summary.id = "filterSummary"; container.append(summary);
+        updateServiceSelection(false);
+        if (services.length) state.selectionInitialized = true;
+      }
+
+      function updateServiceSelection(refresh = true) {
+        state.selectedServices = new Set($$("#serviceFilters input:checked").map((input) => input.value));
+        const total = $$("#serviceFilters input").length;
+        const summary = $("#filterSummary");
+        if (summary) summary.textContent = `${state.selectedServices.size}/${total} services`;
+        syncActionButtons();
+        if (refresh) { renderLogs(); resetLogPoll(); }
+      }
+
+      function syncActionButtons() {
+        const hasSession = isDemo || Boolean(state.snapshot && state.snapshot.sessionToken);
+        const configurationError = Boolean(state.snapshot && state.snapshot.configurationError);
+        const disabled = !state.selectedServices.size || !hasSession || configurationError;
+        $$('[data-action="stop"], [data-action="restart"]').forEach((button) => {
+          button.disabled = disabled;
+          button.title = configurationError ? "Actions are disabled until the workspace configuration is valid" : (!hasSession ? "No current Conven session token was reported" : (!state.selectedServices.size ? "Select at least one service" : ""));
+        });
+      }
+
+      function renderServiceTable(services) {
+        const query = $("#serviceSearch").value.trim().toLowerCase();
+        const filter = $("#serviceStateFilter").value;
+        const body = $("#serviceTableBody"); body.replaceChildren();
+        services.filter((service) => (!query || String(service.name || "").toLowerCase().includes(query)) && (!filter || String(service.state || "unknown").toLowerCase() === filter)).forEach((service) => {
+          const tr = document.createElement("tr"); tr.tabIndex = 0; tr.dataset.service = service.name || "";
+          if (service.name === state.topologyFocus) tr.classList.add("selected");
+          const name = document.createElement("td"); name.textContent = service.name || "unnamed";
+          const pid = document.createElement("td"); pid.textContent = service.pid == null ? "unknown" : String(service.pid); if (service.pid == null) pid.className = "unknown";
+          const status = document.createElement("td"); status.append(stateLabel(service.state || "unknown"));
+          const ports = document.createElement("td"); ports.className = "port-list"; ports.textContent = formatPorts(service);
+          tr.append(name, pid, status, ports);
+          tr.addEventListener("click", () => focusTopology(service.name));
+          tr.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); focusTopology(service.name); } });
+          body.append(tr);
+        });
+        if (!body.children.length) { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 4; td.className = "unknown"; td.textContent = "No services match this view."; tr.append(td); body.append(tr); }
+      }
+
+      function formatPorts(service) {
+        const parts = [];
+        const ports = service.ports || {};
+        Object.entries(ports).forEach(([name, port]) => parts.push(`${name}:${port}`));
+        if (Array.isArray(service.listeners)) service.listeners.forEach((listener) => {
+          const identity = listener.name || "listener";
+          const endpoint = listener.port ? `${listener.address || listener.mode || "address unknown"}:${listener.port}` : (listener.address || listener.mode || "endpoint unknown");
+          parts.push(`${identity} observed ${endpoint}`);
+        });
+        return parts.join(" · ") || "none reported";
+      }
+
+      function renderTopology(services, routes) {
+        services = services.slice();
+        const knownNodes = new Set(services.map((service) => service.name));
+        routes = routes.map((route) => ({ ...route, provider: routeNodeKey(route) }));
+        routes.forEach((route) => {
+          if (route.consumer && !knownNodes.has(route.consumer)) {
+            services.push({ name: route.consumer, state: "not running locally", ports: {} });
+            knownNodes.add(route.consumer);
+          }
+          if (!knownNodes.has(route.provider)) {
+            services.push({ name: route.provider, state: route.mode || "unknown", ports: {} });
+            knownNodes.add(route.provider);
+          }
+        });
+        const svg = $("#topologySvg");
+        Array.from(svg.children).filter((node) => !["title", "desc"].includes(node.tagName.toLowerCase())).forEach((node) => node.remove());
+        const names = services.map((service) => service.name).filter(Boolean);
+        if (!names.length) return;
+        const layout = servingLayout(names, routes);
+        const positions = layout.positions;
+        svg.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
+        svg.style.height = `${layout.height}px`;
+        svg.style.minWidth = `${layout.width}px`;
+        const namespace = "http://www.w3.org/2000/svg";
+        const defs = document.createElementNS(namespace, "defs");
+        const marker = document.createElementNS(namespace, "marker");
+        marker.setAttribute("id", "dependencyArrow"); marker.setAttribute("viewBox", "0 0 10 10");
+        marker.setAttribute("refX", "9"); marker.setAttribute("refY", "5"); marker.setAttribute("markerWidth", "8"); marker.setAttribute("markerHeight", "8"); marker.setAttribute("orient", "auto-start-reverse");
+        const arrow = document.createElementNS(namespace, "path"); arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 Z"); arrow.setAttribute("fill", "#a9c4cb");
+        marker.append(arrow); defs.append(marker); svg.append(defs);
+        const related = new Set([state.topologyFocus]);
+        routes.forEach((route) => { if (route.consumer === state.topologyFocus) related.add(route.provider); if (route.provider === state.topologyFocus) related.add(route.consumer); });
+        routes.forEach((route, index) => {
+          const from = positions.get(route.provider), to = positions.get(route.consumer); if (!from || !to) return;
+          const outgoing = routes.filter((edge) => edge.provider === route.provider);
+          const incoming = routes.filter((edge) => edge.consumer === route.consumer);
+          const portOffset = (edges) => (edges.indexOf(route) + 1) * 32 / (edges.length + 1) - 16;
+          const line = document.createElementNS(namespace, "path");
+          line.setAttribute("d", servingPath(from, to, portOffset(outgoing), portOffset(incoming), index));
+          const title = document.createElementNS(namespace, "title"); title.textContent = `${route.provider} serves ${route.consumer}${route.binding ? ` (${route.binding})` : ""}`; line.append(title);
+          line.setAttribute("aria-label", title.textContent);
+          const focused = state.topologyFocus && (route.consumer === state.topologyFocus || route.provider === state.topologyFocus);
+          line.setAttribute("class", `edge${route.mode === "remote" ? " remote" : ""}${focused ? " focus" : ""}${state.topologyFocus && !focused ? " dim" : ""}`);
+          svg.append(line);
+        });
+        services.forEach((service) => {
+          const position = positions.get(service.name); if (!position) return;
+          const group = document.createElementNS(namespace, "g");
+          const nodeState = service.state === "running" ? "running" : service.state === "remote" ? "remote" : service.state === "failed" ? "failed" : "unknown";
+          group.setAttribute("class", `node ${nodeState}${service.name === state.topologyFocus ? " selected" : ""}${state.topologyFocus && !related.has(service.name) ? " dim" : ""}`);
+          group.setAttribute("tabindex", "0"); group.setAttribute("role", "button"); group.setAttribute("aria-label", `Focus ${service.name}`);
+          group.setAttribute("transform", `translate(${position.x - 90} ${position.y - 25})`);
+          const rect = document.createElementNS(namespace, "rect"); rect.setAttribute("width", "180"); rect.setAttribute("height", "50");
+          const title = document.createElementNS(namespace, "title"); title.textContent = service.name; group.append(title);
+          const name = document.createElementNS(namespace, "text"); name.setAttribute("x", "10"); name.setAttribute("y", "21"); name.textContent = service.name.length > 24 ? service.name.slice(0, 23) + "…" : service.name;
+          const status = document.createElementNS(namespace, "text"); status.setAttribute("x", "10"); status.setAttribute("y", "38"); status.setAttribute("class", "node-state"); status.textContent = `${service.state || "unknown"} · ${Object.keys(service.ports || {}).length} ports`;
+          group.append(rect, name, status);
+          group.addEventListener("click", () => focusTopology(service.name));
+          group.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); focusTopology(service.name); } });
+          svg.append(group);
+        });
+      }
+
+      function servingLayout(names, routes) {
+        const levels = new Map(names.map((name) => [name, 0]));
+        const incoming = new Map(names.map((name) => [name, new Set()]));
+        const outgoing = new Map(names.map((name) => [name, new Set()]));
+        routes.forEach(({ provider, consumer }) => {
+          if (!incoming.has(consumer) || !outgoing.has(provider) || provider === consumer) return;
+          incoming.get(consumer).add(provider); outgoing.get(provider).add(consumer);
+        });
+        const queue = names.filter((name) => !incoming.get(name).size);
+        const visited = new Set();
+        for (let index = 0; index < queue.length; index++) {
+          const provider = queue[index]; visited.add(provider);
+          outgoing.get(provider).forEach((consumer) => {
+            levels.set(consumer, Math.max(levels.get(consumer), levels.get(provider) + 1));
+            incoming.get(consumer).delete(provider);
+            if (!incoming.get(consumer).size) queue.push(consumer);
+          });
+        }
+        // Cycles get deterministic separate columns; their return edges use outer lanes.
+        let lastLevel = Math.max(0, ...levels.values());
+        names.filter((name) => !visited.has(name)).forEach((name) => levels.set(name, ++lastLevel));
+        const columns = new Map();
+        names.forEach((name) => { const level = levels.get(name); if (!columns.has(level)) columns.set(level, []); columns.get(level).push(name); });
+        const rows = Math.max(1, ...Array.from(columns.values(), (column) => column.length));
+        const top = 70 + routes.length * 10;
+        const positions = new Map();
+        columns.forEach((column, level) => column.forEach((name, index) => positions.set(name, { x: 120 + level * 300, y: top + ((rows - column.length) / 2 + index) * 90, level })));
+        return { positions, width: Math.max(720, 240 + Math.max(0, ...levels.values()) * 300), height: Math.max(410, top + rows * 90) };
+      }
+
+      function servingPath(from, to, sourceOffset = 0, targetOffset = 0, lane = 0) {
+        const startX = from.x + 91, startY = from.y + sourceOffset;
+        const endX = to.x - 96, endY = to.y + targetOffset;
+        if (to.level === from.level + 1) {
+          const middle = (startX + endX) / 2;
+          return `M ${startX} ${startY} C ${middle} ${startY}, ${middle} ${endY}, ${endX} ${endY}`;
+        }
+        // Skip-level, self and reverse edges travel through gutters, never through nodes.
+        const outerY = 20 + lane * 10;
+        return `M ${startX} ${startY} L ${from.x + 110} ${startY} L ${from.x + 110} ${outerY} L ${to.x - 110} ${outerY} L ${to.x - 110} ${endY} L ${endX} ${endY}`;
+      }
+
+      function setSectionExpanded(section, expanded) {
+        const body = section.querySelector(".section-body");
+        if (!body) return;
+        body.hidden = !expanded;
+        section.querySelector(".panel").classList.toggle("is-collapsed", !expanded);
+        const button = section.querySelector(".section-toggle");
+        button.setAttribute("aria-expanded", String(expanded));
+        button.textContent = expanded ? "Collapse −" : "Expand +";
+      }
+
+      function setLogsFullscreen(enabled) {
+        const panel = $(".logs-panel"), frame = $("#logFrame");
+        const scrollTop = frame.scrollTop, scrollLeft = frame.scrollLeft;
+        if (enabled) setSectionExpanded($("#logs"), true);
+        panel.classList.toggle("is-fullscreen", enabled);
+        document.documentElement.classList.toggle("logs-fullscreen", enabled);
+        const button = $("#fullscreenLogsButton");
+        button.setAttribute("aria-pressed", String(enabled));
+        button.textContent = enabled ? "Exit full screen · Esc" : "Full screen ⛶";
+        button.title = enabled ? "Return to dashboard layout" : "Fill the browser window with logs";
+        $("#logs .section-toggle").disabled = enabled;
+        frame.scrollTop = scrollTop; frame.scrollLeft = scrollLeft;
+        button.focus({ preventScroll: true });
+      }
+
+      function handleLogsFullscreenKey(event) {
+        if (!$(".logs-panel").classList.contains("is-fullscreen")) return false;
+        if (event.key === "Escape") {
+          event.preventDefault(); setLogsFullscreen(false); return true;
+        }
+        if (event.key === "Tab") {
+          const controls = Array.from($(".logs-panel").querySelectorAll('button:not(:disabled), input, select, summary, [tabindex="0"]')).filter((element) => element.getClientRects().length);
+          const first = controls[0], last = controls[controls.length - 1];
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+          else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        }
+        return false;
+      }
+
+      function revealSection(id) {
+        const section = document.getElementById(id);
+        if (!section) return;
+        setSectionExpanded(section, true);
+        section.scrollIntoView({ block: "start" });
+      }
+
+      function initializeSections() {
+        $$("main section.artboard").forEach((section) => {
+          const panel = section.querySelector(".panel"), head = panel.querySelector(".panel-head");
+          const body = document.createElement("div"); body.className = "section-body"; body.id = `${section.id}-body`;
+          Array.from(panel.children).filter((child) => child !== head).forEach((child) => body.append(child));
+          panel.append(body);
+          const button = document.createElement("button"); button.type = "button"; button.className = "button section-toggle";
+          button.setAttribute("aria-controls", body.id); button.setAttribute("aria-label", `Toggle ${section.querySelector(".panel-title").textContent}`);
+          button.addEventListener("click", () => setSectionExpanded(section, body.hidden));
+          head.append(button); setSectionExpanded(section, true);
+        });
+        $$(".section-nav a").forEach((link) => link.addEventListener("click", () => setSectionExpanded(document.querySelector(link.getAttribute("href")), true)));
+      }
+
+      function focusTopology(name) {
+        state.topologyFocus = state.topologyFocus === name ? "" : name;
+        renderTopology(state.snapshot.services || [], state.snapshot.routes || []);
+        renderServiceTable(state.snapshot.services || []);
+        renderRoutes(state.snapshot.routes || []);
+      }
+
+      function renderRoutes(routes) {
+        const container = $("#routeList"); container.replaceChildren();
+        const visible = state.topologyFocus ? routes.filter((route) => route.consumer === state.topologyFocus || routeNodeKey(route) === state.topologyFocus) : routes;
+        if (!visible.length) return container.append(emptyMessage("No configured bindings reported."));
+        visible.forEach((route) => {
+          const row = document.createElement("div"); row.className = "route-row";
+          const consumer = document.createElement("span"); consumer.textContent = route.consumer || "unknown";
+          const arrow = document.createElement("span"); arrow.className = "route-arrow"; arrow.textContent = "→";
+          const provider = document.createElement("span"); provider.textContent = route.provider || route.target || "unknown";
+          const binding = document.createElement("span"); binding.className = "binding"; binding.textContent = `${route.binding || "binding unknown"} · ${route.mode || "mode unknown"}${route.source ? ` · ${route.source}` : ""}`; binding.title = route.target || "target unknown";
+          row.title = `${provider.textContent} serves ${consumer.textContent}`;
+          row.append(provider, arrow, consumer, binding); container.append(row);
+        });
+      }
+
+      function renderTimeline(attempts) {
+        const container = $("#timeline"); container.replaceChildren();
+        if (!attempts.length) container.append(emptyMessage("No startup attempts reported."));
+        attempts.forEach((attempt) => {
+          const row = document.createElement("div"); row.className = `attempt${attempt.id === state.attemptFilter ? " selected" : ""}`; row.tabIndex = 0; row.setAttribute("role", "button"); row.setAttribute("aria-label", `Filter logs by ${attempt.id || "attempt"}`);
+          const identity = document.createElement("div");
+          const id = document.createElement("div"); id.className = "attempt-id"; id.textContent = attempt.id || "unknown attempt";
+          const timing = document.createElement("div"); timing.className = "attempt-meta"; timing.textContent = `${formatTime(attempt.startedAt, true)} · ${duration(attempt.startedAt, attempt.finishedAt)}`;
+          identity.append(id, timing);
+          const status = document.createElement("div"); status.append(stateLabel(attempt.status || "unknown"));
+          const track = document.createElement("div"); track.className = "stage-track";
+          (attempt.stages || []).forEach((stage) => { const item = document.createElement("span"); item.className = `stage ${stage.status === "failed" ? "failed" : ["done", "succeeded", "completed", "complete"].includes(stage.status) ? "done" : ""}`; const line = document.createElement("span"); line.className = "stage-line"; const label = document.createElement("span"); label.className = "stage-label"; label.textContent = `${stage.name || "stage"} · ${stage.status || "unknown"}`; item.title = [stage.name, stage.service, stage.status, stage.startedAt && `started ${formatTime(stage.startedAt, true)}`, stage.finishedAt && `finished ${formatTime(stage.finishedAt, true)}`, stage.error].filter(Boolean).join(" · "); item.append(line, label); track.append(item); });
+          const failure = renderAttemptFailure(attempt);
+          row.append(identity, status, track, failure);
+          const activate = () => selectAttempt(attempt);
+          row.addEventListener("click", activate); row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activate(); } });
+          container.append(row);
+        });
+        const events = state.snapshot && Array.isArray(state.snapshot.events) ? state.snapshot.events : [];
+        if (events.length) {
+          const label = document.createElement("p");
+          label.textContent = "Observed transitions · current viewer only · not continuous isolation verification";
+          container.append(label);
+        }
+        events.forEach((event) => {
+          const row = document.createElement("button"); row.type = "button"; row.className = "attempt";
+          const identity = document.createElement("span"); identity.textContent = `${event.type || "observation"} · ${event.service || "workspace"}`;
+          const time = document.createElement("span"); time.textContent = formatTime(event.time, true);
+          const message = document.createElement("span"); message.textContent = event.message || "";
+          row.append(identity, stateLabel(event.status), time, message);
+          row.addEventListener("click", () => {
+            state.attemptFilter = "";
+            if (event.service) {
+              $$("#serviceFilters input").forEach((input) => { input.checked = input.value === event.service; });
+              updateServiceSelection(false);
+            }
+            resetLogPoll();
+            revealSection("logs");
+          });
+          container.append(row);
+        });
+      }
+
+      function failureSummary(failure) {
+        if (!failure) return "";
+        if (typeof failure === "string") return failure;
+        return failure.error || failure.message || [failure.service, failure.stage].filter(Boolean).join(" · ") || "Failure details unavailable";
+      }
+
+      function renderAttemptFailure(attempt) {
+        const container = document.createElement("div"); container.className = "attempt-failure";
+        const failure = attempt.failure;
+        if (!failure) { container.textContent = (attempt.services || []).join(", ") || "services unknown"; return container; }
+        if (typeof failure === "string") { container.textContent = failure; return container; }
+        const summary = document.createElement("span"); summary.textContent = failureSummary(failure); container.append(summary);
+        const contextParts = [];
+        if (failure.classification) contextParts.push(failure.classification);
+        if (failure.service) contextParts.push(`service ${failure.service}`);
+        if (failure.stage) contextParts.push(`stage ${failure.stage}`);
+        if (contextParts.length) { const context = document.createElement("span"); context.className = "failure-context"; context.textContent = contextParts.join(" · "); container.append(context); }
+        const guidanceParts = [];
+        if (failure.nextStep) guidanceParts.push(`next: ${failure.nextStep}`);
+        if (failure.retrySafety) guidanceParts.push(`retry: ${failure.retrySafety}`);
+        if (guidanceParts.length) { const guidance = document.createElement("span"); guidance.className = "failure-guidance"; guidance.textContent = guidanceParts.join(" · "); container.append(guidance); }
+        const cleanupParts = [];
+        if (failure.cleanupStatus) cleanupParts.push(`cleanup: ${failure.cleanupStatus}`);
+        for (const [key, label] of [["startedServices", "started"], ["pendingServices", "not started"], ["rolledBackServices", "rolled back"], ["remainingServices", "remaining"]]) {
+          if (Array.isArray(failure[key]) && failure[key].length) cleanupParts.push(`${label}: ${failure[key].join(", ")}`);
+        }
+        if (cleanupParts.length) { const cleanup = document.createElement("span"); cleanup.className = "failure-context"; cleanup.textContent = cleanupParts.join(" · "); container.append(cleanup); }
+        const lines = Array.isArray(failure.logTail) ? failure.logTail : (failure.logTail ? String(failure.logTail).split(/\r?\n/).filter(Boolean) : []);
+        if (lines.length) {
+          const details = document.createElement("details"); details.addEventListener("click", (event) => event.stopPropagation());
+          const detailsSummary = document.createElement("summary"); detailsSummary.textContent = `${lines.length} captured log line${lines.length === 1 ? "" : "s"}`;
+          const pre = document.createElement("pre"); pre.textContent = lines.join("\n");
+          details.append(detailsSummary, pre); container.append(details);
+        }
+        return container;
+      }
+
+      function duration(start, end) {
+        const a = new Date(start).getTime(), b = new Date(end).getTime();
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return "duration unknown";
+        const ms = Math.max(0, b - a); return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+      }
+
+      function selectAttempt(attempt) {
+        state.attemptFilter = state.attemptFilter === attempt.id ? "" : attempt.id;
+        if (state.attemptFilter && Array.isArray(attempt.services) && attempt.services.length) {
+          $$("#serviceFilters input").forEach((input) => input.checked = attempt.services.includes(input.value));
+          updateServiceSelection(false);
+        }
+        renderTimeline(state.snapshot.attempts || []); renderLogs(); resetLogPoll();
+        revealSection("logs");
+      }
+
+      function filteredLogs() {
+        const query = $("#logQuery").value.trim().toLowerCase();
+        const level = $("#levelFilter").value.toLowerCase();
+        const minutes = Number($("#timeFilter").value || 0);
+        const cutoff = minutes ? Date.now() - minutes * 60000 : 0;
+        return state.logs.filter((entry) => {
+          if (state.selectionInitialized && !state.selectedServices.size && !state.attemptFilter) return false;
+          if (state.selectedServices.size && !state.selectedServices.has(entry.service)) return false;
+          if (query && !String(entry.text || "").toLowerCase().includes(query)) return false;
+          if (level && String(entry.level || "").toLowerCase() !== level) return false;
+          if (cutoff && new Date(entry.time).getTime() < cutoff) return false;
+          if (state.requestId && entry.requestId !== state.requestId) return false;
+          if (state.traceId && entry.traceId !== state.traceId) return false;
+          if (state.attemptFilter && entry.attempt && entry.attempt !== state.attemptFilter) return false;
+          return true;
+        });
+      }
+
+      function renderLogs() {
+        const container = $("#logRows"); container.replaceChildren();
+        const entries = filteredLogs();
+        const query = $("#logQuery").value.trim();
+        if (!entries.length) container.append(emptyMessage("No log entries match the active filters."));
+        entries.forEach((entry) => container.append(createLogRow(entry, query)));
+        $("#logStatus").textContent = `${entries.length} visible · ${state.logs.length} buffered${state.paused ? " · paused" : ""}`;
+        const correlation = state.requestId ? `request ${state.requestId}` : state.traceId ? `trace ${state.traceId}` : state.attemptFilter ? `attempt ${state.attemptFilter}` : "No correlation filter";
+        $("#correlationStatus").textContent = correlation;
+        $("#loadBacklogButton").disabled = !state.hasMore;
+        if (state.follow && !state.paused) scrollLogsToEnd();
+      }
+
+      function createLogRow(entry, query) {
+        const row = document.createElement("div"); row.className = "log-row"; row.dataset.id = entry.id || "";
+        const time = document.createElement("span"); time.className = "log-time"; time.textContent = formatTime(entry.time);
+        const service = document.createElement("span"); service.className = "log-service"; service.textContent = entry.service || "unknown";
+        const level = document.createElement("span"); level.className = `log-level ${String(entry.level || "").toLowerCase()}`; level.textContent = String(entry.level || "unknown").toUpperCase();
+        const text = document.createElement("span"); text.className = "log-text";
+        const parsed = tryParseJSON(entry.text);
+        if (parsed) {
+          const details = document.createElement("details"); details.className = "json-details";
+          const summary = document.createElement("summary"); summary.textContent = "JSON ";
+          appendHighlighted(summary, String(entry.text || ""), query);
+          const pre = document.createElement("pre"); pre.textContent = JSON.stringify(parsed, null, 2);
+          details.append(summary, pre); text.append(details);
+        } else appendHighlighted(text, String(entry.text || ""), query);
+        const correlations = document.createElement("span"); correlations.className = "correlation";
+        if (entry.requestId) correlations.append(correlationButton("req", entry.requestId, "requestId"));
+        if (entry.traceId) correlations.append(correlationButton("trace", entry.traceId, "traceId"));
+        text.append(correlations);
+        row.append(time, service, level, text); return row;
+      }
+
+      function appendHighlighted(container, text, query) {
+        if (!query) { container.append(document.createTextNode(text)); return; }
+        const lower = text.toLowerCase(), needle = query.toLowerCase(); let index = 0, match;
+        while ((match = lower.indexOf(needle, index)) !== -1) {
+          container.append(document.createTextNode(text.slice(index, match)));
+          const mark = document.createElement("mark"); mark.textContent = text.slice(match, match + query.length); container.append(mark);
+          index = match + query.length;
+        }
+        container.append(document.createTextNode(text.slice(index)));
+      }
+
+      function correlationButton(label, value, field) {
+        const button = document.createElement("button"); button.type = "button"; button.textContent = `${label}:${value}`; button.title = `Filter by ${field} ${value}`;
+        button.addEventListener("click", () => { state.requestId = field === "requestId" && state.requestId !== value ? value : ""; state.traceId = field === "traceId" && state.traceId !== value ? value : ""; renderLogs(); resetLogPoll(); });
+        return button;
+      }
+
+      function tryParseJSON(text) { try { const parsed = JSON.parse(text); return parsed && typeof parsed === "object" ? parsed : null; } catch { return null; } }
+      function routeNodeKey(route) { return route.provider || route.target || route.binding || "unknown destination"; }
+      function scrollLogsToEnd() { const frame = $("#logFrame"); requestAnimationFrame(() => frame.scrollTop = frame.scrollHeight); }
+
+      async function fetchJSON(url, options = {}, controllerKey) {
+        if (state[controllerKey]) state[controllerKey].abort();
+        const controller = new AbortController(); state[controllerKey] = controller;
+        const token = readToken();
+        const authorization = token ? { Authorization: `Bearer ${token}` } : {};
+        const timeout = window.setTimeout(() => controller.abort(new Error("Request timed out")), 12000);
+        try {
+          const response = await fetch(url, { ...options, signal: controller.signal, headers: { Accept: "application/json", ...authorization, ...(options.headers || {}) } });
+          if (!response.ok) throw new Error(`${response.status}: ${(await response.text()).slice(0, 4096)}`);
+          return await response.json();
+        } finally { window.clearTimeout(timeout); }
+      }
+
+      async function pollSnapshot() {
+        if (isDemo) return;
+        try {
+          const snapshot = await fetchJSON("/api/snapshot", {}, "snapshotAbort");
+          renderSnapshot(snapshot); clearError(); setConnection("live", "LIVE"); state.snapshotBackoff = 3000;
+        } catch (error) {
+          if (error.name === "AbortError") return;
+          setConnection("error", "RETRYING"); showError("Snapshot unavailable", `Conven will retry. ${error.message}`); state.snapshotBackoff = Math.min(state.snapshotBackoff * 2, 30000);
+        }
+        schedule(pollSnapshot, state.snapshotBackoff, "snapshotTimer");
+      }
+
+      function logParams(cursor = state.cursor) {
+        const params = new URLSearchParams();
+        if (state.selectedServices.size) params.set("services", Array.from(state.selectedServices).join(","));
+        if (cursor) params.set("cursor", cursor);
+        const query = $("#logQuery").value.trim(); if (query) params.set("query", query);
+        const level = $("#levelFilter").value; if (level) params.set("level", level);
+        const minutes = Number($("#timeFilter").value || 0); if (minutes) params.set("since", new Date(Date.now() - minutes * 60000).toISOString());
+        if (state.requestId) params.set("requestId", state.requestId);
+        if (state.traceId) params.set("traceId", state.traceId);
+        if (state.attemptFilter) params.set("attempt", state.attemptFilter);
+        return params;
+      }
+
+      async function pollLogs() {
+        if (isDemo) return;
+        try {
+          const payload = await fetchJSON(`/api/logs?${logParams()}`, {}, "logAbort");
+          if (payload.reset) state.logs = [];
+          mergeLogs(payload.entries || [], false); state.cursor = payload.cursor || state.cursor; state.hasMore = payload.hasMore !== false; state.logBackoff = 1000;
+        } catch (error) {
+          if (error.name === "AbortError") return;
+          state.logBackoff = Math.min(state.logBackoff * 2, 15000); $("#logStatus").textContent = `Log stream retrying · ${error.message}`;
+        }
+        schedule(pollLogs, state.logBackoff, "logTimer");
+      }
+
+      function mergeLogs(entries, prepend) {
+        const known = new Set(state.logs.map((entry) => entry.id));
+        const unique = entries.filter((entry) => !entry.id || !known.has(entry.id));
+        if (!unique.length) return;
+        state.logs = prepend ? [...unique, ...state.logs] : [...state.logs, ...unique];
+        if (state.logs.length > 2000) state.logs = state.logs.slice(-2000);
+        let retainedBytes = state.logs.reduce((size, entry) => size + String(entry.text || "").length * 2, 0);
+        while (retainedBytes > 4 * 1024 * 1024 && state.logs.length > 1) {
+          retainedBytes -= String(state.logs.shift().text || "").length * 2;
+        }
+        if (state.paused || !state.follow) {
+          state.unseen += unique.length; updateUnseen();
+          $("#logStatus").textContent = `${state.paused ? "Paused" : "Browsing"} · ${state.unseen} unseen · ${state.logs.length} buffered`;
+          return;
+        }
+        renderLogs();
+      }
+
+      async function loadBacklog() {
+        if (isDemo) { state.hasMore = false; renderLogs(); showToast("Demo backlog exhausted"); return; }
+        const button = $("#loadBacklogButton"); button.disabled = true;
+        try {
+          const payload = await fetchJSON(`/api/logs?${logParams(state.cursor)}`, {}, "logAbort");
+          mergeLogs(payload.entries || [], false); state.cursor = payload.cursor || state.cursor; state.hasMore = payload.hasMore !== false;
+        } catch (error) { showToast(`Backlog failed: ${error.message}`); }
+        finally { button.disabled = !state.hasMore; }
+      }
+
+      function resetLogPoll() {
+        state.cursor = ""; state.logs = isDemo ? demoLogs.slice() : [];
+        if (state.logAbort) state.logAbort.abort();
+        renderLogs();
+        if (!isDemo) schedule(pollLogs, 0, "logTimer");
+      }
+
+      function updateUnseen() {
+        const button = $("#unseenButton");
+        button.textContent = `${state.unseen} unseen · jump to latest`;
+        button.classList.toggle("show", state.unseen > 0);
+      }
+
+      function openActionDialog(action, trigger) {
+        const services = Array.from(state.selectedServices);
+        if (!services.length) return showToast("Select at least one service");
+        state.dialogAction = action; state.dialogTrigger = trigger;
+        state.dialogRequest = { action, services: services.slice(), sessionToken: (state.snapshot && state.snapshot.sessionToken) || "" };
+        $("#dialogTitle").textContent = `${action === "restart" ? "Restart" : "Stop"} ${services.length} service${services.length === 1 ? "" : "s"}?`;
+        $("#dialogMessage").textContent = action === "restart" ? "Processes in this scope will be stopped and started again. Current requests may be interrupted." : "Processes in this scope will stop. Other session services are not included.";
+        $("#dialogServices").textContent = services.join(" · ");
+        $("#dialogConfirm").textContent = action === "restart" ? "Restart selected" : "Stop selected";
+        $("#actionDialog").showModal(); $("#dialogCancel").focus();
+      }
+
+      async function executeAction(action, confirmation) {
+        const services = confirmation ? confirmation.services : Array.from(state.selectedServices);
+        const webToken = readToken();
+        const sessionToken = confirmation ? confirmation.sessionToken : (state.snapshot && state.snapshot.sessionToken) || "";
+        if (isDemo) {
+          if (action !== "refresh") showToast(`SIMULATED: ${action} queued for ${services.join(", ")}`);
+          else showToast("SIMULATED: snapshot refreshed");
+          return;
+        }
+        if (!webToken) { showError("Dashboard token missing", "Open the dashboard from Conven so it can provide an authorization token."); return; }
+        if (action !== "refresh" && !sessionToken) { showError("Session unavailable", "No current Conven session token was reported; stop and restart are disabled."); return; }
+        try {
+          const response = await fetch("/api/action", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${webToken}`, "X-Conven-Token": webToken }, body: JSON.stringify({ action, services, sessionToken }) });
+          if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+          const accepted = await response.json();
+          showToast(`${action} accepted for ${services.length || "session"} service${services.length === 1 ? "" : "s"}`);
+          if (response.status === 202) await pollOperation(action, webToken, accepted.id);
+          else pollSnapshot();
+        } catch (error) { showToast(`${action} failed: ${error.message}`); }
+      }
+
+      async function pollOperation(action, sessionToken, operationId) {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 16 * 60 * 1000) {
+          await new Promise((resolve) => window.setTimeout(resolve, 850));
+          const response = await fetch("/api/operation", { headers: { "Accept": "application/json", "Authorization": `Bearer ${sessionToken}`, "X-Conven-Token": sessionToken } });
+          if (!response.ok) throw new Error(`operation ${response.status} ${response.statusText}`);
+          const operation = await response.json();
+          if (operation.id !== operationId) {
+            showToast("Another operation has replaced this status; inspect the diagnostic timeline for the earlier result.");
+            pollSnapshot();
+            return;
+          }
+          const status = String(operation.status || "unknown").toLowerCase();
+          if (["failed", "error"].includes(status)) throw new Error(operation.error || `${action} operation failed`);
+          if (["succeeded", "complete", "completed", "done"].includes(status)) {
+            showToast(`${action} completed`);
+            pollSnapshot();
+            return;
+          }
+          $("#connectionText").textContent = `${action.toUpperCase()} ${status.toUpperCase()}`;
+        }
+        throw new Error(`${action} status is no longer being followed; inspect the diagnostic timeline before retrying`);
+      }
+
+      function applyRequestedView() {
+        if (state.viewHandled) return;
+        const params = new URLSearchParams(location.search);
+        const requested = params.get("view");
+        const target = requested === "timeline" ? "attempts" : requested;
+        if (["overview", "configuration", "logs", "attempts"].includes(target)) {
+          state.viewHandled = true;
+          requestAnimationFrame(() => revealSection(target));
+        }
+      }
+
+      function schedule(callback, delay, timerKey) {
+        if (state[timerKey]) window.clearTimeout(state[timerKey]);
+        state[timerKey] = window.setTimeout(() => { state[timerKey] = null; callback(); }, delay);
+      }
+
+      async function copyRedactedLogs() {
+        const redacted = filteredLogs().map((entry) => `[${formatTime(entry.time)}] [${entry.service || "unknown"}] ${entry.text || ""}`).join("\n")
+          .replace(/(authorization|token|secret|password|api[-_]?key)(\s*[=:]\s*)([^\s,;}]+)/gi, "$1$2[REDACTED]")
+          .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]");
+        try {
+          if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error("Clipboard API unavailable");
+          await navigator.clipboard.writeText(redacted);
+          showToast(`Copied ${filteredLogs().length} redacted log entries`);
+        } catch {
+          const textarea = document.createElement("textarea");
+          textarea.value = redacted; textarea.setAttribute("readonly", ""); textarea.style.position = "fixed"; textarea.style.opacity = "0";
+          document.body.append(textarea); textarea.select();
+          const copied = document.execCommand("copy"); textarea.remove();
+          showToast(copied ? `Copied ${filteredLogs().length} redacted log entries` : "Clipboard permission denied");
+        }
+      }
+
+      function bindEvents() {
+        initializeSections();
+        $$('[data-action="refresh"]').forEach((button) => button.addEventListener("click", () => executeAction("refresh")));
+        $$('[data-action="stop"], [data-action="restart"]').forEach((button) => button.addEventListener("click", () => openActionDialog(button.dataset.action, button)));
+        $("#dialogCancel").addEventListener("click", () => $("#actionDialog").close());
+        $("#dialogConfirm").addEventListener("click", async () => {
+          const confirmation = state.dialogRequest;
+          $("#actionDialog").close();
+          if (confirmation) await executeAction(confirmation.action, confirmation);
+        });
+        $("#actionDialog").addEventListener("close", () => { state.dialogRequest = null; if (state.dialogTrigger) state.dialogTrigger.focus(); });
+        $("#actionDialog").addEventListener("cancel", (event) => { event.preventDefault(); $("#actionDialog").close(); });
+        $("#failureLogsButton").addEventListener("click", () => revealSection($("#failureLogsButton").dataset.destination || "logs"));
+        $("#serviceSearch").addEventListener("input", () => renderServiceTable(state.snapshot.services || []));
+        $("#serviceStateFilter").addEventListener("change", () => renderServiceTable(state.snapshot.services || []));
+        $("#clearFocusButton").addEventListener("click", () => focusTopology(state.topologyFocus));
+        $("#topologyToggle").addEventListener("click", () => {
+          const listOnly = $(".topology-layout").classList.toggle("list-only");
+          $("#topologyToggle").setAttribute("aria-pressed", String(listOnly));
+          $("#topologyToggle").textContent = listOnly ? "Map & list" : "List only";
+        });
+        ["#logQuery", "#levelFilter", "#timeFilter"].forEach((selector) => $(selector).addEventListener(selector === "#logQuery" ? "input" : "change", () => { renderLogs(); resetLogPoll(); }));
+        $("#clearLogFilters").addEventListener("click", () => { $("#logQuery").value = ""; $("#levelFilter").value = ""; $("#timeFilter").value = ""; state.requestId = ""; state.traceId = ""; state.attemptFilter = ""; renderTimeline(state.snapshot.attempts || []); resetLogPoll(); });
+        $("#pauseButton").addEventListener("click", () => { state.paused = !state.paused; $("#pauseButton").textContent = state.paused ? "Resume" : "Pause"; $("#pauseButton").setAttribute("aria-pressed", String(state.paused)); if (!state.paused) { state.unseen = 0; updateUnseen(); } renderLogs(); });
+        $("#logFrame").addEventListener("mousedown", () => {
+          state.paused = true;
+          $("#pauseButton").textContent = "Resume";
+          $("#pauseButton").setAttribute("aria-pressed", "true");
+        });
+        $("#followButton").addEventListener("click", () => { state.follow = !state.follow; $("#followButton").setAttribute("aria-pressed", String(state.follow)); $("#followButton").classList.toggle("primary", state.follow); if (state.follow) { state.unseen = 0; updateUnseen(); scrollLogsToEnd(); } });
+        $("#unseenButton").addEventListener("click", () => { state.unseen = 0; state.follow = true; state.paused = false; $("#pauseButton").textContent = "Pause"; $("#pauseButton").setAttribute("aria-pressed", "false"); updateUnseen(); renderLogs(); scrollLogsToEnd(); });
+        $("#loadBacklogButton").addEventListener("click", loadBacklog);
+        $("#copyLogsButton").addEventListener("click", copyRedactedLogs);
+        $("#fullscreenLogsButton").addEventListener("click", () => setLogsFullscreen(!$(".logs-panel").classList.contains("is-fullscreen")));
+        $("#clearAttemptButton").addEventListener("click", () => { state.attemptFilter = ""; renderTimeline(state.snapshot.attempts || []); resetLogPoll(); });
+        $("#logFrame").addEventListener("scroll", () => { const frame = $("#logFrame"); const atEnd = frame.scrollHeight - frame.scrollTop - frame.clientHeight < 24; if (!atEnd && state.follow) { state.follow = false; $("#followButton").setAttribute("aria-pressed", "false"); } });
+        document.addEventListener("keydown", (event) => { if (!$("#actionDialog").open && handleLogsFullscreenKey(event)) return; if (event.key === "Escape" && !$("#actionDialog").open) { state.requestId = ""; state.traceId = ""; state.topologyFocus = ""; if (state.snapshot) { renderTopology(state.snapshot.services || [], state.snapshot.routes || []); renderRoutes(state.snapshot.routes || []); renderLogs(); } } });
+        const observer = new IntersectionObserver((entries) => { entries.forEach((entry) => { if (entry.isIntersecting) { $$(".section-nav a").forEach((link) => link.setAttribute("aria-current", String(link.getAttribute("href") === `#${entry.target.id}`))); } }); }, { rootMargin: "-30% 0px -60%", threshold: 0 });
+        $$("main section[id]").forEach((section) => observer.observe(section));
+      }
+
+      function init() {
+        readToken();
+        const startupQuery = new URLSearchParams(location.search);
+        const requestedNames = startupQuery.get("services") || startupQuery.get("names");
+        if (requestedNames) state.selectedServices = new Set(requestedNames.split(",").map((name) => name.trim()).filter(Boolean));
+        bindEvents(); $("#followButton").classList.add("primary");
+        if (isDemo) {
+          $("#modeBadge").hidden = false; setConnection("", "OFFLINE DEMO");
+          $("#logsKicker").textContent = "Deterministic offline sample · no network requests are made.";
+          state.logs = demoLogs.slice(); state.hasMore = false; renderSnapshot(demoSnapshot); renderLogs();
+          showToast("SIMULATED dashboard · operations stay in this file");
+        } else {
+          if (!readToken()) showError("Session token missing", "Read-only views may load, but actions require opening the URL supplied by Conven.");
+          pollSnapshot(); pollLogs();
+        }
+      }
+
+      init();
+    })();
+  </script>
+</body>
+</html>

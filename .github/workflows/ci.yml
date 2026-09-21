@@ -8,6 +8,16 @@ permissions:
   contents: read
 
 jobs:
+  web-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test embedded dashboard UI
+        run: node --test internal/runtime/webassets/dashboard.test.cjs
+
   test:
     strategy:
       matrix:

@@ -28,8 +28,13 @@ type App struct {
 	Executable                string
 	Version                   string
 	VersionDate               string
+	WebDashboardOpener        func(context.Context, *convenruntime.WorkspaceData, string, []string, bool) (string, error)
+	BrowserOpener             func(context.Context, string) error
+	TerminalDashboardAvailable func(*os.File, io.Writer) bool
+	TerminalDashboardOpener   func(context.Context, *convenruntime.WorkspaceData, *convenruntime.Session, convenruntime.TailOptions, *os.File, io.Writer) error
 	WorkspaceEditor           func(context.Context, string) error
 	StartReplacementConfirmer func(context.Context, []string) (bool, error)
+	FlagParseRepairConfirmer  func(context.Context, *config.FlagParseRepair) (bool, error)
 	SingleSelector            func(context.Context, *os.File, io.Writer, selector.Prompt, []selector.Candidate) (selector.Candidate, bool, error)
 }
 
@@ -88,6 +93,8 @@ func (app App) Run(arguments []string) int {
 		return app.runWorkspaceStatus(arguments[1:])
 	case "__hot-reload":
 		return app.runHotReloadWatcher(arguments[1:])
+	case "__web-dashboard":
+		return app.runWebServer(arguments[1:])
 	case "__completion":
 		return app.runCompletion(arguments[1:])
 	default:
@@ -184,6 +191,8 @@ func (app App) runServices(arguments []string) int {
 		return app.runLogs(remaining)
 	case "--dashboard":
 		return app.runDashboard(remaining)
+	case "--diagnose":
+		return app.runWebDashboard(remaining, true)
 	case "--start":
 		return app.runStart(remaining)
 	case "--restart":
@@ -208,6 +217,8 @@ func (app App) runStart(arguments []string) int {
 	common := bindCommonFlags(flags, true)
 	dryRun := flags.Bool("dry-run", false, "show the resolved plan without changing state")
 	tail := flags.Bool("tail", false, "stream plain-text logs after startup")
+	dashboard := flags.Bool("dashboard", false, "open the log dashboard after startup")
+	web := flags.Bool("web", false, "also open the browser dashboard (requires --dashboard)")
 	withDependencies := flags.Bool("with-dependencies", false, "include transitive local service dependencies")
 	skipBuild := flags.Bool("skip-build", false, "skip build; artifacts under current runtime cannot be reused after a fresh start")
 	skipVerify := flags.Bool("skip-verify", false, "skip health, listener, and registry verification")
@@ -222,9 +233,17 @@ func (app App) runStart(arguments []string) int {
 	if err := common.resolveEnvironment(flags, arguments); err != nil {
 		return app.fail(err)
 	}
+	if *web && (!*dashboard || *tail || *dryRun) {
+		return app.fail(errors.New("--web requires --dashboard and cannot be combined with --tail or --dry-run"))
+	}
 	options := common.options(app.Cwd)
 	workspace, err := convenruntime.OpenWorkspace(options)
 	if err != nil {
+		if *web {
+			if diagnosticWorkspace, openErr := convenruntime.OpenWebWorkspace(options); openErr == nil {
+				_ = app.openWebDashboard(diagnosticWorkspace, nil, true)
+			}
+		}
 		return app.fail(err)
 	}
 	services := flags.Args()
@@ -261,7 +280,7 @@ func (app App) runStart(arguments []string) int {
 			return app.fail(err)
 		}
 	}
-	dashboardAvailable := !*dryRun && !*tail && convenruntime.DashboardAvailable(app.Input, app.Output)
+	dashboardAvailable := !*dryRun && !*tail && app.terminalDashboardAvailable()
 	var dashboardOptions convenruntime.TailOptions
 	if dashboardAvailable {
 		dashboardOptions, err = dashboardTailOptions(workspace, nil, app.Version)
@@ -291,6 +310,12 @@ func (app App) runStart(arguments []string) int {
 		}
 		session, err = convenruntime.ReplaceStart(app.Context, workspace, startOptions, running.SessionToken)
 	}
+	if *web {
+		if webErr := app.openWebDashboard(workspace, services, err != nil); webErr != nil {
+			if err == nil { return app.fail(webErr) }
+			fmt.Fprintln(app.Error, "Web dashboard unavailable; startup error follows:", webErr)
+		}
+	}
 	if err != nil {
 		return app.fail(err)
 	}
@@ -304,7 +329,7 @@ func (app App) runStart(arguments []string) int {
 		return 0
 	}
 	if dashboardAvailable {
-		if err := convenruntime.TailLogs(app.Context, workspace, session, dashboardOptions, app.Input, app.Output); err != nil {
+		if err := app.openTerminalDashboard(workspace, session, dashboardOptions); err != nil {
 			return app.fail(err)
 		}
 	}
@@ -453,26 +478,34 @@ func (app App) runDashboard(arguments []string) int {
 	flags := flag.NewFlagSet("services --dashboard", flag.ContinueOnError)
 	flags.SetOutput(app.Error)
 	common := bindCommonFlags(flags, false)
+	web := flags.Bool("web", false, "also open the local browser dashboard without restarting services")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --dashboard [service...]")
+		fmt.Fprintln(flags.Output(), "Usage:\n  conven services --dashboard [--web] [service...]")
 		flags.PrintDefaults()
 	}
 	if ok, code := parseCommandFlags(flags, arguments, app.Output); !ok {
 		return code
 	}
-	workspace, err := convenruntime.OpenWorkspace(common.options(app.Cwd))
+	openWorkspace := convenruntime.OpenWorkspace
+	if *web { openWorkspace = convenruntime.OpenWebWorkspace }
+	workspace, err := openWorkspace(common.options(app.Cwd))
 	if err != nil {
 		return app.fail(err)
+	}
+	if *web {
+		if err := app.openWebDashboard(workspace, flags.Args(), false); err != nil { return app.fail(err) }
+		if !app.terminalDashboardAvailable() { return 0 }
 	}
 	session, err := workspace.Store.Load()
 	if err != nil {
 		return app.fail(err)
 	}
+	if *web && session == nil { return 0 }
 	options, err := dashboardTailOptions(workspace, flags.Args(), app.Version)
 	if err != nil {
 		return app.fail(err)
 	}
-	if err := convenruntime.TailLogs(app.Context, workspace, session, options, app.Input, app.Output); err != nil {
+	if err := app.openTerminalDashboard(workspace, session, options); err != nil {
 		return app.fail(err)
 	}
 	return 0
@@ -1054,11 +1087,12 @@ available actions
    --enable-binding   Remove bindings from workspace.disabledBindings
    --status     Show the current local service state
    --logs       Show logs; --tail streams plain text, --dashboard opens the UI
-   --dashboard  Open the interactive log dashboard
+   --dashboard  Open the log dashboard; --web also opens the browser
+   --diagnose   Open the local Web startup diagnostics workbench
    --start      Select and start local services; opens the dashboard on a TTY
    --restart    Restart selected or changed services; opens the dashboard on a TTY
    --stop       Stop selected local services
-   --stop-all   Stop all services and release the workspace connection
+   --stop-all   Stop all services, the workspace connection and Web dashboard
    --cleanup    Remove saved build artifacts and service logs
 
 The action flag must be the first argument after "conven services".

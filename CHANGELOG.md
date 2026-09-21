@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.0 - 2026-09-21
+
+- Include the Conven logo as the Web dashboard favicon; stop the workspace Web
+  backend with `services --stop-all`, even without a business session.
+- Retry transient registry observation failures within a bounded budget; restart
+  the observation window after recovery without weakening fail-closed isolation.
+- Add an embedded local Web dashboard and `services --diagnose`, reusing the
+  current session without Node or restarting services.
+- Preserve startup attempts and failure stages independently of running sessions;
+  show effective routes, correlated logs and current health separately from
+  startup isolation evidence.
+- Protect browser service actions with local-only access, authentication and
+  stale-session checks; preserve the terminal dashboard.
+
 ## 1.0.6 - 2026-09-15
 
 - Fill recognized Go/go-zero RPC bindings missing from Apollo with current

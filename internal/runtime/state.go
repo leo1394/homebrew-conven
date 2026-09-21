@@ -19,6 +19,7 @@ const runtimeIgnoreRule = "/runtime/"
 var errWorkspaceLocked = errors.New("another Conven command is active for this workspace")
 
 type Session struct {
+	AttemptID   string              `json:"attemptId,omitempty"`
 	Version     int                 `json:"version"`
 	Workspace   string              `json:"workspace"`
 	ConfigPath  string              `json:"configPath"`
@@ -26,9 +27,19 @@ type Session struct {
 	Cluster     string              `json:"cluster,omitempty"`
 	CreatedAt   time.Time           `json:"createdAt"`
 	Selected    []string            `json:"selected,omitempty"`
+	HealthChecks []SessionHealthCheck `json:"healthChecks,omitempty"`
+	RuntimeRoutes []DiagnosticRoute   `json:"runtimeRoutes,omitempty"`
 	Services    []ServiceProcess    `json:"services"`
 	HotReload   *ServiceProcess     `json:"hotReload,omitempty"`
 	Connection  *ConnectionProcess  `json:"connection,omitempty"`
+}
+
+type SessionHealthCheck struct {
+	Name    string `json:"name"`
+	Server  string `json:"server,omitempty"`
+	Type    string `json:"type"`
+	Address string `json:"address,omitempty"`
+	URL     string `json:"url,omitempty"`
 }
 
 type ServiceProcess struct {
@@ -38,6 +49,7 @@ type ServiceProcess struct {
 	Command           []string       `json:"command"`
 	Identity          string         `json:"identity"`
 	LogPath           string         `json:"logPath"`
+	LogOffset         int64          `json:"logOffset,omitempty"`
 	StartedAt         time.Time      `json:"startedAt"`
 	Ports              map[string]int `json:"ports"`
 	SourceFingerprint string         `json:"sourceFingerprint,omitempty"`

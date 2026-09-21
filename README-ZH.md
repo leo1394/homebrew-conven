@@ -7,16 +7,19 @@
 
 ![Conven——解决本地开发与集群环境隔离的痛点](assets/conven-banner-zh.png)
 
-> **可验证的本地微服务编排工具：**明确选择本地服务，显式连接其余依赖，并持续验证运行时隔离。
+> **安全可验证的本地服务编排**
+>
+> 只跑你改的，其余走集群，且启动前必须通过隔离检查。
 
-Conven 是一个专注于本地开发的微服务编排工具。它选择一组服务在本地运行，并通过
-配置的 Endpoint 或开发集群访问其余依赖。生成配置始终保存在服务源码仓库之外。
+只改几个服务，不必在本机启动整套系统。Conven 让你明确选择正在修改的服务在本地运行，
+其余依赖通过显式路由连接开发集群。对于支持的类型化服务，注册、监听和运行时配置的
+隔离检查必须在启动前通过。生成配置始终保存在服务源码仓库之外。
 
 - **启动最少服务：** 只运行当前改动涉及的服务。
 - **保留真实拓扑：** 本地服务可以继续访问远程 RPC、数据库、Kafka、配置中心
   和其他开发环境依赖。
-- **安全校验不通过即拒绝启动：** 对于支持的类型化服务，Conven 必须确认本地
-  注册和监听地址已经隔离。
+- **先检查，再启动：** 对于支持的类型化服务，无法确认注册、监听或运行时配置
+  隔离时，直接拒绝启动。
 - **不限开发语言：** prepare、build 和 run 都是 argv 数组，并非 Go 专用钩子。
 
 ## 为什么使用 Conven
@@ -262,6 +265,10 @@ conven services --start --dev portal-api-service partner-service
 分配最低未占用端口，已有端口不重新编号。已支持框架但证据不足时更新原子失败，
 完全不支持的仓库则以具体原因列入 skipped repositories。
 
+新增 Go/go-zero 服务缺少 `flag.Parse()` 时，`services --update` 会在交互终端中询问
+是否补入。仅回复 `y` 才修改源码并重新扫描；回车、`n` 或非交互执行均不自动修改。
+只修复可确定插入位置的简单入口，保留原格式；已确认的源码修改不会因后续检查失败而撤销。
+
 `services --update` 同时按配置指定的 application YAML 同步依赖：移除已注释或删除的
 binding 及其依赖路由，保留已有显式路由，为新匹配的 provider 在 dev/test 中默认声明
 remote。配置文件缺失时提示并保留依赖；YAML 错误时整次更新失败。修改在下次启动或
@@ -483,6 +490,8 @@ route 和 health check；同一进程可以暴露多个 listener。
 | 查看当前 session | `conven services --status` |
 | 查看日志快照 | `conven services --logs SERVICE...` |
 | 打开 Dashboard | `conven services --dashboard SERVICE...` |
+| 打开 Web Dashboard | `conven services --dashboard --web` |
+| 排查启动失败 | `conven services --diagnose` |
 | 持续输出 Plain 日志 | `conven services --logs --tail SERVICE...` |
 | 停止指定服务 | `conven services --stop SERVICE...` |
 | 停止整个 workspace session | `conven services --stop-all` |
@@ -523,6 +532,18 @@ conven services --logs --dashboard
 # Plain 持续日志流。
 conven services --logs --tail
 ```
+
+在浏览器中查看路由、健康状态、跨服务日志与启动失败原因：
+
+```bash
+conven services --start --test --dashboard --web SERVICE...
+conven services --dashboard --web  # 复用已有 session 及其环境
+conven services --diagnose         # 查看最近一次启动诊断
+```
+
+页面由内置 Go 服务提供，仅监听本机，无需安装 Node。关闭浏览器不会停止服务。
+交互终端中 `--dashboard --web` 同时保留 TUI 日志和浏览器视图。
+启动时的隔离验证证据与当前健康状态分开展示，详见 [Web Dashboard](docs/web-dashboard.md)。
 
 交互式 start 和 restart 默认打开 Dashboard；`--tail` 使用 Plain 模式。Dashboard
 支持日志自动换行、滚动和 `/` 搜索；按 `g` 或 `G` 跳到最新日志并持续 follow，Home

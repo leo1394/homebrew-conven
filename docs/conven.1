@@ -1,4 +1,4 @@
-.TH CONVEN 1 "September 5, 2026" "Conven 1.0.2" "User Commands"
+.TH CONVEN 1 "September 21, 2026" "Conven 1.1.0" "User Commands"
 .SH NAME
 conven \- run a focused set of local microservices with remote dependencies
 .SH SYNOPSIS
@@ -221,9 +221,14 @@ or
 Show the saved local session, hot-reload watcher, service PID and PGID
 information, and relevant shared connection state.
 .TP
-.B "\-\-dashboard [service...]"
+.B "\-\-dashboard [\-\-web] [service...]"
 Open the full-screen Dashboard for the current session and optional service
 selection.
+With --web, open a loopback-only browser dashboard using the existing session
+and environment, and keep the terminal dashboard open when an interactive
+terminal is available. Web runs in a detached Conven process without Node. Closing
+the browser does not stop business services. The private access URL must not
+be shared. With no session, retained startup diagnostics remain available.
 The banner lists disabled bindings and places the earliest start time of
 the displayed services at the far right of the title.
 The equivalent alias is
@@ -251,6 +256,12 @@ only inspect the currently rendered Dashboard frame.
 If the terminal is unsuitable for the Dashboard, the action fails with guidance
 to use
 .BR "services \-\-logs \-\-tail" .
+.TP
+.B "\-\-diagnose [service...]"
+Open the local Web diagnostic workbench without starting services. Retained
+attempts include failures before a running session existed. Current health is
+separate from timestamped startup isolation evidence; continuous listener and
+registry observation is not enabled. Service names filter the view.
 .TP
 .B "\-\-logs [\-\-tail] [\-\-dashboard] [service...]"
 Show logs for the current session.

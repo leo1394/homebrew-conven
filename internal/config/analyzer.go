@@ -386,7 +386,11 @@ func ValidateGoZeroRuntimeConfigSource(name string, directory string, workdir st
 	}
 	if parsePosition == token.NoPos || parsePosition >= readPosition {
 		line := files.Position(readPosition).Line
-		return fmt.Errorf("Go service %q does not call flag.Parse() before reading -f at %s:%d\n  => Add flag.Parse() after defining command-line flags and before loading service configuration", name, goEntryDisplayPath(workdir), line)
+		message := fmt.Sprintf("Go service %q does not call flag.Parse() before reading -f at %s:%d\n  => Add flag.Parse() after defining command-line flags and before loading service configuration", name, goEntryDisplayPath(workdir), line)
+		if parsePosition == token.NoPos {
+			if repair := missingFlagParseRepair(name, directory, mainFile, source, files, parsed, mainFunction, readPosition, message); repair != nil { return repair }
+		}
+		return fmt.Errorf("%s", message)
 	}
 	return nil
 }
