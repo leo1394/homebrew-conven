@@ -322,10 +322,15 @@ checks binding-dependent initialization guards against the generated target rout
 When a remote dependency uses a different endpoint from the shared registry,
 set `environments.<env>.resolutions.<service>.<dependency>.readiness` to a list of
 exact names in that environment's `connection.readiness`. These named probes
-are scoped to the referencing remote routes, replacing registry inference for
-those routes; selecting the provider locally or disabling the route omits them.
+are scoped to the referencing remote routes; selecting the provider locally or
+disabling the route omits them. Consumer registry types do not determine the
+endpoint used by each dependency.
 For example, `readiness: [directory-test]` can reference a dedicated test registry
 without changing the shared registry used by other services.
+
+Configuration sources are declared by the selected policy, not inferred from
+project-specific bootstrap fields. Keep custom fields and environment choices
+in workspace policies; multiple compatible policies require an explicit binding.
 
 For Go/go-zero + Apollo YAML services, edit the repository configuration, run
 `conven services --update`, then `conven services --start`. At startup, only

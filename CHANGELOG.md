@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 - 2026-09-25
+
+- Allow remote dependency routes to reference exact connection readiness endpoints,
+  keeping environment-specific checks separate from unrelated shared registries.
+- Validate endpoint references and omit route-scoped checks for local or disabled
+  dependencies; keep configuration source selection explicit in workspace policies.
+- Add Web dashboard topology and full-screen log examples to both READMEs.
+
 ## 1.1.0 - 2026-09-21
 
 - Include the Conven logo as the Web dashboard favicon; stop the workspace Web

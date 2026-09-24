@@ -284,8 +284,11 @@ remote。配置文件缺失时提示并保留依赖；YAML 错误时整次更新
 当远程依赖使用的地址与共享注册中心不同时，可通过
 `environments.<env>.resolutions.<service>.<dependency>.readiness` 显式引用当前环境
 `connection.readiness` 中的 endpoint 名称，例如 `readiness: [directory-test]`。
-被引用的检查仅用于对应远程路由，并替代该路由的注册中心推断；provider 改为本地
+被引用的检查仅用于对应远程路由；不会通过消费者的注册中心类型猜测依赖地址。provider 改为本地
 启动或路由禁用后不再检查，不必修改其他服务使用的共享注册中心地址。
+
+配置来源由选定 policy 明确声明，不从项目自定义 bootstrap 字段推断。
+自定义字段及环境选择留在 workspace policy；多个 policy 兼容时需显式绑定。
 
 Go/go-zero + Apollo YAML 服务修改仓库配置后，执行 `conven services --update`，再
 `conven services --start`。启动时仅为 Apollo **完全缺失**的已识别 RPC binding 补入

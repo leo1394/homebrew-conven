@@ -876,6 +876,9 @@ func selectedConnectionRequirements(plan *Plan) map[string]bool {
 			required["apollo"] = true
 		}
 		if service.RegistryRef != "" {
+			// A registry explicitly used by a selected service remains required,
+			// even if another (inactive) route references the same endpoint.
+			required["endpoint:"+service.RegistryRef] = true
 			required[strings.ToLower(service.RegistryRef)] = true
 			if service.Registry != nil && service.Registry.Driver != "" {
 				required[strings.ToLower(service.Registry.Driver)] = true
