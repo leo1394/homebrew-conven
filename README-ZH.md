@@ -281,6 +281,12 @@ remote。配置文件缺失时提示并保留依赖；YAML 错误时整次更新
 行号，保留原格式，重复执行不再修改。复杂条件只诊断、不自动编辑。启动前会根据生成的
 本地 target 配置检查依赖该 binding 的客户端初始化条件。
 
+当远程依赖使用的地址与共享注册中心不同时，可通过
+`environments.<env>.resolutions.<service>.<dependency>.readiness` 显式引用当前环境
+`connection.readiness` 中的 endpoint 名称，例如 `readiness: [directory-test]`。
+被引用的检查仅用于对应远程路由，并替代该路由的注册中心推断；provider 改为本地
+启动或路由禁用后不再检查，不必修改其他服务使用的共享注册中心地址。
+
 Go/go-zero + Apollo YAML 服务修改仓库配置后，执行 `conven services --update`，再
 `conven services --start`。启动时仅为 Apollo **完全缺失**的已识别 RPC binding 补入
 仓库配置；Apollo 已有值（包括空值）仍优先，本地路由和禁用规则不变。此机制不覆盖
@@ -544,6 +550,13 @@ conven services --diagnose         # 查看最近一次启动诊断
 页面由内置 Go 服务提供，仅监听本机，无需安装 Node。关闭浏览器不会停止服务。
 交互终端中 `--dashboard --web` 同时保留 TUI 日志和浏览器视图。
 启动时的隔离验证证据与当前健康状态分开展示，详见 [Web Dashboard](docs/web-dashboard.md)。
+
+以下示意图展示本地服务与远程依赖的配置拓扑（非实时请求追踪），以及支持搜索、
+筛选和全屏查看的日志视图。
+
+![Conven Web Dashboard：本地服务与远程依赖拓扑](assets/conven-web-dashboard-topology.png)
+
+![Conven Web Dashboard：支持搜索与筛选的全屏日志](assets/conven-web-dashboard-logs.png)
 
 交互式 start 和 restart 默认打开 Dashboard；`--tail` 使用 Plain 模式。Dashboard
 支持日志自动换行、滚动和 `/` 搜索；按 `g` 或 `G` 跳到最新日志并持续 follow，Home

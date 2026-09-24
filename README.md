@@ -319,6 +319,14 @@ reported with its file and line; formatting is preserved and repeated updates ar
 idempotent. Complex guards are reported without editing. Local startup preflight
 checks binding-dependent initialization guards against the generated target route.
 
+When a remote dependency uses a different endpoint from the shared registry,
+set `environments.<env>.resolutions.<service>.<dependency>.readiness` to a list of
+exact names in that environment's `connection.readiness`. These named probes
+are scoped to the referencing remote routes, replacing registry inference for
+those routes; selecting the provider locally or disabling the route omits them.
+For example, `readiness: [directory-test]` can reference a dedicated test registry
+without changing the shared registry used by other services.
+
 For Go/go-zero + Apollo YAML services, edit the repository configuration, run
 `conven services --update`, then `conven services --start`. At startup, only
 recognized RPC bindings **absent from Apollo** are filled from the repository.
@@ -620,6 +628,14 @@ Closing the browser leaves services running. Startup isolation evidence and curr
 health are displayed separately. In an interactive terminal, `--dashboard --web`
 keeps the TUI logs open alongside the browser.
 See [Web dashboard](docs/web-dashboard.md).
+
+Example views: distinguish local services from remote dependencies in the declared
+topology (not live request tracing), then inspect logs with search, filters and
+full-screen viewing.
+
+![Conven Web dashboard: local services and remote dependency topology](assets/conven-web-dashboard-topology.png)
+
+![Conven Web dashboard: full-screen logs with search and filters](assets/conven-web-dashboard-logs.png)
 
 Interactive starts and restarts open the Dashboard by default; `--tail` selects
 Plain mode. The Dashboard supports wrapped logs, scrolling, and `/` search.

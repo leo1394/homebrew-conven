@@ -41,6 +41,27 @@ services:
       tcp: 15432
 `
 
+func TestResolutionReadinessReferences(t *testing.T) {
+	for _, tc := range []struct { name, mode string; refs []string; invalid bool }{
+		{"valid", "remote", []string{"directory-test"}, false},
+		{"unknown", "remote", []string{"missing"}, true},
+		{"duplicate", "remote", []string{"directory-test", "directory-test"}, true},
+		{"wrong mode", "endpoint", []string{"directory-test"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest:=&model.Manifest{
+				Services: map[string]model.Service{"api": {Dependencies: map[string]model.Dependency{"directory": {}}}},
+				Environments: map[string]model.Environment{"test": {
+					Connection: model.Connection{Readiness: []model.Endpoint{{Name:"directory-test",Address:"directory.test:8500"}}},
+					Resolutions: map[string]map[string]model.DependencyResolution{"api": {"directory": {Mode:tc.mode,Readiness:tc.refs}}},
+				}},
+			}
+			err:=validateEnvironmentResolutions(manifest)
+			if (err!=nil)!=tc.invalid {t.Fatalf("error=%v",err)}
+		})
+	}
+}
+
 const policyManifestYAML = `version: 2
 workspace:
   name: sample

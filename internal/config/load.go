@@ -608,6 +608,14 @@ func validateEnvironmentResolutions(manifest *model.Manifest) error {
 					return fmt.Errorf("environments.%s.resolutions.%s references unknown dependency alias %q", environmentName, owner, alias)
 				}
 				field := fmt.Sprintf("environments.%s.resolutions.%s.%s", environmentName, owner, alias)
+				seenReadiness := make(map[string]bool)
+				for _, reference := range resolution.Readiness {
+					if resolution.Mode != "remote" { return fmt.Errorf("%s.readiness requires mode remote", field) }
+					matches := 0
+					for _, endpoint := range environment.Connection.Readiness { if endpoint.Name == reference { matches++ } }
+					if strings.TrimSpace(reference) == "" || matches != 1 || seenReadiness[reference] { return fmt.Errorf("%s.readiness must reference unique connection readiness endpoints: %q", field, reference) }
+					seenReadiness[reference] = true
+				}
 				switch resolution.Mode {
 				case "endpoint":
 					if _, found := environment.Endpoints[resolution.Target]; !found {

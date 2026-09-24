@@ -144,6 +144,7 @@ type EnvironmentEndpoint struct {
 }
 
 type DependencyResolution struct {
+	Readiness []string        `yaml:"readiness,omitempty"`
 	Mode   string            `yaml:"mode"`
 	Target string            `yaml:"target"`
 	Env    map[string]string `yaml:"env"`

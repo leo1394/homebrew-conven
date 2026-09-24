@@ -823,7 +823,14 @@ func planConnection(plan *Plan, options CommonOptions) (ConnectionConfig, error)
 		return ConnectionConfig{}, fmt.Errorf("parse connection timeout: %w", err)
 	}
 	readiness := make([]ConnectionEndpoint, 0, len(connection.Readiness))
+	scoped := make(map[string]bool)
+	for _, dependencies := range plan.Environment.Resolutions {
+		for _, resolution := range dependencies {
+			for _, reference := range resolution.Readiness { scoped[reference] = true }
+		}
+	}
 	for _, endpoint := range connection.Readiness {
+		if scoped[endpoint.Name] && !requirements["endpoint:"+endpoint.Name] { continue }
 		if len(requirements) > 0 && !connectionEndpointRequired(endpoint.Name, requirements) {
 			continue
 		}
@@ -860,7 +867,11 @@ func planConnection(plan *Plan, options CommonOptions) (ConnectionConfig, error)
 
 func selectedConnectionRequirements(plan *Plan) map[string]bool {
 	required := make(map[string]bool)
-	for _, service := range plan.Services {
+	for name, service := range plan.Services {
+		for alias, resolution := range plan.Resolutions[name] {
+			if resolution.Mode != "remote" { continue }
+			for _, reference := range plan.Environment.Resolutions[name][alias].Readiness { required["endpoint:"+reference] = true }
+		}
 		if service.Config != nil && service.Config.Plan.SourceDriver == "apollo" {
 			required["apollo"] = true
 		}
@@ -875,8 +886,10 @@ func selectedConnectionRequirements(plan *Plan) map[string]bool {
 }
 
 func connectionEndpointRequired(name string, required map[string]bool) bool {
+	if required["endpoint:"+name] { return true }
 	lower := strings.ToLower(name)
 	for requirement := range required {
+		if strings.HasPrefix(requirement, "endpoint:") { continue }
 		if strings.Contains(lower, requirement) {
 			return true
 		}
