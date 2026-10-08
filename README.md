@@ -582,7 +582,13 @@ you explicitly use a shell such as `[sh, -c, "..."]`.
 | Stop the workspace session | `conven services --stop-all` |
 | Remove saved artifacts and logs | `conven services --cleanup` |
 
-Use `--dev`, `--test`, or `--env NAME` to select a declared environment. Add
+For Spring services using `--spring.profiles.active=${env}`, `--prod` loads the
+base `application.yaml`/`application.yml` and overlays `application-prod.yaml`/
+`application-prod.yml` when present. With no prod file, the base config is used.
+The manifest must declare `environments.prod`; Conven does not infer production
+connection settings.
+
+Use `--dev`, `--test`, `--prod`, or `--env NAME` to select a declared environment. Add
 `--namespace NAME`, `--context NAME`, or `--kubeconfig FILE` when a start needs
 a machine-specific Kubernetes override.
 

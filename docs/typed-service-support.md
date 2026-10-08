@@ -30,6 +30,19 @@ these facts cannot be proven:
 - neutral, default-enabled guard around detected Kafka consumer construction;
 - exactly one compatible policy and every kind's server route.
 
+For Spring HTTP services, `services --update` can add a missing HTTP route to
+an existing compatible repository-overlay policy when certification selects
+exactly one policy (or the service explicitly selects one). The generated route
+uses the native HTTP port, a loopback listener, and the discovery driver's
+registration guard. Existing routes are preserved; absent policies, ambiguous
+selection, and unguarded custom registration still abort the update atomically.
+
+When a Spring service has no explicit registry or remote readiness endpoint,
+connection readiness uses its policy's Consul, Nacos, or Eureka driver to select
+endpoints. This also applies to HTTP services without a provider identity, so
+unrelated discovery systems do not block startup. Explicit endpoint references
+continue to take precedence.
+
 A completely unknown repository is reported under skipped repositories with a
 reason and does not block other discoveries. A manually declared runner-only
 service remains runnable but is never presented as typed.

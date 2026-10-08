@@ -506,7 +506,12 @@ route 和 health check；同一进程可以暴露多个 listener。
 | 停止整个 workspace session | `conven services --stop-all` |
 | 清理构建产物和服务日志 | `conven services --cleanup` |
 
-使用 `--dev`、`--test` 或 `--env NAME` 选择 manifest 中声明的环境。如果启动时需要
+Spring 服务的 Policy 使用 `--spring.profiles.active=${env}` 时，`--prod` 加载基础
+`application.yaml`/`application.yml`，并在存在 `application-prod.yaml`/
+`application-prod.yml` 时叠加生产配置；没有 prod 文件时使用基础配置。
+manifest 必须声明 `environments.prod`，Conven 不自动推断生产连接配置。
+
+使用 `--dev`、`--test`、`--prod` 或 `--env NAME` 选择 manifest 中声明的环境。如果启动时需要
 覆盖当前机器的 Kubernetes 设置，可添加 `--namespace NAME`、`--context NAME` 或
 `--kubeconfig FILE`。
 

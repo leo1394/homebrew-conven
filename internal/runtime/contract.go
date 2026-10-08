@@ -84,6 +84,10 @@ type protectedEnvironmentCompiler interface {
 	ProtectedServerEnvironment(map[string]string, string, *PlannedConfig) (map[string]string, error)
 }
 
+type connectionRequirementCompiler interface {
+	ConnectionRequirements(*PlannedConfig) []string
+}
+
 type runtimeSourceValidator interface {
 	ValidateSource(string, string, string) error
 }

@@ -407,6 +407,8 @@ func discoverWorkspace(manifestPath string, workspace string, prune bool, syncDe
 		result.Discovered = append(result.Discovered, service.Name)
 	}
 
+	originalPolicies := make(map[string]model.Policy, len(manifest.Policies))
+	for name, policy := range manifest.Policies { originalPolicies[name] = policy }
 	existingByName := manifest.Services
 	usedPorts := make(map[int]bool)
 	for _, existing := range existingByName {
@@ -515,7 +517,8 @@ func discoverWorkspace(manifestPath string, workspace string, prune bool, syncDe
 	if err := validateManifest(&candidate); err != nil {
 		return result, fmt.Errorf("validate discovered manifest: %w", err)
 	}
-	if len(result.Added) == 0 && len(result.Updated) == 0 && len(result.Pruned) == 0 {
+	policiesChanged := !reflect.DeepEqual(originalPolicies, candidate.Policies)
+	if len(result.Added) == 0 && len(result.Updated) == 0 && len(result.Pruned) == 0 && !policiesChanged {
 		if err := verifyManifestSnapshot(manifestPath, source, sourceInfo, "discovery"); err != nil {
 			return result, err
 		}
@@ -525,6 +528,30 @@ func discoverWorkspace(manifestPath string, workspace string, prune bool, syncDe
 	document, serviceMapping, err := loadManifestDocument(source, manifestPath)
 	if err != nil {
 		return result, err
+	}
+	if policiesChanged {
+		policies := mappingValue(document.Content[0], "policies")
+		for _, name := range sortedPolicyNames(&candidate) {
+			if reflect.DeepEqual(originalPolicies[name], candidate.Policies[name]) { continue }
+			policy := mappingValue(policies, name)
+			if policy == nil || policy.Kind != yaml.MappingNode {
+				return result, fmt.Errorf("Conven manifest %q policy %q must be a mapping", manifestPath, name)
+			}
+			routing := mappingValue(policy, "routing")
+			if routing == nil {
+				routing = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				setMappingValue(policy, "routing", routing)
+			}
+			servers := mappingValue(routing, "servers")
+			if servers == nil {
+				servers = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+				setMappingValue(routing, "servers", servers)
+			}
+			value := &yaml.Node{}
+			if err := value.Encode(candidate.Policies[name].Routing.Servers[RepositoryKindHTTP]); err != nil { return result, err }
+			setMappingValue(servers, RepositoryKindHTTP, value)
+			result.DependencyNotes = append(result.DependencyNotes, "policy "+name+": added Spring Boot HTTP route with loopback listener and registration isolation")
+		}
 	}
 	if len(result.Pruned) > 0 {
 		removeMappingEntries(serviceMapping, result.Pruned)
@@ -621,7 +648,7 @@ func certifyDiscoveredService(manifest *model.Manifest, service DiscoveredServic
 	if manifest.Version < 3 && service.Runtime != "spring-boot" {
 		return explicit, "", nil
 	}
-	certification, _, err := CertifyRepository(manifest, RepositoryCertificationRequest{
+	request := RepositoryCertificationRequest{
 		Name:           service.Name,
 		Framework:      service.Framework,
 		Runtime:        service.Runtime,
@@ -631,7 +658,11 @@ func certifyDiscoveredService(manifest *model.Manifest, service DiscoveredServic
 		ExplicitPolicy: explicit,
 		Registrations:  append([]RepositoryRegistrationEvidence(nil), service.Registrations...),
 		Consumers:      append([]RepositoryConsumerEvidence(nil), service.Consumers...),
-	})
+	}
+	certification, _, err := CertifyRepository(manifest, request)
+	if err != nil && service.Runtime == "spring-boot" && containsDiscoveredKind(requestKinds(request), RepositoryKindHTTP) {
+		certification, err = completeSpringHTTPPolicy(manifest, request)
+	}
 	if err != nil {
 		return "", "", err
 	}

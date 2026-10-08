@@ -52,6 +52,15 @@ func (springBootConsulRuntimeContract) MatchesPlanned(planned *PlannedConfig) bo
 	return runtimeName == "spring-boot" && planned.Plan.SourceDriver == materialize.SourceRepository && springDiscoverySupported(planned.Discovery) && (planned.Plan.Driver == materialize.DriverYAMLOverlay || planned.Plan.Driver == materialize.DriverPropertiesOverlay)
 }
 
+// HTTP services still consume discovery when local provider registration is disabled.
+func (springBootConsulRuntimeContract) ConnectionRequirements(planned *PlannedConfig) []string {
+	switch planned.Discovery {
+	case "consul", "nacos", "eureka":
+		return []string{planned.Discovery}
+	}
+	return nil
+}
+
 func (springBootConsulRuntimeContract) AllowGuardCreation() bool {
 	return true
 }

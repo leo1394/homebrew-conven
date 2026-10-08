@@ -392,6 +392,8 @@ func restartEnvironmentFlagHint(err error) (string, string) {
 		return "--restart reuses the current session environment;", "switch with conven services --start --test."
 	case "flag provided but not defined: -dev":
 		return "--restart reuses the current session environment;", "switch with conven services --start --dev."
+	case "flag provided but not defined: -prod":
+		return "--restart reuses the current session environment;", "switch with conven services --start --prod."
 	case "flag provided but not defined: -env":
 		return "--restart reuses the current session environment;", "switch with conven services --start --env NAME."
 	default:

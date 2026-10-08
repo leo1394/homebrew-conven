@@ -28,6 +28,15 @@
 - 检测到的 Kafka consumer 构造点没有中性、默认开启的 guard；
 - 无法匹配唯一 Policy，或某个 kind 缺少 server route。
 
+对于 Spring HTTP 服务，`services --update` 在匹配唯一兼容的仓库配置 overlay Policy
+（或服务显式指定兼容 Policy）后，可以自动补齐缺失的 HTTP route。生成的路由使用原生
+HTTP 端口、loopback 监听地址和对应 discovery 的注册隔离开关。已有路由保持不变；
+缺少 Policy、选择存在歧义或自定义注册未受保护时，更新仍会整体原子失败。
+
+Spring 服务未显式指定 registry 或远端 readiness 端点时，连接就绪检查根据 Policy 的
+Consul、Nacos 或 Eureka driver 选择端点。没有 provider identity 的 HTTP 服务同样适用，
+避免无关的服务发现系统阻塞启动；显式端点引用仍优先。
+
 完全未知的仓库会以具体原因列入 skipped repositories，不阻止其他服务发现。手工声明的
 runner-only 仍可运行，但不会显示为 typed。
 

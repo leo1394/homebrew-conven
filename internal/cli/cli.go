@@ -42,6 +42,7 @@ type commonFlags struct {
 	environment string
 	dev         bool
 	test        bool
+	prod        bool
 	kubeconfig  string
 	context     string
 	namespace   string
@@ -657,6 +658,7 @@ func bindCommonFlags(flags *flag.FlagSet, includeEnvironment bool) *commonFlags 
 		flags.StringVar(&common.environment, "env", "", "environment profile name (defaults to dev or the sole profile)")
 		flags.BoolVar(&common.dev, "dev", false, "use the dev environment profile (equivalent to --env dev)")
 		flags.BoolVar(&common.test, "test", false, "use the test environment profile (equivalent to --env test)")
+		flags.BoolVar(&common.prod, "prod", false, "use the prod environment profile (equivalent to --env prod)")
 		flags.StringVar(&common.kubeconfig, "kubeconfig", "", "kubeconfig path override")
 		flags.StringVar(&common.context, "context", "", "kubeconfig context override")
 		flags.StringVar(&common.namespace, "namespace", "", "Kubernetes namespace override")
@@ -665,18 +667,18 @@ func bindCommonFlags(flags *flag.FlagSet, includeEnvironment bool) *commonFlags 
 }
 
 func (common *commonFlags) resolveEnvironment(flags *flag.FlagSet, arguments []string) error {
-	if !common.dev && !common.test {
+	shortcuts := []string{}
+	if common.dev { shortcuts = append(shortcuts, "dev") }
+	if common.test { shortcuts = append(shortcuts, "test") }
+	if common.prod { shortcuts = append(shortcuts, "prod") }
+	if len(shortcuts) == 0 {
 		return nil
 	}
-	if common.dev && common.test {
-		return errors.New("--dev and --test cannot be used together")
+	if len(shortcuts) > 1 {
+		return fmt.Errorf("--%s cannot be used together", strings.Join(shortcuts, " and --"))
 	}
-	shortcut := "dev"
-	shortcutFlag := "--dev"
-	if common.test {
-		shortcut = "test"
-		shortcutFlag = "--test"
-	}
+	shortcut := shortcuts[0]
+	shortcutFlag := "--" + shortcut
 	for _, configured := range explicitFlagValues(flags, arguments, "env") {
 		effectiveEnvironment := configured
 		if strings.TrimSpace(effectiveEnvironment) == "" {

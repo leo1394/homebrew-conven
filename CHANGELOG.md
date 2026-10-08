@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2 - 2026-10-09
+
+- Complete missing Spring Boot HTTP policy routes during service discovery,
+  preserving existing routes and failing atomically on ambiguous policies.
+- Add `--prod` as an explicit environment shortcut for start and doctor, with
+  shell completions and documented Spring profile configuration.
+- Let Spring runtime adapters declare discovery readiness requirements while
+  giving explicit registry and remote endpoint references precedence.
+
 ## 1.1.1 - 2026-09-25
 
 - Allow remote dependency routes to reference exact connection readiness endpoints,

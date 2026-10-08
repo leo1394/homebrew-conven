@@ -1799,6 +1799,7 @@ func TestRestartEnvironmentFlagHintPrecedesParseError(t *testing.T) {
 	}{
 		{name: "test", arguments: []string{"--test"}, action: "  => switch with conven services --start --test."},
 		{name: "dev", arguments: []string{"--dev"}, action: "  => switch with conven services --start --dev."},
+		{name: "prod", arguments: []string{"--prod"}, action: "  => switch with conven services --start --prod."},
 		{name: "env value", arguments: []string{"--env", "staging"}, action: "  => switch with conven services --start --env NAME."},
 		{name: "env equals", arguments: []string{"--env=staging"}, action: "  => switch with conven services --start --env NAME."},
 	} {
@@ -2205,6 +2206,9 @@ func TestEnvironmentShortcutsMatchEnvFlag(t *testing.T) {
 		{name: "start env test", arguments: []string{"services", "--start", "--dry-run", "--env", "test", "api"}, want: "Environment: test\n"},
 		{name: "start matching test", arguments: []string{"services", "--start", "--dry-run", "--test", "--env", "test", "api"}, want: "Environment: test\n"},
 		{name: "start repeated matching test", arguments: []string{"services", "--start", "--dry-run", "--env", "test", "--test", "--env=test", "api"}, want: "Environment: test\n"},
+		{name: "start prod", arguments: []string{"services", "--start", "--dry-run", "--prod", "api"}, want: "Environment: prod\n"},
+		{name: "start matching prod", arguments: []string{"services", "--start", "--dry-run", "--prod", "--env=prod", "api"}, want: "Environment: prod\n"},
+		{name: "doctor prod", arguments: []string{"doctor", "--prod"}, want: "Environment: prod\n"},
 		{name: "start custom", arguments: []string{"services", "--start", "--dry-run", "--env", "stage", "api"}, want: "Environment: stage\n"},
 		{name: "doctor dev", arguments: []string{"doctor", "--dev"}, want: "Environment: dev\n"},
 		{name: "doctor default", arguments: []string{"doctor"}, want: "Environment: dev\n"},
@@ -2239,6 +2243,9 @@ func TestEnvironmentShortcutsRejectConflictsBeforeWorkspaceLookup(t *testing.T) 
 		want      string
 	}{
 		{name: "both shortcuts", arguments: []string{"services", "--start", "--dev", "--test", "api"}, want: "--dev and --test"},
+		{name: "dev and prod", arguments: []string{"services", "--start", "--dev", "--prod", "api"}, want: "--dev and --prod"},
+		{name: "test and prod", arguments: []string{"services", "--start", "--test", "--prod", "api"}, want: "--test and --prod"},
+		{name: "prod versus test", arguments: []string{"services", "--start", "--prod", "--env=test", "api"}, want: `--prod conflicts with --env "test"`},
 		{name: "dev versus test", arguments: []string{"services", "--start", "--dev", "--env", "test", "api"}, want: `--dev conflicts with --env "test"`},
 		{name: "test versus dev", arguments: []string{"doctor", "--test", "--env", "dev"}, want: `--test conflicts with --env "dev"`},
 		{name: "test versus stage", arguments: []string{"services", "--start", "api", "--test", "--env=stage"}, want: `--test conflicts with --env "stage"`},
@@ -2892,7 +2899,7 @@ func TestCompletionCandidatesUseEffectiveWorkspace(t *testing.T) {
 		want      string
 	}{
 		{name: "services", arguments: []string{"-C", workspace, "__completion", "candidates", "services"}, want: "api\n"},
-		{name: "environments", arguments: []string{"-C", workspace, "__completion", "candidates", "environments"}, want: "dev\nstage\ntest\n"},
+		{name: "environments", arguments: []string{"-C", workspace, "__completion", "candidates", "environments"}, want: "dev\nprod\nstage\ntest\n"},
 		{name: "plugins", arguments: []string{"-C", workspace, "__completion", "candidates", "plugins"}, want: "build\ninspect\n"},
 		{name: "global plugins", arguments: []string{"-C", workspace, "__completion", "candidates", "plugins", "global"}, want: "build\ninspect\n"},
 	} {
@@ -2933,14 +2940,14 @@ func TestCompletionsScopeFlagsByServiceAction(t *testing.T) {
 		`--logs)`,
 		`options="--tail --dashboard --help"`,
 		`--start)`,
-		`options="--env --dev --test --kubeconfig --context --namespace --tail --dashboard --web --dry-run --with-dependencies --skip-build --skip-verify --help"`,
+		`options="--env --dev --test --prod --kubeconfig --context --namespace --tail --dashboard --web --dry-run --with-dependencies --skip-build --skip-verify --help"`,
 		`--restart)`,
 		`options="--tail --dashboard --skip-build --skip-verify --help"`,
 		`--stop)`,
 		`options="--all --force --help"`,
 		`--stop-all)`,
 		`options="--force --help"`,
-		`options="--env --dev --test --kubeconfig --context --namespace --help"`,
+		`options="--env --dev --test --prod --kubeconfig --context --namespace --help"`,
 		`if [ "$subcommand" = "workspace" ]`,
 		`options="--edit --validate --migrate --import --reset --help"`,
 		`--edit|--validate|--migrate|--reset)`,
@@ -3461,6 +3468,7 @@ workspace:
 environments:
   dev:
   test:
+  prod:
   stage:
 services:
   api:

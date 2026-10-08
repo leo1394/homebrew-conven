@@ -868,9 +868,23 @@ func planConnection(plan *Plan, options CommonOptions) (ConnectionConfig, error)
 func selectedConnectionRequirements(plan *Plan) map[string]bool {
 	required := make(map[string]bool)
 	for name, service := range plan.Services {
+		hasRemoteReadiness := false
 		for alias, resolution := range plan.Resolutions[name] {
 			if resolution.Mode != "remote" { continue }
-			for _, reference := range plan.Environment.Resolutions[name][alias].Readiness { required["endpoint:"+reference] = true }
+			for _, reference := range plan.Environment.Resolutions[name][alias].Readiness {
+				required["endpoint:"+reference] = true
+				hasRemoteReadiness = true
+			}
+		}
+		// A runtime adapter can declare discovery needs without a provider identity.
+		// Explicit registry and remote readiness endpoints take precedence.
+		if service.RegistryRef == "" && !hasRemoteReadiness && service.Config != nil {
+			adapter, found, err := runtimeContractForConfig(service.Config)
+			if found && err == nil {
+				if compiler, ok := adapter.(connectionRequirementCompiler); ok {
+					for _, requirement := range compiler.ConnectionRequirements(service.Config) { required[requirement] = true }
+				}
+			}
 		}
 		if service.Config != nil && service.Config.Plan.SourceDriver == "apollo" {
 			required["apollo"] = true

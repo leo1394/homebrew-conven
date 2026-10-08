@@ -53,3 +53,38 @@ func TestRemoteReadinessDoesNotInferRegistryDriver(t *testing.T) {
 		if required=selectedConnectionRequirements(plan); len(required)!=0 {t.Fatalf("%s inferred registry for undeclared/direct route: %v",driver,required)}
 	}
 }
+
+func TestSpringHTTPReadinessUsesSelectedDiscovery(t *testing.T) {
+	for _, discovery := range []string{"consul", "nacos", "eureka"} {
+		t.Run(discovery, func(t *testing.T) {
+			store, err := NewStore(t.TempDir()); if err != nil { t.Fatal(err) }
+			plan := &Plan{
+				Workspace: &WorkspaceData{Root: store.Root, Store: store, Manifest: &model.Manifest{}},
+				Environment: model.Environment{Connection: model.Connection{Driver: "ktctl", Readiness: []model.Endpoint{
+					{Name: "apollo-default", Address: "apollo.default:8080"},
+					{Name: "consul", Address: "consul.default:8500"},
+					{Name: "consul-test", Address: "consul.test:8500"},
+					{Name: "nacos", Address: "nacos.example:8848"},
+					{Name: "eureka", Address: "eureka.default:8761"},
+				}}, Resolutions: map[string]map[string]model.DependencyResolution{"inactive": {"directory": {Mode: "remote", Readiness: []string{"consul-test"}}}}},
+				Services: map[string]PlannedService{"smartview-api-service": {Runtime: "spring-boot", Kind: "http", Config: &PlannedConfig{Contract: "spring-boot-repository-overlay", Discovery: discovery}}},
+			}
+			connection, err := planConnection(plan, CommonOptions{}); if err != nil { t.Fatal(err) }
+			if len(connection.Readiness) != 1 || connection.Readiness[0].Name != discovery {
+				t.Fatalf("%s readiness included unrelated endpoints: %+v", discovery, connection.Readiness)
+			}
+			plan.Services["smartview-api-service"] = PlannedService{Runtime: "spring-boot", RegistryRef: "consul-test", Config: &PlannedConfig{Contract: "spring-boot-repository-overlay", Discovery: discovery}}
+			connection, err = planConnection(plan, CommonOptions{}); if err != nil { t.Fatal(err) }
+			if len(connection.Readiness) != 1 || connection.Readiness[0].Name != "consul-test" {
+				t.Fatalf("explicit registry did not take precedence: %+v", connection.Readiness)
+			}
+			plan.Services["smartview-api-service"] = PlannedService{Runtime: "spring-boot", Config: &PlannedConfig{Contract: "spring-boot-repository-overlay", Discovery: discovery}}
+			plan.Environment.Resolutions["smartview-api-service"] = map[string]model.DependencyResolution{"directory": {Mode: "remote", Readiness: []string{"consul-test"}}}
+			plan.Resolutions = map[string]map[string]dependency.Resolution{"smartview-api-service": {"directory": {Mode: "remote"}}}
+			connection, err = planConnection(plan, CommonOptions{}); if err != nil { t.Fatal(err) }
+			if len(connection.Readiness) != 1 || connection.Readiness[0].Name != "consul-test" {
+				t.Fatalf("explicit remote readiness did not take precedence: %+v", connection.Readiness)
+			}
+		})
+	}
+}

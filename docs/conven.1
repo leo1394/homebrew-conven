@@ -1,4 +1,4 @@
-.TH CONVEN 1 "September 25, 2026" "Conven 1.1.1" "User Commands"
+.TH CONVEN 1 "October 9, 2026" "Conven 1.1.2" "User Commands"
 .SH NAME
 conven \- run a focused set of local microservices with remote dependencies
 .SH SYNOPSIS
@@ -335,6 +335,7 @@ selects the effective mode.
 Restart always reuses the current session environment. Passing
 .BR \-\-dev ,
 .BR \-\-test ,
+.BR \-\-prod ,
 or
 .B \-\-env
 prints a one-line warning and points to the corresponding
@@ -391,6 +392,12 @@ Available to start and doctor.
 Select the
 .B test
 profile.
+Available to start and doctor.
+.TP
+.B \-\-prod
+Select the
+.B prod
+profile, which must be declared in the manifest.
 Available to start and doctor.
 .TP
 .BI \-\-kubeconfig " file"

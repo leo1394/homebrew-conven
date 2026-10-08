@@ -78,7 +78,7 @@ func Completion(shell string) (string, error) {
                 candidate_kind="services"
                 ;;
             --start)
-                options="--env --dev --test --kubeconfig --context --namespace --tail --dashboard --web --dry-run --with-dependencies --skip-build --skip-verify --help"
+                options="--env --dev --test --prod --kubeconfig --context --namespace --tail --dashboard --web --dry-run --with-dependencies --skip-build --skip-verify --help"
                 candidate_kind="services"
                 ;;
             --restart)
@@ -253,7 +253,7 @@ func Completion(shell string) (string, error) {
             options="--help"
             ;;
         doctor)
-            options="--env --dev --test --kubeconfig --context --namespace --help"
+            options="--env --dev --test --prod --kubeconfig --context --namespace --help"
             if [ "$prev" = "--env" ]; then
                 COMPREPLY=()
                 while IFS= read -r candidate; do
@@ -411,6 +411,7 @@ _conven() {
                         '--env[environment profile]:environment:_conven_environment_names' \
                         '--dev[use the dev environment profile]' \
                         '--test[use the test environment profile]' \
+                        '--prod[use the prod environment profile]' \
                         '--kubeconfig[kubeconfig path]:file:_files' \
                         '--context[kubeconfig context]:context:' \
                         '--namespace[Kubernetes namespace]:namespace:' \
@@ -609,6 +610,7 @@ _conven() {
                 '--env[environment profile]:environment:_conven_environment_names' \
                 '--dev[use the dev environment profile]' \
                 '--test[use the test environment profile]' \
+                '--prod[use the prod environment profile]' \
                 '--kubeconfig[kubeconfig path]:file:_files' \
                 '--context[kubeconfig context]:context:' \
                 '--namespace[Kubernetes namespace]:namespace:' \
@@ -844,6 +846,7 @@ complete -c conven -f -n '__conven_plugins_global_run_name_position' -a '(__conv
 complete -c conven -n '__conven_using_subcommand doctor' -l env -r -a '(__conven_completion_candidates environments)' -d 'Environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l dev -d 'Use the dev environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l test -d 'Use the test environment profile'
+complete -c conven -n '__conven_using_subcommand doctor' -l prod -d 'Use the prod environment profile'
 complete -c conven -n '__conven_using_subcommand doctor' -l kubeconfig -r -F -d 'Kubeconfig path'
 complete -c conven -n '__conven_using_subcommand doctor' -l context -r -d 'Kubeconfig context'
 complete -c conven -n '__conven_using_subcommand doctor' -l namespace -r -d 'Kubernetes namespace'
@@ -877,6 +880,7 @@ complete -c conven -n '__conven_services_action --logs' -l dashboard -d 'Open th
 complete -c conven -n '__conven_services_action --start' -l env -r -a '(__conven_completion_candidates environments)' -d 'Environment profile'
 complete -c conven -n '__conven_services_action --start' -l dev -d 'Use the dev environment profile'
 complete -c conven -n '__conven_services_action --start' -l test -d 'Use the test environment profile'
+complete -c conven -n '__conven_services_action --start' -l prod -d 'Use the prod environment profile'
 complete -c conven -n '__conven_services_action --start' -l kubeconfig -r -F -d 'Kubeconfig path'
 complete -c conven -n '__conven_services_action --start' -l context -r -d 'Kubeconfig context'
 complete -c conven -n '__conven_services_action --start' -l namespace -r -d 'Kubernetes namespace'
