@@ -194,7 +194,7 @@ var webLogURLSecretPattern = regexp.MustCompile(`(?i)([?&](?:authorization|passw
 var webLogSecretOnlyPattern = regexp.MustCompile(`(?i)^\s*(authorization|password|passwd|token|secret|api[_-]?key|credential|cookie|set-cookie)\s*[=:]?\s*$`)
 var webLogANSIPattern = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 var webLogOSCPattern = regexp.MustCompile(`\x1b\][^\x07]*(?:\x07|\x1b\\)`)
-var webLogTimePattern = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b`)
+var webLogTimePattern = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::\d{2})?)\b`)
 var webLogLevelPattern = regexp.MustCompile(`(?i)(?:^|[\s\[])\b(trace|debug|info|warn|warning|error|fatal)\b`)
 
 // OpenWebWorkspace tolerates a malformed manifest so the read-only diagnostic
@@ -1210,7 +1210,7 @@ func scrubWebLogText(value string) string {
 }
 
 func webParseLogTime(value string) *time.Time {
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.999999999Z07"} {
 		parsed, err := time.Parse(layout, value)
 		if err == nil {
 			parsed = parsed.UTC()

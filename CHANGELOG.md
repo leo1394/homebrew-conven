@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.3 - 2026-10-13
+
+- Parse hour-only timezone offsets in Web dashboard log timestamps.
+- Preserve filtered logs while paused and keep live and historical log sources separate.
+- Show current failures independently from historical startup attempts; display zero failures in gray.
+- Highlight service ports in a dedicated topology table column and align both topology panes with independent scrolling.
+
 ## 1.1.2 - 2026-10-09
 
 - Complete missing Spring Boot HTTP policy routes during service discovery,

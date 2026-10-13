@@ -146,7 +146,8 @@
     .metric-value { display: block; font: 500 24px var(--code); }
     #serviceCount { color: var(--cyan); }
     #healthyCount { color: var(--green); }
-    #failedCount { color: var(--red); }
+    #failedCount { color: var(--muted); }
+    #failedCount.has-failures { color: var(--red); }
     #environmentMeta { color: var(--amber); background: rgba(231, 187, 99, .12); border: 1px solid rgba(231, 187, 99, .45); padding: 3px 6px; font-weight: 700; }
     .session-network { margin-top: 14px; }
     #lanAddress { color: var(--green); }
@@ -172,8 +173,8 @@
     .kv dt { color: var(--muted); }
     .kv dd { margin: 0; overflow-wrap: anywhere; }
 
-    .topology-layout { display: grid; grid-template-columns: minmax(360px, 1.1fr) minmax(370px, .9fr); min-height: 410px; }
-    .map-area { position: relative; border-right: 1px solid var(--line); overflow: auto; max-height: 600px; background: radial-gradient(circle at 50% 45%, rgba(66, 215, 223, .045), transparent 40%); }
+    .topology-layout { display: grid; grid-template-columns: minmax(360px, 1.1fr) minmax(370px, .9fr); height: clamp(410px, 65vh, 600px); }
+    .map-area { position: relative; min-height: 0; border-right: 1px solid var(--line); overflow: auto; background: radial-gradient(circle at 50% 45%, rgba(66, 215, 223, .045), transparent 40%); }
     .topology-layout.list-only { grid-template-columns: 1fr; }
     .topology-layout.list-only .map-area { display: none; }
     .map-note { padding: 12px 13px; color: var(--muted); font: 10px var(--code); line-height: 1.7; }
@@ -196,7 +197,7 @@
     .node:hover rect, .node:focus rect, .node.selected rect { stroke: var(--cyan); fill: var(--cyan-soft); }
     .node.dim { opacity: .24; }
     .edge.dim { opacity: .12; }
-    .config-side { min-width: 0; }
+    .config-side { min-width: 0; min-height: 0; overflow: auto; }
     .subtoolbar { display: flex; gap: 7px; padding: 10px; border-bottom: 1px solid var(--line); }
     .subtoolbar .field { width: 100%; }
     .service-table { width: 100%; border-collapse: collapse; font-size: 11px; }
@@ -204,7 +205,8 @@
     .service-table td { padding: 9px; border-bottom: 1px solid rgba(38, 49, 56, .62); vertical-align: top; }
     .service-table tr { cursor: pointer; }
     .service-table tbody tr:hover, .service-table tbody tr.selected { background: var(--cyan-soft); }
-    .port-list { color: var(--muted); font-family: var(--code); }
+    .port-list { color: var(--cyan); font-family: var(--code); font-weight: 600; }
+    .listener-list { color: var(--muted); font-family: var(--code); }
     .route-list { padding: 12px; }
     .route-list h3 { margin: 0 0 8px; font: 600 10px var(--code); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
     .route-row { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr) minmax(0, 1.5fr); align-items: start; gap: 8px; padding: 7px 2px; border-top: 1px solid rgba(38, 49, 56, .7); font: 10px/1.6 var(--code); }
@@ -298,7 +300,8 @@
       .section-nav { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; overflow-x: auto; }
       .overview-grid { grid-template-columns: 1fr 1fr; }
       .overview-cell:first-child { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--line); }
-      .topology-layout { grid-template-columns: 1fr; }
+      .topology-layout { grid-template-columns: 1fr; height: auto; }
+      .map-area, .config-side { height: clamp(410px, 65vh, 600px); }
       .map-area { border-right: 0; border-bottom: 1px solid var(--line); }
       .logs-controls { grid-template-columns: 1fr 1fr 1fr; }
       .logs-controls .field:first-child { grid-column: 1 / -1; }
@@ -423,7 +426,7 @@
                 </select>
               </div>
               <table class="service-table">
-                <thead><tr><th scope="col">Service</th><th scope="col">PID</th><th scope="col">State</th><th scope="col">Ports / listeners</th></tr></thead>
+                <thead><tr><th scope="col">Service</th><th scope="col">PID</th><th scope="col">State</th><th scope="col">Port(s)</th><th scope="col">Listeners</th></tr></thead>
                 <tbody id="serviceTableBody"></tbody>
               </table>
               <div class="route-list"><h3>Bindings</h3><div id="routeList"></div></div>
@@ -502,6 +505,10 @@
         unseen: 0,
         snapshotBackoff: 3000,
         logBackoff: 1000,
+        logGeneration: 0,
+        logRefresh: false,
+        logSource: null,
+        logAttempt: "",
         snapshotAbort: null,
         logAbort: null,
         snapshotTimer: null,
@@ -623,6 +630,7 @@
       }
 
       function renderSnapshot(snapshot) {
+        const previousSource = logSourceKey();
         state.snapshot = snapshot;
         const services = Array.isArray(snapshot.services) ? snapshot.services : [];
         const attempts = Array.isArray(snapshot.attempts) ? snapshot.attempts : [];
@@ -636,6 +644,7 @@
         $("#serviceCount").textContent = String(services.length);
         $("#healthyCount").textContent = String(services.filter((service) => stateClass(service.health && service.health.status) === "ok").length);
         $("#failedCount").textContent = String(services.filter((service) => stateClass(service.state) === "fail" || stateClass(service.health && service.health.status) === "fail").length);
+        $("#failedCount").classList.toggle("has-failures", Number($("#failedCount").textContent) > 0);
 
         const connection = snapshot.connection || {};
         const connectionDetails = $("#connectionDetails");
@@ -653,6 +662,7 @@
         renderRoutes(snapshot.routes || []);
         renderTimeline(attempts);
         syncActionButtons();
+        if (previousSource !== logSourceKey()) resetLogPoll();
         applyRequestedView();
       }
 
@@ -686,11 +696,16 @@
       function renderFailure(services, attempts) {
         const configurationError = state.snapshot && state.snapshot.configurationError;
         const failedService = services.find((service) => stateClass(service.state) === "fail" || stateClass(service.health && service.health.status) === "fail");
-        const failedAttempt = attempts.find((attempt) => stateClass(attempt.status) === "fail");
+        const latestAttempt = attempts[0];
+        const failedAttempt = !(state.snapshot && state.snapshot.sessionToken) && latestAttempt && stateClass(latestAttempt.status) === "fail" ? latestAttempt : null;
         const strip = $("#failureStrip");
         if (!configurationError && !failedService && !failedAttempt) { strip.classList.remove("show"); return; }
-        $("#failureTitle").textContent = configurationError ? "Workspace configuration could not be loaded" : failedService ? `${failedService.name || "Service"} is not running cleanly` : `${failedAttempt.id || "Latest attempt"} failed`;
-        $("#failureDetail").textContent = configurationError || (failedAttempt && failedAttempt.failure ? failureSummary(failedAttempt.failure) : (failedService.health && failedService.health.message) || "Failure details unavailable.");
+        $("#failureTitle").textContent = configurationError ? "Workspace configuration could not be loaded" : failedAttempt ? `${failedAttempt.id || "Latest attempt"} failed` : `${failedService.name || "Service"} is not running cleanly`;
+        const currentFailure = failedAttempt && failedAttempt.failure;
+        const currentService = failedAttempt ? services.find((service) => currentFailure && currentFailure.service === service.name) : failedService;
+        const health = currentService && currentService.health;
+        const currentHealthMessage = health && stateClass(health.status) === "fail" && health.message;
+        $("#failureDetail").textContent = configurationError || currentHealthMessage || (currentFailure && failureSummary(currentFailure)) || (health && health.message) || "Failure details unavailable.";
         $("#failureLogsButton").textContent = configurationError ? "Open configuration" : "Inspect logs";
         $("#failureLogsButton").dataset.destination = configurationError ? "configuration" : "logs";
         strip.classList.add("show");
@@ -746,18 +761,23 @@
           const pid = document.createElement("td"); pid.textContent = service.pid == null ? "unknown" : String(service.pid); if (service.pid == null) pid.className = "unknown";
           const status = document.createElement("td"); status.append(stateLabel(service.state || "unknown"));
           const ports = document.createElement("td"); ports.className = "port-list"; ports.textContent = formatPorts(service);
-          tr.append(name, pid, status, ports);
+          const listeners = document.createElement("td"); listeners.className = "listener-list"; listeners.textContent = formatListeners(service);
+          tr.append(name, pid, status, ports, listeners);
           tr.addEventListener("click", () => focusTopology(service.name));
           tr.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); focusTopology(service.name); } });
           body.append(tr);
         });
-        if (!body.children.length) { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 4; td.className = "unknown"; td.textContent = "No services match this view."; tr.append(td); body.append(tr); }
+        if (!body.children.length) { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 5; td.className = "unknown"; td.textContent = "No services match this view."; tr.append(td); body.append(tr); }
       }
 
       function formatPorts(service) {
+        const ports = new Set(Object.values(service.ports || {}).filter((port) => port != null).map(String));
+        if (Array.isArray(service.listeners)) service.listeners.forEach((listener) => { if (listener.port) ports.add(String(listener.port)); });
+        return Array.from(ports).join(" · ") || "none reported";
+      }
+
+      function formatListeners(service) {
         const parts = [];
-        const ports = service.ports || {};
-        Object.entries(ports).forEach(([name, port]) => parts.push(`${name}:${port}`));
         if (Array.isArray(service.listeners)) service.listeners.forEach((listener) => {
           const identity = listener.name || "listener";
           const endpoint = listener.port ? `${listener.address || listener.mode || "address unknown"}:${listener.port}` : (listener.address || listener.mode || "endpoint unknown");
@@ -1055,7 +1075,7 @@
         const minutes = Number($("#timeFilter").value || 0);
         const cutoff = minutes ? Date.now() - minutes * 60000 : 0;
         return state.logs.filter((entry) => {
-          if (state.selectionInitialized && !state.selectedServices.size && !state.attemptFilter) return false;
+          if (state.selectionInitialized && !state.selectedServices.size) return false;
           if (state.selectedServices.size && !state.selectedServices.has(entry.service)) return false;
           if (query && !String(entry.text || "").toLowerCase().includes(query)) return false;
           if (level && String(entry.level || "").toLowerCase() !== level) return false;
@@ -1161,29 +1181,33 @@
       }
 
       async function pollLogs() {
-        if (isDemo) return;
+        if (isDemo || (state.selectionInitialized && !state.selectedServices.size)) return;
+        if (state.logSource == null) state.logSource = logSourceKey();
+        const generation = state.logGeneration;
         try {
           const payload = await fetchJSON(`/api/logs?${logParams()}`, {}, "logAbort");
+          if (generation !== state.logGeneration) return;
           if (payload.reset) state.logs = [];
-          mergeLogs(payload.entries || [], false); state.cursor = payload.cursor || state.cursor; state.hasMore = payload.hasMore !== false; state.logBackoff = 1000;
+          state.cursor = payload.cursor || state.cursor; state.hasMore = payload.hasMore !== false; state.logBackoff = 1000;
+          mergeLogs(payload.entries || [], false, state.logRefresh || payload.reset); state.logRefresh = false;
         } catch (error) {
-          if (error.name === "AbortError") return;
+          if (generation !== state.logGeneration || error.name === "AbortError") return;
           state.logBackoff = Math.min(state.logBackoff * 2, 15000); $("#logStatus").textContent = `Log stream retrying · ${error.message}`;
         }
         schedule(pollLogs, state.logBackoff, "logTimer");
       }
 
-      function mergeLogs(entries, prepend) {
+      function mergeLogs(entries, prepend, refresh = false) {
         const known = new Set(state.logs.map((entry) => entry.id));
         const unique = entries.filter((entry) => !entry.id || !known.has(entry.id));
-        if (!unique.length) return;
+        if (!unique.length) { if (refresh) renderLogs(); return; }
         state.logs = prepend ? [...unique, ...state.logs] : [...state.logs, ...unique];
         if (state.logs.length > 2000) state.logs = state.logs.slice(-2000);
         let retainedBytes = state.logs.reduce((size, entry) => size + String(entry.text || "").length * 2, 0);
         while (retainedBytes > 4 * 1024 * 1024 && state.logs.length > 1) {
           retainedBytes -= String(state.logs.shift().text || "").length * 2;
         }
-        if (state.paused || !state.follow) {
+        if ((state.paused || !state.follow) && !refresh) {
           state.unseen += unique.length; updateUnseen();
           $("#logStatus").textContent = `${state.paused ? "Paused" : "Browsing"} · ${state.unseen} unseen · ${state.logs.length} buffered`;
           return;
@@ -1193,16 +1217,31 @@
 
       async function loadBacklog() {
         if (isDemo) { state.hasMore = false; renderLogs(); showToast("Demo backlog exhausted"); return; }
+        if (state.selectionInitialized && !state.selectedServices.size) return;
+        const generation = state.logGeneration;
         const button = $("#loadBacklogButton"); button.disabled = true;
         try {
           const payload = await fetchJSON(`/api/logs?${logParams(state.cursor)}`, {}, "logAbort");
-          mergeLogs(payload.entries || [], false); state.cursor = payload.cursor || state.cursor; state.hasMore = payload.hasMore !== false;
-        } catch (error) { showToast(`Backlog failed: ${error.message}`); }
-        finally { button.disabled = !state.hasMore; }
+          if (generation !== state.logGeneration) return;
+          if (payload.reset) state.logs = [];
+          state.cursor = payload.cursor || state.cursor; state.hasMore = payload.hasMore !== false;
+          mergeLogs(payload.entries || [], false, true); state.logRefresh = false;
+        } catch (error) { if (generation === state.logGeneration && error.name !== "AbortError") showToast(`Backlog failed: ${error.message}`); }
+        finally { if (generation === state.logGeneration) button.disabled = !state.hasMore; }
+      }
+
+      function logSourceKey() {
+        const snapshot = state.snapshot || {};
+        const source = state.attemptFilter ? `attempt:${state.attemptFilter}` : snapshot.sessionToken ? `session:${snapshot.sessionToken}` : `attempt:${(snapshot.attempts || [])[0]?.id || ""}`;
+        return JSON.stringify([snapshot.workspace || "", snapshot.environment || "", source]);
       }
 
       function resetLogPoll() {
-        state.cursor = ""; state.logs = isDemo ? demoLogs.slice() : [];
+        const source = logSourceKey();
+        if (state.logAttempt !== state.attemptFilter || (state.logSource != null && state.logSource !== source)) state.logs = isDemo ? demoLogs.slice() : [];
+        state.logSource = source; state.logAttempt = state.attemptFilter;
+        state.cursor = ""; state.logGeneration++; state.logRefresh = true; state.hasMore = true;
+        state.unseen = 0; updateUnseen();
         if (state.logAbort) state.logAbort.abort();
         renderLogs();
         if (!isDemo) schedule(pollLogs, 0, "logTimer");

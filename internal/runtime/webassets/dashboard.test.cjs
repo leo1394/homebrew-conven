@@ -17,9 +17,10 @@ test("binding rows use identical column tracks regardless of label length", () =
 });
 
 class Element {
-  constructor(tagName) { this.tagName = tagName; this.children = []; this.attributes = {}; this.style = {}; this.events = {}; this.hidden = false; this.classes = new Set(); this.classList = { toggle: (name, active) => active ? this.classes.add(name) : this.classes.delete(name), contains: (name) => this.classes.has(name) }; }
+  constructor(tagName) { this.tagName = tagName; this.children = []; this.attributes = {}; this.dataset = {}; this.value = ""; this.style = {}; this.events = {}; this.hidden = false; this.classes = new Set(); this.classList = { add: (name) => this.classes.add(name), remove: (name) => this.classes.delete(name), toggle: (name, active) => active ? this.classes.add(name) : this.classes.delete(name), contains: (name) => this.classes.has(name) }; }
   setAttribute(key, value) { this.attributes[key] = value; }
   append(...children) { for (const child of children) { if (child.parent) child.remove(); child.parent = this; this.children.push(child); } }
+  replaceChildren(...children) { this.children = []; this.append(...children); }
   remove() { this.parent.children = this.parent.children.filter((child) => child !== this); }
   addEventListener(name, handler) { this.events[name] = handler; }
   querySelector(selector) { return this.children.map((child) => (selector === ".panel" && child.className === "panel") || (selector === ".panel-head" && child.className === "panel-head") || (selector === ".panel-title" && child.className === "panel-title") || child.className?.split(" ").includes(selector.slice(1)) ? child : child.querySelector(selector)).find(Boolean); }
@@ -27,10 +28,10 @@ class Element {
   focus() { this.focused = true; }
 }
 
-function load(document) {
-  const context = { document, location: { protocol: "file:" }, console, URLSearchParams, setTimeout, clearTimeout };
+function load(document, overrides = {}) {
+  const context = { document, location: { protocol: "file:" }, console, URLSearchParams, setTimeout, clearTimeout, ...overrides };
   vm.createContext(context);
-  vm.runInContext(script.replace("      init();", "      globalThis.ui = { servingLayout, servingPath, renderTopology, initializeSections, setSectionExpanded, revealSection, setLogsFullscreen, handleLogsFullscreenKey };"), context);
+  vm.runInContext(script.replace("      init();", "      globalThis.ui = { state, servingLayout, servingPath, renderTopology, initializeSections, setSectionExpanded, revealSection, setLogsFullscreen, handleLogsFullscreenKey, renderServiceFilters, updateServiceSelection, renderLogs, filteredLogs, resetLogPoll, pollLogs, loadBacklog, renderFailure, renderServiceTable, selectAttempt, renderTimeline, renderSnapshot, bindEvents };"), context);
   return context.ui;
 }
 
@@ -51,6 +52,216 @@ test("topology distinguishes local running and remote, with provider-to-consumer
     assert.doesNotMatch(result, /NaN|Infinity/);
   }
   assert.notEqual(ui.servingPath({ x: 100, y: 82 }, { x: 610, y: 82 }), ui.servingPath({ x: 610, y: 82 }, { x: 100, y: 82 }));
+});
+
+function dashboard(overrides = {}) {
+  const elements = new Map();
+  const get = (selector) => { if (!elements.has(selector)) elements.set(selector, new Element("div")); return elements.get(selector); };
+  const inputs = () => get("#serviceFilters").children.flatMap((chip) => chip.children).filter((child) => child.type === "checkbox");
+  const timers = [];
+  const ui = load({ querySelector: get, querySelectorAll: (selector) => selector === "#serviceFilters input" ? inputs() : selector === "#serviceFilters input:checked" ? inputs().filter((input) => input.checked) : [], getElementById: () => null, addEventListener: () => {}, createElement: (tag) => new Element(tag), createElementNS: (_, tag) => new Element(tag), createTextNode: (text) => Object.assign(new Element("text"), { textContent: text }) }, { location: { protocol: "http:", hash: "" }, sessionStorage: { getItem: () => "" }, AbortController, IntersectionObserver: class { observe() {} }, window: { setTimeout: () => 0, clearTimeout: () => {} }, setTimeout: (callback) => { timers.push(callback); return timers.length; }, clearTimeout: () => {}, requestAnimationFrame: (callback) => callback(), ...overrides });
+  ui.state.snapshot = { sessionToken: "current" };
+  ui.renderServiceFilters([{ name: "api" }, { name: "worker" }]);
+  return { ui, get, inputs, timers, ids: () => get("#logRows").children.filter((row) => row.className === "log-row").map((row) => row.dataset.id) };
+}
+
+test("failure count is muted at zero and red only while failures exist", () => {
+  const { ui, get } = dashboard();
+  ui.state.viewHandled = true;
+  for (const [services, count] of [
+    [[{ name: "api", state: "running", health: { status: "healthy" } }], 0],
+    [[{ name: "api", state: "failed" }], 1],
+    [[{ name: "api", state: "running", health: { status: "unhealthy" } }], 1],
+    [[], 0]
+  ]) {
+    ui.renderSnapshot({ sessionToken: "current", services, attempts: [] });
+    assert.equal(get("#failedCount").textContent, String(count));
+    assert.equal(get("#failedCount").classList.contains("has-failures"), count > 0);
+  }
+  assert.match(html, /#failedCount\s*\{\s*color: var\(--muted\)/);
+  assert.match(html, /#failedCount\.has-failures\s*\{\s*color: var\(--red\)/);
+});
+
+test("service selection keeps buffered logs while paused or browsing, including reselect and none", async () => {
+  for (const mode of ["paused", "browsing"]) {
+    let requests = 0;
+    const page = dashboard({ fetch: async () => { requests++; return { ok: true, json: async () => ({ entries: [{ id: "new", service: "api", text: "new line" }], cursor: "new-cursor" }) }; } });
+    const { ui, inputs, ids } = page;
+    ui.state.paused = mode === "paused"; ui.state.follow = false;
+    ui.state.logs = [{ id: "api", service: "api", text: "api line" }, { id: "worker", service: "worker", text: "worker line" }];
+    inputs()[1].checked = false; inputs()[1].events.change();
+    assert.deepEqual(ids(), ["api"]);
+    assert.equal(ui.state.logs.length, 2);
+    await ui.pollLogs();
+    assert.deepEqual(ids(), ["api", "new"]);
+    inputs()[1].checked = true; inputs()[1].events.change();
+    assert.deepEqual(ids(), ["api", "worker", "new"]);
+    inputs().forEach((input) => input.checked = false); ui.state.attemptFilter = "attempt"; ui.updateServiceSelection();
+    assert.deepEqual(ids(), []);
+    await ui.pollLogs(); await ui.loadBacklog();
+    assert.equal(requests, 1);
+  }
+});
+
+test("filter refresh renders duplicate or empty fetches without resuming paused live updates", async () => {
+  let payload = { entries: [{ id: "api", service: "api", text: "kept" }] };
+  const { ui, inputs, ids } = dashboard({ fetch: async () => ({ ok: true, json: async () => payload }) });
+  ui.state.paused = true; ui.state.follow = false;
+  ui.state.logs = payload.entries;
+  inputs()[1].checked = false; inputs()[1].events.change();
+  await ui.pollLogs();
+  assert.deepEqual(ids(), ["api"]);
+  payload = { entries: [{ id: "later", service: "api", text: "arrived while paused" }] };
+  await ui.pollLogs();
+  assert.deepEqual(ids(), ["api"]);
+  assert.equal(ui.state.unseen, 1);
+  inputs()[1].checked = true; inputs()[1].events.change();
+  payload = { entries: [] };
+  await ui.pollLogs();
+  assert.deepEqual(ids(), ["api", "later"]);
+  assert.equal(ui.state.paused, true);
+  assert.equal(ui.state.follow, false);
+});
+
+test("late poll and backlog responses cannot replace logs or cursor after selection changes", async () => {
+  for (const method of ["pollLogs", "loadBacklog"]) {
+    let resolve;
+    const { ui, inputs, ids } = dashboard({ fetch: () => new Promise((done) => { resolve = done; }) });
+    ui.state.paused = true;
+    ui.state.logs = [{ id: "api", service: "api", text: "kept" }];
+    const pending = ui[method]();
+    inputs()[1].checked = false; inputs()[1].events.change();
+    resolve({ ok: true, json: async () => ({ reset: true, entries: [{ id: "stale", service: "api", text: "old selection" }], cursor: "stale" }) });
+    await pending;
+    assert.deepEqual(ids(), ["api"]);
+    assert.equal(ui.state.cursor, "");
+    assert.equal(ui.state.logs.length, 1);
+  }
+});
+
+test("attempt source switches clear rows without attempt metadata while same-source filters retain them", async () => {
+  for (const exit of ["toggle", "clearAttempt", "clearFilters", "observation"]) {
+    const { ui, get, inputs, ids } = dashboard({ fetch: async () => ({ ok: true, json: async () => ({ entries: [{ id: "archive", service: "api", text: "captured archive" }] }) }) });
+    const attempt = { id: "old-attempt", services: ["api"], status: "failed" };
+    ui.state.snapshot.attempts = [attempt]; ui.state.snapshot.events = [{ service: "api", status: "running" }];
+    ui.state.paused = true; ui.state.logs = [{ id: "live", service: "api", text: "live without attempt field" }];
+    ui.bindEvents(); ui.selectAttempt(attempt);
+    assert.deepEqual(ids(), []);
+    await ui.pollLogs();
+    assert.deepEqual(ids(), ["archive"]);
+    inputs()[1].checked = true; inputs()[1].events.change();
+    get("#logQuery").value = "captured"; get("#logQuery").events.input();
+    assert.deepEqual(ids(), ["archive"]);
+    if (exit === "toggle") ui.selectAttempt(attempt);
+    if (exit === "clearAttempt") get("#clearAttemptButton").events.click();
+    if (exit === "clearFilters") get("#clearLogFilters").events.click();
+    if (exit === "observation") get("#timeline").children.find((row) => row.tagName === "button").events.click();
+    assert.equal(ui.state.attemptFilter, "");
+    assert.deepEqual(ids(), []);
+    assert.equal(ui.state.logs.length, 0);
+  }
+});
+
+test("snapshot session or fallback attempt changes clear old sources and reject pending responses", async () => {
+  let resolve;
+  const { ui, ids } = dashboard({ fetch: () => new Promise((done) => { resolve = done; }) });
+  const snapshot = { workspace: "test", environment: "dev", sessionToken: "one", services: [{ name: "api", state: "running" }] };
+  ui.state.viewHandled = true; ui.renderSnapshot(snapshot);
+  ui.state.paused = true; ui.state.logs = [{ id: "one", service: "api", text: "old session" }];
+  ui.renderLogs();
+  const pending = ui.pollLogs();
+  ui.renderSnapshot({ ...snapshot, sessionToken: "two" });
+  assert.deepEqual(ids(), []);
+  resolve({ ok: true, json: async () => ({ entries: [{ id: "stale", service: "api", text: "late old session" }] }) });
+  await pending;
+  assert.equal(ui.state.logs.length, 0);
+  ui.renderSnapshot({ ...snapshot, sessionToken: "", attempts: [{ id: "latest-one" }] });
+  ui.state.logs = [{ id: "fallback", service: "api", text: "latest archived attempt" }];
+  ui.renderSnapshot({ ...snapshot, sessionToken: "", attempts: [{ id: "latest-two" }] });
+  assert.equal(ui.state.logs.length, 0);
+});
+
+test("failure strip reports current evidence, not historical failures", () => {
+  const { ui, get } = dashboard();
+  const old = { id: "old", status: "failed", failure: { service: "worker", error: "old worker error" } };
+  ui.renderFailure([{ name: "api", state: "running", health: { status: "healthy" } }], [old]);
+  assert.equal(get("#failureStrip").classes.has("show"), false);
+  ui.renderFailure([{ name: "api", state: "running", health: { status: "unhealthy", message: "current check failed" } }], [old]);
+  assert.equal(get("#failureStrip").classes.has("show"), true);
+  assert.equal(get("#failureDetail").textContent, "current check failed");
+  ui.state.snapshot = {};
+  ui.renderFailure([{ name: "api", state: "failed" }], [old]);
+  assert.equal(get("#failureStrip").classes.has("show"), true);
+  assert.equal(get("#failureTitle").textContent, "old failed");
+  assert.equal(get("#failureDetail").textContent, "old worker error");
+  ui.renderFailure([], [old]);
+  assert.equal(get("#failureDetail").textContent, "old worker error");
+  ui.renderFailure([], [{ id: "new", status: "succeeded" }, old]);
+  assert.equal(get("#failureStrip").classes.has("show"), false);
+  ui.state.snapshot.configurationError = "invalid configuration";
+  ui.renderFailure([], []);
+  assert.equal(get("#failureDetail").textContent, "invalid configuration");
+});
+
+test("no-session unknown health evidence does not mask the matching failed startup error", () => {
+  const { ui, get } = dashboard();
+  ui.state.snapshot = {};
+  const services = [{ name: "api", state: "stopped", health: { status: "unknown", message: "No running session health evidence is available." } }];
+  const attempts = [{ id: "latest", status: "failed", failure: { service: "api", error: "bind: address already in use" } }];
+  ui.renderFailure(services, attempts);
+  assert.equal(get("#failureDetail").textContent, "bind: address already in use");
+  services[0].health = { status: "unhealthy", message: "Current listener unavailable" };
+  ui.renderFailure(services, attempts);
+  assert.equal(get("#failureDetail").textContent, "Current listener unavailable");
+});
+
+test("no-session latest startup failure takes priority over other stopped services or global stages", () => {
+  const { ui, get } = dashboard();
+  ui.state.snapshot = {};
+  const services = ["api", "worker"].map((name) => ({ name, state: "stopped", health: { status: "unknown", message: "No running session health evidence is available." } }));
+  const attempt = { id: "latest", status: "failed", failure: { service: "worker", stage: "spawn", error: "worker failed to start" } };
+  ui.renderFailure(services, [attempt]);
+  assert.equal(get("#failureTitle").textContent, "latest failed");
+  assert.equal(get("#failureDetail").textContent, "worker failed to start");
+  attempt.failure = { stage: "resolve", error: "workspace resolution failed" };
+  ui.renderFailure(services, [attempt]);
+  assert.equal(get("#failureTitle").textContent, "latest failed");
+  assert.equal(get("#failureDetail").textContent, "workspace resolution failed");
+  ui.state.snapshot.configurationError = "configuration invalid";
+  ui.renderFailure(services, [attempt]);
+  assert.equal(get("#failureDetail").textContent, "configuration invalid");
+});
+
+test("topology table separates prominent ports from listeners, with multiple and no ports", () => {
+  const { ui, get } = dashboard();
+  ui.renderServiceTable([{ name: "api", state: "running", pid: 12, ports: { http: 8080, metrics: 9090 }, listeners: [{ name: "http", address: "127.0.0.1", port: 8080 }] }, { name: "worker", state: "running" }]);
+  const rows = get("#serviceTableBody").children;
+  assert.equal(rows[0].children.length, 5);
+  assert.match(rows[0].children[3].textContent, /8080/);
+  assert.match(rows[0].children[3].textContent, /9090/);
+  assert.doesNotMatch(rows[0].children[3].textContent, /observed|127\.0\.0\.1/);
+  assert.match(rows[0].children[4].textContent, /127\.0\.0\.1:8080/);
+  assert.equal(rows[1].children[3].textContent, "none reported");
+  assert.match(html, /<th scope="col">Port\(s\)<\/th><th scope="col">Listeners<\/th>/);
+  assert.match(html, /\.port-list\s*\{[^}]*color: var\(--cyan\)/);
+  get("#serviceSearch").value = "missing"; ui.renderServiceTable([]);
+  assert.equal(get("#serviceTableBody").children[0].children[0].colSpan, 5);
+});
+
+test("topology panes share a bounded desktop height and tall graphs scroll inside", () => {
+  assert.match(html, /\.topology-layout\s*\{[^}]*height: clamp\(410px, 65vh, 600px\)/);
+  assert.match(html, /\.map-area\s*\{[^}]*min-height: 0[^}]*overflow: auto/);
+  assert.match(html, /\.config-side\s*\{[^}]*min-height: 0[^}]*overflow: auto/);
+  assert.match(html, /\.topology-layout\s*\{[^}]*grid-template-columns: 1fr; height: auto/);
+  assert.match(html, /\.map-area, \.config-side\s*\{[^}]*height: clamp\(410px, 65vh, 600px\)/);
+  const svg = new Element("svg");
+  const ui = load({ querySelector: () => svg, createElementNS: (_, tag) => new Element(tag) });
+  const services = Array.from({ length: 20 }, (_, index) => ({ name: `service-${index}`, state: "running" }));
+  ui.renderTopology(services, []);
+  assert.ok(parseInt(svg.style.height, 10) > 600);
+  ui.state.topologyFocus = "service-19"; ui.renderTopology(services, []);
+  assert.equal(svg.children.filter((child) => child.tagName === "g").length, 20);
+  assert.match(svg.children.find((child) => child.attributes["aria-label"] === "Focus service-19").attributes.class, /selected/);
 });
 
 test("shared store-layout provider fans out to two consumers without crossing either node", () => {
