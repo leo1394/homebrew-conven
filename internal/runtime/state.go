@@ -60,6 +60,7 @@ type ServiceProcess struct {
 	ConsumerIsolation map[string]ConsumerIsolationEvidence `json:"consumerIsolation,omitempty"`
 	exit               *serviceProcessExit
 	logOffset          int64
+	captureDone        <-chan struct{}
 }
 
 type serviceProcessExit struct {

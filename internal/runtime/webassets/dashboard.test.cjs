@@ -65,6 +65,53 @@ function dashboard(overrides = {}) {
   return { ui, get, inputs, timers, ids: () => get("#logRows").children.filter((row) => row.className === "log-row").map((row) => row.dataset.id) };
 }
 
+test("collected timestamps are labelled and unlevelled output is not an invented severity", () => {
+  const { ui, get } = dashboard();
+  ui.state.logs = [{ id: "plain", service: "api", text: "Starting server", time: "2026-10-14T00:00:00Z", timeSource: "collected", level: "info", levelSource: "default" }];
+  ui.renderLogs();
+  const row = get("#logRows").children.find((item) => item.className === "log-row");
+  assert.match(row.children[0].textContent, / \*$/);
+  assert.match(row.children[0].title, /Collected by Conven/);
+  assert.equal(row.children[2].textContent, "INFO");
+  assert.match(row.children[2].title, /no log level/);
+});
+
+test("HTTP listener buttons copy loopback or LAN URLs and skip RPC", async () => {
+  const copied = [];
+  const { ui, get } = dashboard({ navigator: { clipboard: { writeText: async (value) => copied.push(value) } } });
+  ui.state.snapshot.lanAddress = "192.168.1.8";
+  const services = [
+    { name: "api", listeners: [{ name: "http", port: 18080, address: "127.0.0.1", mode: "loopback" }] },
+    { name: "lan", listeners: [{ name: "http", port: 18084, address: "*", mode: "all-interfaces" }] },
+    { name: "rpc", listeners: [{ name: "rpc", port: 18081, address: "127.0.0.1" }] }
+  ];
+  ui.renderServiceTable(services);
+  const rows = get("#serviceTableBody").children;
+  let stopped = 0;
+  for (const row of rows.slice(0, 2)) await row.children[4].children[0].events.click({ stopPropagation: () => stopped++ });
+  assert.deepEqual(copied, ["http://127.0.0.1:18080", "http://192.168.1.8:18084"]);
+  assert.equal(stopped, 2);
+  assert.equal(rows[2].children[4].children.length, 0);
+  ui.state.snapshot.lanAddress = ""; ui.renderServiceTable([services[1]]);
+  assert.equal(get("#serviceTableBody").children[0].children[4].children[0].disabled, true);
+});
+
+test("attempt defaults collapse success, expand failure, and preserve manual choice on polling", () => {
+  const { ui, get } = dashboard();
+  const section = get("#attempts"), panel = new Element("div"), body = new Element("div"), button = new Element("button");
+  panel.className = "panel"; body.className = "section-body"; button.className = "section-toggle";
+  panel.append(body, button); section.append(panel);
+  ui.renderTimeline([{ id: "one", status: "succeeded" }]);
+  assert.equal(body.hidden, true);
+  ui.setSectionExpanded(section, true);
+  ui.renderTimeline([{ id: "one", status: "succeeded" }]);
+  assert.equal(body.hidden, false);
+  ui.setSectionExpanded(section, false);
+  ui.renderTimeline([{ id: "two", status: "failed" }]);
+  assert.equal(body.hidden, false);
+  assert.match(html, /<dt>ENV<\/dt><dd><span id="environmentMeta">/);
+});
+
 test("failure count is muted at zero and red only while failures exist", () => {
   const { ui, get } = dashboard();
   ui.state.viewHandled = true;

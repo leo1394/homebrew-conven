@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.4 - 2026-10-14
+
+- Capture timestamps for service output without application timestamps while preserving raw logs and source timestamp precedence.
+- Recognize common log severity formats and default unlevelled output to INFO with explicit provenance.
+- Add copyable HTTP listener addresses, a separate environment badge, and collapsed successful startup timelines to the Web dashboard.
+
 ## 1.1.3 - 2026-10-13
 
 - Parse hour-only timezone offsets in Web dashboard log timestamps.

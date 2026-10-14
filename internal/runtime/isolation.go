@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/leo1394/homebrew-conven/internal/materialize"
 	"github.com/leo1394/homebrew-conven/internal/model"
@@ -203,7 +204,7 @@ func appendIsolationEvidence(service PlannedService, connection ConnectionConfig
 		registration = "disabled(" + guardLocation(*service.Config.Isolation.RegistrationGuard) + ")"
 	}
 	listener := effectiveListener(service.Config)
-	_, writeErr := fmt.Fprintf(file, "[conven] local isolation verified: registration=%s, listener=%s(%s), runtime-config=%s, remote-inbound=%s\n", registration, isolationListenerMode(service.Config.Isolation), listener, runtimeConfigDescription(service.Config), inboundRoutingDescription(connection))
+	_, writeErr := fmt.Fprintf(file, "%s INFO [conven] local isolation verified: registration=%s, listener=%s(%s), runtime-config=%s, remote-inbound=%s\n", time.Now().UTC().Format(time.RFC3339Nano), registration, isolationListenerMode(service.Config.Isolation), listener, runtimeConfigDescription(service.Config), inboundRoutingDescription(connection))
 	closeErr := file.Close()
 	return errors.Join(writeErr, closeErr)
 }

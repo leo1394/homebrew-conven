@@ -51,7 +51,10 @@ func RunForeground(ctx context.Context, argv []string, directory string, environ
 	if err != nil {
 		return err
 	}
-	runErr := runForeground(ctx, argv, directory, environment, output, logFile, logPath)
+	timeIndex, err := openLogTimeIndex(logFile, logPath)
+	if err != nil { logFile.Close(); return err }
+	runErr := runForeground(ctx, argv, directory, environment, output, collectedOutputWriter{logFile, timeIndex}, logPath)
+	timeIndex.Close()
 	if err := logFile.Close(); err != nil {
 		closeErr := fmt.Errorf("close command log %s: %w", logPath, err)
 		if runErr != nil {
@@ -130,8 +133,11 @@ func StartService(name string, argv []string, directory string, environment []st
 	command.Dir = directory
 	command.Env = environment
 	command.Stdin = nil
-	command.Stdout = logFile
-	command.Stderr = logFile
+	capturedOutput, captureDone, err := startLogCaptureTracked(logFile, logPath)
+	if err != nil { logFile.Close(); return ServiceProcess{}, fmt.Errorf("capture %s logs: %w", name, err) }
+	defer capturedOutput.Close()
+	command.Stdout = capturedOutput
+	command.Stderr = capturedOutput
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	logOffset, err := logFile.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -176,6 +182,7 @@ func StartService(name string, argv []string, directory string, environment []st
 		StartedAt: time.Now(),
 		exit:      exit,
 		logOffset: logOffset,
+		captureDone: captureDone,
 	}, nil
 }
 

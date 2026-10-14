@@ -38,6 +38,21 @@ it with a start/stop action. `--web` on start requires `--dashboard` and exclude
 已经发生注册泄漏。路由图展示配置关系，不展示推测的实时流量或 QPS。
 日志关联使用应用已有的 request/trace ID，不自动改动业务源码。
 
+Newly launched local services persist output receipt times in private
+`.timestamps` sidecar indexes while keeping raw logs unchanged. Application
+timestamps take precedence; `*` marks a fallback collection time (hover for its
+source). The backend defaults missing severity to `INFO` and marks its source as
+`default`; explicit application levels take precedence. Hover over the level to
+distinguish a default from an application-supplied value.
+Existing untimed logs and diagnostic text snapshots without timestamp metadata remain unknown; opening a
+dashboard does not invent timestamps for them.
+
+新启动的本地服务通过私有 `.timestamps` 旁路索引持久化输出接收时间，不改写原始日志。
+优先显示应用时间；时间后的 `*` 表示采集时间，悬停可查看来源。未声明级别的输出显示
+默认 `INFO`，由后端标记为默认值，明确的应用级别优先；悬停可区分其来源。
+已有无时间日志和不含时间元数据的诊断文本快照仍保留未知，
+不会用打开面板的时间补填。
+
 The overview includes the same LAN address/interface and disabled binding list as
 the TUI. Green map nodes run locally; amber dashed nodes represent remote
 dependencies, not verified remote health. Arrows point from provider to consumer

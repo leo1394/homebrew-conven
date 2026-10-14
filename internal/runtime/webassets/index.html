@@ -148,8 +148,8 @@
     #healthyCount { color: var(--green); }
     #failedCount { color: var(--muted); }
     #failedCount.has-failures { color: var(--red); }
-    #environmentMeta { color: var(--amber); background: rgba(231, 187, 99, .12); border: 1px solid rgba(231, 187, 99, .45); padding: 3px 6px; font-weight: 700; }
-    .session-network { margin-top: 14px; }
+    #environmentMeta { display: inline-block; color: var(--amber); background: rgba(231, 187, 99, .12); border: 1px solid rgba(231, 187, 99, .45); padding: 3px 6px; font-weight: 700; }
+    .kv.session-network { margin-top: 14px; align-items: center; }
     #lanAddress { color: var(--green); }
     #disabledBindings { color: var(--amber); }
     .section-toggle { margin-left: auto; flex-shrink: 0; }
@@ -207,6 +207,7 @@
     .service-table tbody tr:hover, .service-table tbody tr.selected { background: var(--cyan-soft); }
     .port-list { color: var(--cyan); font-family: var(--code); font-weight: 600; }
     .listener-list { color: var(--muted); font-family: var(--code); }
+    .copy-endpoint { margin-left: 6px; padding: 2px 6px; border: 0; background: transparent; color: var(--cyan); font-size: 14px; }
     .route-list { padding: 12px; }
     .route-list h3 { margin: 0 0 8px; font: 600 10px var(--code); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
     .route-row { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr) minmax(0, 1.5fr); align-items: start; gap: 8px; padding: 7px 2px; border-top: 1px solid rgba(38, 49, 56, .7); font: 10px/1.6 var(--code); }
@@ -378,8 +379,8 @@
             <div class="overview-cell">
               <p class="eyebrow">Session identity</p>
               <h2 class="workspace-name" id="workspaceName">Unknown workspace</h2>
-              <div class="workspace-meta"><span id="environmentMeta">ENV —</span><span id="versionMeta">VERSION —</span><span id="sessionMeta">SESSION —</span></div>
-              <dl class="kv session-network"><dt>LAN</dt><dd id="lanAddress">unknown</dd><dt>Disabled bindings</dt><dd id="disabledBindings">none</dd></dl>
+              <div class="workspace-meta"><span id="versionMeta">VERSION —</span><span id="sessionMeta">SESSION —</span></div>
+              <dl class="kv session-network"><dt>ENV</dt><dd><span id="environmentMeta">—</span></dd><dt>LAN</dt><dd id="lanAddress">unknown</dd><dt>Disabled bindings</dt><dd id="disabledBindings">none</dd></dl>
               <div class="metrics">
                 <div class="metric"><span class="metric-value" id="serviceCount">—</span><span class="metric-label">Services</span></div>
                 <div class="metric"><span class="metric-value" id="healthyCount">—</span><span class="metric-label">Healthy now</span></div>
@@ -636,7 +637,7 @@
         const attempts = Array.isArray(snapshot.attempts) ? snapshot.attempts : [];
         $("#brandContext").textContent = `${snapshot.workspace || "unknown workspace"} · ${snapshot.environment || "unknown environment"}`;
         $("#workspaceName").textContent = snapshot.workspace || "Unknown workspace";
-        $("#environmentMeta").textContent = `ENV ${snapshot.environment || "unknown"}`;
+        $("#environmentMeta").textContent = snapshot.environment || "unknown";
         $("#lanAddress").textContent = snapshot.lanAddress ? `${snapshot.lanAddress}${snapshot.lanInterface ? ` (${snapshot.lanInterface})` : ""}` : "unknown";
         $("#disabledBindings").textContent = Array.isArray(snapshot.disabledBindings) ? (snapshot.disabledBindings.join(", ") || "none") : "unknown";
         $("#versionMeta").textContent = `VERSION ${snapshot.version || "unknown"}`;
@@ -762,6 +763,14 @@
           const status = document.createElement("td"); status.append(stateLabel(service.state || "unknown"));
           const ports = document.createElement("td"); ports.className = "port-list"; ports.textContent = formatPorts(service);
           const listeners = document.createElement("td"); listeners.className = "listener-list"; listeners.textContent = formatListeners(service);
+          (service.listeners || []).filter((listener) => listener.name === "http" && listener.port).forEach((listener) => {
+            const url = httpListenerURL(listener, state.snapshot && state.snapshot.lanAddress);
+            const copy = document.createElement("button"); copy.type = "button"; copy.className = "button copy-endpoint"; copy.textContent = "⧉";
+            copy.disabled = !url; copy.title = url ? `Copy ${url}` : "LAN address unavailable"; copy.setAttribute("aria-label", url ? `Copy ${url}` : "LAN address unavailable");
+            copy.addEventListener("keydown", (event) => event.stopPropagation());
+            copy.addEventListener("click", async (event) => { event.stopPropagation(); try { await navigator.clipboard.writeText(url); showToast(`Copied ${url}`); } catch (_) { showToast("Could not copy address; clipboard unavailable."); } });
+            listeners.append(copy);
+          });
           tr.append(name, pid, status, ports, listeners);
           tr.addEventListener("click", () => focusTopology(service.name));
           tr.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); focusTopology(service.name); } });
@@ -774,6 +783,13 @@
         const ports = new Set(Object.values(service.ports || {}).filter((port) => port != null).map(String));
         if (Array.isArray(service.listeners)) service.listeners.forEach((listener) => { if (listener.port) ports.add(String(listener.port)); });
         return Array.from(ports).join(" · ") || "none reported";
+      }
+
+      function httpListenerURL(listener, lanAddress) {
+        const wildcard = listener.mode === "all-interfaces" || ["*", "0.0.0.0", "::", "[::]"].includes(listener.address);
+        const host = wildcard ? lanAddress : listener.mode === "loopback" || ["127.0.0.1", "::1", "[::1]"].includes(listener.address) ? "127.0.0.1" : listener.address;
+        if (!host || !listener.port) return "";
+        return `http://${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${listener.port}`;
       }
 
       function formatListeners(service) {
@@ -974,6 +990,13 @@
       }
 
       function renderTimeline(attempts) {
+        const latest = attempts[0];
+        const defaultKey = latest ? `${latest.id}:${latest.status}` : "none";
+        if (state.attemptDefaultKey !== defaultKey) {
+          state.attemptDefaultKey = defaultKey;
+          const section = $("#attempts");
+          if (section) setSectionExpanded(section, !latest || !["succeeded", "success", "completed"].includes(latest.status));
+        }
         const container = $("#timeline"); container.replaceChildren();
         if (!attempts.length) container.append(emptyMessage("No startup attempts reported."));
         attempts.forEach((attempt) => {
@@ -1103,8 +1126,11 @@
       function createLogRow(entry, query) {
         const row = document.createElement("div"); row.className = "log-row"; row.dataset.id = entry.id || "";
         const time = document.createElement("span"); time.className = "log-time"; time.textContent = formatTime(entry.time);
+        time.title = entry.timeSource === "collected" ? "Collected by Conven (application timestamp unavailable)" : entry.time ? "Application log timestamp" : "Timestamp unavailable";
+        if (entry.timeSource === "collected") time.textContent += " *";
         const service = document.createElement("span"); service.className = "log-service"; service.textContent = entry.service || "unknown";
-        const level = document.createElement("span"); level.className = `log-level ${String(entry.level || "").toLowerCase()}`; level.textContent = String(entry.level || "unknown").toUpperCase();
+        const level = document.createElement("span"); level.className = `log-level ${String(entry.level || "info").toLowerCase()}`; level.textContent = String(entry.level || "info").toUpperCase();
+        if (entry.levelSource === "default" || !entry.level) level.title = "Default INFO: application supplied no log level";
         const text = document.createElement("span"); text.className = "log-text";
         const parsed = tryParseJSON(entry.text);
         if (parsed) {

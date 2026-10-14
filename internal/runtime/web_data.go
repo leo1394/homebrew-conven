@@ -134,7 +134,9 @@ type WebLogEntry struct {
 	Service   string     `json:"service"`
 	Text      string     `json:"text"`
 	Time      *time.Time `json:"time,omitempty"`
+	TimeSource string    `json:"timeSource,omitempty"`
 	Level     string     `json:"level,omitempty"`
+	LevelSource string   `json:"levelSource,omitempty"`
 	RequestID string     `json:"requestId,omitempty"`
 	TraceID   string     `json:"traceId,omitempty"`
 }
@@ -182,6 +184,7 @@ type webParsedLog struct {
 	text      string
 	time      *time.Time
 	level     string
+	levelSource string
 	requestID string
 	traceID   string
 	attempt   string
@@ -195,7 +198,7 @@ var webLogSecretOnlyPattern = regexp.MustCompile(`(?i)^\s*(authorization|passwor
 var webLogANSIPattern = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 var webLogOSCPattern = regexp.MustCompile(`\x1b\][^\x07]*(?:\x07|\x1b\\)`)
 var webLogTimePattern = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::\d{2})?)\b`)
-var webLogLevelPattern = regexp.MustCompile(`(?i)(?:^|[\s\[])\b(trace|debug|info|warn|warning|error|fatal)\b`)
+var webLogLevelPattern = regexp.MustCompile(`(?i)(?:^|[\s\[])\b(trace|debug|info|warn|warning|error|fatal|INF|WRN|ERR|DBG|TRC|FTL)\b`)
 
 // OpenWebWorkspace tolerates a malformed manifest so the read-only diagnostic
 // viewer remains available. Mutating actions reopen the workspace strictly.
@@ -865,6 +868,10 @@ func readWebLogSource(workspace *WorkspaceData, source webLogSource, position we
 		return nil, position, false, false, 0, err
 	}
 	defer file.Close()
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH); err != nil { return nil, position, false, false, 0, err }
+	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	timeIndex := openLogTimes(source.root, source.path, info)
+	if timeIndex != nil { defer timeIndex.Close() }
 	reset := false
 	if position.Generation != "" && (position.Generation != generation || position.Offset > info.Size()) {
 		position = webLogPosition{}
@@ -953,10 +960,14 @@ func readWebLogSource(workspace *WorkspaceData, source webLogSource, position we
 		}
 		parsed, nextPending := parseWebLogLine(string(bytes.TrimSuffix(raw, []byte{'\r'})), pending)
 		pending = nextPending
+		timeSource := ""
+		if parsed.time != nil { timeSource = "source" } else if observed := collectedLogTime(timeIndex, lineOffset); observed != nil {
+			parsed.time, timeSource = observed, "collected"
+		}
 		if !webLogMatches(parsed, query, since, until) {
 			continue
 		}
-		entries = append(entries, WebLogEntry{ID: source.name + ":" + generation + ":" + strconv.FormatInt(lineOffset, 10), Service: source.name, Text: parsed.text, Time: parsed.time, Level: parsed.level, RequestID: parsed.requestID, TraceID: parsed.traceID})
+		entries = append(entries, WebLogEntry{ID: source.name + ":" + generation + ":" + strconv.FormatInt(lineOffset, 10), Service: source.name, Text: parsed.text, Time: parsed.time, TimeSource: timeSource, Level: parsed.level, LevelSource: parsed.levelSource, RequestID: parsed.requestID, TraceID: parsed.traceID})
 	}
 	position.Offset = baseOffset + int64(consumed)
 	position.Pending = pending
@@ -1028,7 +1039,7 @@ func readWebDiagnosticLogSource(source webLogSource, position webLogPosition, in
 		parsed, nextPending := parseWebLogLine(string(bytes.TrimSuffix(raw, []byte{'\r'})), pending)
 		pending = nextPending
 		if webLogMatches(parsed, query, since, until) {
-			entries = append(entries, WebLogEntry{ID: source.name + ":" + source.generation + ":" + strconv.FormatInt(lineOffset, 10), Service: source.name, Text: parsed.text, Time: parsed.time, Level: parsed.level, RequestID: parsed.requestID, TraceID: parsed.traceID})
+			entries = append(entries, WebLogEntry{ID: source.name + ":" + source.generation + ":" + strconv.FormatInt(lineOffset, 10), Service: source.name, Text: parsed.text, Time: parsed.time, Level: parsed.level, LevelSource: parsed.levelSource, RequestID: parsed.requestID, TraceID: parsed.traceID})
 		}
 	}
 	position.Offset = baseOffset + int64(consumed)
@@ -1093,12 +1104,12 @@ func openWebLogFile(root string, path string) (*os.File, os.FileInfo, string, er
 
 func parseWebLogLine(line string, pendingSecret bool) (webParsedLog, bool) {
 	if pendingSecret {
-		return webParsedLog{text: "[REDACTED]"}, false
+		return webParsedLog{text: "[REDACTED]", level: "info", levelSource: "default"}, false
 	}
 	nextPending := webLogSecretOnlyPattern.MatchString(line)
 	var object map[string]interface{}
 	if json.Unmarshal([]byte(line), &object) == nil {
-		parsed := webParsedLog{}
+		parsed := webParsedLog{levelSource: "source"}
 		rawText := webJSONText(object)
 		parsed.level = webJSONString(object, "level", "severity")
 		parsed.requestID = webJSONString(object, "requestId", "request_id", "request-id")
@@ -1121,19 +1132,30 @@ func parseWebLogLine(line string, pendingSecret bool) (webParsedLog, bool) {
 			parsed.traceID = webPlainLogValue(parsed.text, "traceId", "trace_id", "trace-id", "trace")
 		}
 		parsed.level = scrubWebLogText(parsed.level)
+		if strings.EqualFold(parsed.level, "warning") { parsed.level = "warn" }
+		if parsed.level == "" { parsed.level, parsed.levelSource = "info", "default" }
 		parsed.requestID = scrubWebLogText(parsed.requestID)
 		parsed.traceID = scrubWebLogText(parsed.traceID)
 		parsed.attempt = scrubWebLogText(parsed.attempt)
 		return parsed, nextPending
 	}
-	parsed := webParsedLog{text: redactWebLogText(line)}
+	parsed := webParsedLog{text: redactWebLogText(line), level: "info", levelSource: "default"}
 	if match := webLogTimePattern.FindString(line); match != "" {
 		parsed.time = webParseLogTime(match)
 	}
 	if match := webLogLevelPattern.FindStringSubmatch(line); len(match) > 1 {
+		parsed.levelSource = "source"
 		parsed.level = strings.ToLower(match[1])
 		if parsed.level == "warning" {
 			parsed.level = "warn"
+		}
+		switch parsed.level {
+		case "inf": parsed.level = "info"
+		case "wrn": parsed.level = "warn"
+		case "err": parsed.level = "error"
+		case "dbg": parsed.level = "debug"
+		case "trc": parsed.level = "trace"
+		case "ftl": parsed.level = "fatal"
 		}
 	}
 	parsed.requestID = webPlainLogValue(line, "requestId", "request_id", "request-id")

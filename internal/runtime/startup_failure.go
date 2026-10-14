@@ -32,6 +32,16 @@ func diagnoseStartupFailure(failure error, process ServiceProcess, service Plann
 	if !errors.As(failure, &initialization) {
 		return failure
 	}
+	// Exit status can arrive before the detached collector drains the pipe.
+	// Bound the wait in case descendants still hold the output descriptor.
+	if process.captureDone != nil {
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-process.captureDone:
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
 	details := []string{initialization.Error()}
 	fatalLog, firstFatal, truncated := startupFatalLogEvidence(process.LogPath, process.logOffset)
 	if fatalLog != "" {
