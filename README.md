@@ -110,11 +110,14 @@ the session and blocks the next fresh start.
 > **Local isolation is not data isolation.** Local services still use the
 > remote databases, Kafka brokers, unselected RPC clients, and background jobs
 > present in their runtime configuration. They may write data or consume
-> messages. Conven does not sandbox those effects. Until unified local routing
-> for asynchronous workloads is implemented, Conven defaults
-> `SERVICE_KAFKA_CONSUMERS_ENABLED` to `true` and does not require a source
-> guard. Only an explicit `false` requests Kafka consumer isolation; Conven
-> then verifies that the service can honor the switch before startup.
+> messages. Conven CLI does not isolate Kafka consumption and may join shared
+> remote consumer groups. It does not interpret `SERVICE_KAFKA_CONSUMERS_ENABLED`,
+> inject consumer switches, or require source guards. Application configuration
+> and inherited environment variables retain their application-defined meaning.
+> Conven never edits business source. Guard network protection is separate.
+> Isolated topic/group routing is not yet implemented. Independent credentials,
+> topics, and read/group ACLs are manually configured defense in depth; Conven
+> does not write cluster ACLs.
 
 Runner-only services with no `kinds` do not receive the same adapter-backed
 isolation guarantee. Project-defined `prepare` and `build` commands also run

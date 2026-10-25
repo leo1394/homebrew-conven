@@ -154,7 +154,16 @@ func consumerIsolationDescription(consumers map[string]ConsumerIsolationEvidence
 	details := make([]string, 0, len(names))
 	for _, name := range names {
 		consumer := consumers[name]
-		details = append(details, fmt.Sprintf("%s=%s via %s (mode=%s)", name, consumer.Status, consumer.Env, consumer.Mode))
+		if consumer.Status == "unrestricted" {
+			details = append(details, name+"=unrestricted (mode=application); no consumer isolation; may join remote consumer groups")
+			continue
+		}
+		guard := consumer.Env
+		if consumer.Property != "" { guard = consumer.Property }
+		detail := fmt.Sprintf("%s=%s via %s (mode=%s)", name, consumer.Status, guard, consumer.Mode)
+		if consumer.Status == "enabled" { detail += "; shared consumption allowed: may receive remote messages" }
+		if consumer.Status == "disabled" { detail += "; source/config guard, not broker membership verification" }
+		details = append(details, detail)
 	}
 	return strings.Join(details, ", ")
 }

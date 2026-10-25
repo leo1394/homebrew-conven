@@ -225,17 +225,8 @@ func discoveredConsumerDrivers(evidence []RepositoryConsumerEvidence) []string {
 }
 
 func discoveredConsumerIsolation(evidence []RepositoryConsumerEvidence) *model.ServiceIsolation {
-	drivers := discoveredConsumerDrivers(evidence)
-	if len(drivers) == 0 {
-		return nil
-	}
-	isolation := &model.ServiceIsolation{Consumers: make(map[string]model.ConsumerIsolation, len(drivers))}
-	for _, driver := range drivers {
-		if driver == "kafka" {
-			isolation.Consumers[driver] = model.ConsumerIsolation{Mode: KafkaConsumerGuardMode, Env: KafkaConsumersEnabledEnv}
-		}
-	}
-	return isolation
+	// Consumer discovery is descriptive; the CLI does not create application switches.
+	return nil
 }
 
 func RenderDiscoveredManifest(workspace string, services []DiscoveredService) ([]byte, error) {
@@ -791,11 +782,8 @@ func backfillDiscoveredDescription(existing model.Service, discovered Discovered
 		consumerDrivers := discoveredConsumerDrivers(discovered.Consumers)
 		if !reflect.DeepEqual(existing.Discovery.Consumers, consumerDrivers) {
 			existing.Discovery.Consumers = consumerDrivers
-			isolation := discoveredConsumerIsolation(discovered.Consumers)
-			if isolation == nil {
+			if len(consumerDrivers) == 0 {
 				existing.Isolation = model.ServiceIsolation{}
-			} else {
-				existing.Isolation = *isolation
 			}
 			changed = true
 		}

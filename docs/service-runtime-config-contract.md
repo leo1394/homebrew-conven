@@ -57,8 +57,8 @@ A typed service must:
 2. use the supplied host and port when creating every declared listener;
 3. disable registration through a framework-native setting or a neutral,
    default-enabled application setting;
-4. guard detected Kafka consumer construction with the neutral,
-   default-enabled consumer switch;
+4. guard detected Kafka consumer construction with a verifiable environment
+   switch or Spring Boot property;
 5. expose a deterministic build and executable entry;
 6. forward process arguments to the framework where arguments are the native
    interface.
@@ -149,85 +149,17 @@ if enabled:
 
 The same condition must protect shutdown deregistration.
 
-## Kafka consumer runtime guard
+## Kafka consumption and CLI boundaries
 
-Typed services that construct Kafka consumers use the neutral switch
-`SERVICE_KAFKA_CONSUMERS_ENABLED`, which defaults to enabled when it is absent.
-`services --registry` records the detected consumer and emits this contract:
-
-```yaml
-discovery:
-  consumers: [kafka]
-isolation:
-  consumers:
-    kafka:
-      mode: guarded
-      env: SERVICE_KAFKA_CONSUMERS_ENABLED
-```
-
-When the effective value is not `false`, Conven normalizes it to `true`, starts
-the service with its current consumer implementation, and does not review Kafka
-consumer source. Only an explicit `false` requests isolation. Conven then
-rescans the selected service, rejects an unguarded construction path or stale
-declaration, and starts only when the source proves that no consumer will be
-constructed. A shell value overrides manifest and environment values for this
-operational switch, so a developer who cannot change source can explicitly
-choose startup over isolation:
-
-```bash
-SERVICE_KAFKA_CONSUMERS_ENABLED=true \
-  conven -C /path/to/workspace services --start --env test service-name
-```
-
-This command allows that local process to join the remote Kafka consumer group.
-At this stage the contract is an opt-in isolation control, not local Kafka
-routing.
-
-Go must return before constructing the queue or reader:
-
-```go
-if strings.EqualFold(os.Getenv("SERVICE_KAFKA_CONSUMERS_ENABLED"), "false") {
-    return []service.Service{}, nil
-}
-consumer, err := kq.NewQueue(config, handler)
-```
-
-Spring Boot can guard the configuration that owns `@KafkaListener` or consumer
-construction. Spring relaxed binding maps the environment variable to this
-property:
-
-```java
-@ConditionalOnProperty(
-    prefix = "service.kafka.consumers",
-    name = "enabled",
-    havingValue = "true",
-    matchIfMissing = true
-)
-class KafkaConsumers {
-    // listeners or consumer construction
-}
-```
-
-Node/Bun and Python use the same default-enabled meaning:
-
-```js
-if (process.env.SERVICE_KAFKA_CONSUMERS_ENABLED !== "false") {
-  await startKafkaConsumers();
-}
-```
-
-```python
-if os.getenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "true").lower() != "false":
-    start_kafka_consumers()
-```
-
-When explicitly set to `false` and source verification succeeds, this contract
-prevents local consumer-group membership by preventing consumer construction.
-With the current `true` default, the consumer is constructed normally. Kafka producers are
-intentionally unaffected. Conven does not infer membership from broker TCP
-connections because producers and consumers can share the same endpoint. The
-default can be reconsidered as `false` after unified local asynchronous-workload
-routing is implemented.
+Ordinary Conven CLI starts do not isolate Kafka consumers and may join remote shared groups.
+The CLI does not interpret `SERVICE_KAFKA_CONSUMERS_ENABLED`, require source guards,
+or inject consumer environment/property switches. Inherited environment and explicit
+application settings keep their normal meaning; Conven does not force consumers on.
+Legacy `isolation.consumers` entries remain readable metadata but do not enforce
+consumer isolation during CLI startup. The plan reports known consumers as unrestricted.
+Consumer discovery is informational, not exhaustive broker membership verification.
+Guard network protection is a separate, verified boundary. Conven does not alter
+business source, provision isolated topics/groups, or modify cluster ACLs.
 
 ## Spring Boot delivery
 

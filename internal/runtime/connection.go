@@ -348,6 +348,9 @@ func waitForConnectionAttempt(ctx context.Context, process *ConnectionProcess, c
 		if err := waitContext.Err(); err != nil {
 			return lastEndpointDiagnostics, fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, err, logPath), false
 		}
+		if config.Driver == "ktctl" {
+			if err := ktctlFatalTransportFailure(logPath); err != nil { return lastEndpointDiagnostics, err, false }
+		}
 		if exitErr, exited := connectionCommandExit(completed); exited {
 			if contextErr := waitContext.Err(); contextErr != nil {
 				return lastEndpointDiagnostics, fmt.Errorf("%s connection readiness: %w; log: %s", config.Driver, contextErr, logPath), false
@@ -435,6 +438,21 @@ func connectionExitFailure(config ConnectionConfig, logPath string, exitErr erro
 		return fmt.Errorf("%s connection exited before endpoints became reachable; ktctl reported an error despite returning success; log: %s", config.Driver, logPath)
 	}
 	return fmt.Errorf("%s connection exited before endpoints became reachable: %w; log: %s", config.Driver, exitErr, logPath)
+}
+
+func ktctlFatalTransportFailure(logPath string) error {
+	lines, err := readLastLines(logPath, 64)
+	if err != nil { return nil }
+	for _, line := range lines {
+		line = strings.ToLower(sanitizeDashboardText(line))
+		if strings.Contains(line, "socket: too many open files") {
+			return fmt.Errorf("ktctl socket: too many open files; aborting readiness and cleaning up the owned connection; inspect DNS/port-forward failures and process descriptor limits before retrying; log: %s", logPath)
+		}
+		if strings.Contains(line, "unable to do port forwarding: socat not found") {
+			return fmt.Errorf("ktctl unable to do port forwarding: socat not found on the shadow node; use a verified node selector or ask the cluster administrator to repair forwarding; log: %s", logPath)
+		}
+	}
+	return nil
 }
 
 func ktctlReportedExit(logPath string) (reportedError bool, podCreateEOF bool) {
@@ -605,6 +623,7 @@ func startConnection(ctx context.Context, driver string, launchArgv []string, ma
 }
 
 func startConnectionObserved(ctx context.Context, driver string, launchArgv []string, managedArgv []string, logPath string, fingerprint string, elevated bool) (*ConnectionProcess, <-chan error, error) {
+	if elevated && guardConnectionHelper != "" { return startGuardConnection(ctx, driver, managedArgv, logPath, fingerprint) }
 	logFile, err := openFreshLog(logPath)
 	if err != nil {
 		return nil, nil, err
@@ -995,7 +1014,7 @@ func stopConnection(process *ConnectionProcess, force bool) error {
 }
 
 func forceStopConnectionGroup(process *ConnectionProcess) error {
-	if process.Elevated {
+	if process.Elevated && process.GuardConnectionID == "" {
 		if err := authorizeElevatedConnectionStop(); err != nil {
 			return err
 		}
@@ -1036,6 +1055,11 @@ func authorizeElevatedConnectionStop() error {
 }
 
 func authorizeSudo(ctx context.Context, output io.Writer) error {
+	if guardConnectionHelper != "" {
+		fmt.Fprintln(output, "Checking macOS system connection authorization (Guard helper)")
+		_, err := callGuardConnection(ctx, map[string]any{"operation":"status"})
+		return err
+	}
 	style := terminal.New(output)
 	terminal.PrintWarningBlock(output, "Sudo authorization required.", []string{
 		"Authorization is handled directly by sudo; Conven does not read or store the password.",
@@ -1055,6 +1079,7 @@ func authorizeSudo(ctx context.Context, output io.Writer) error {
 }
 
 func signalConnection(process *ConnectionProcess, target int, signal syscall.Signal) error {
+	if process.GuardConnectionID != "" { return signalGuardConnection(process, signal) }
 	if !process.Elevated {
 		return syscall.Kill(target, signal)
 	}

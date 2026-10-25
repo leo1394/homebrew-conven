@@ -761,6 +761,14 @@
           const name = document.createElement("td"); name.textContent = service.name || "unnamed";
           const pid = document.createElement("td"); pid.textContent = service.pid == null ? "unknown" : String(service.pid); if (service.pid == null) pid.className = "unknown";
           const status = document.createElement("td"); status.append(stateLabel(service.state || "unknown"));
+          Object.entries(service.consumers || {}).forEach(([driver, consumer]) => {
+            const note = document.createElement("div");
+            const unrestricted = consumer.status === "enabled" || consumer.status === "unrestricted";
+            note.textContent = `${driver}: ${unrestricted ? "shared consumption allowed" : consumer.status === "disabled" ? "disabled (guard)" : consumer.status === "network-blocked" ? "network blocked (Guard)" : "unknown"}`;
+            note.className = unrestricted ? "state warn" : "muted";
+            note.title = "Launch policy; Kafka broker membership is not runtime-verified.";
+            status.append(note);
+          });
           const ports = document.createElement("td"); ports.className = "port-list"; ports.textContent = formatPorts(service);
           const listeners = document.createElement("td"); listeners.className = "listener-list"; listeners.textContent = formatListeners(service);
           (service.listeners || []).filter((listener) => listener.name === "http" && listener.port).forEach((listener) => {
@@ -1413,9 +1421,20 @@
       function init() {
         readToken();
         const startupQuery = new URLSearchParams(location.search);
+        // Guard embeds the existing authenticated viewer, not a second log parser.
+        const guardPanel = startupQuery.get("guardPanel");
+        if (["configuration", "logs"].includes(guardPanel)) {
+          const style = document.createElement("style");
+          style.textContent = `body{min-width:0!important;overflow-x:hidden}.masthead,.section-nav,main section.artboard:not(#${guardPanel}){display:none!important}.shell,main{padding:0!important;max-width:none!important}#${guardPanel}{margin:0!important;padding:0!important}.topology-layout{display:flex!important;flex-direction:column;height:auto!important}.config-side{order:-1;overflow-x:hidden!important}.service-table{min-width:0!important;table-layout:fixed}.service-table td{overflow-wrap:anywhere}.map-area{min-height:320px}.panel-head{flex-wrap:wrap}[data-action="stop"],[data-action="restart"]{display:none!important}`;
+          document.head.append(style);
+          if (guardPanel === "logs") {
+            style.textContent += `#logs .artboard-label,#logs .section-toggle,#pauseButton,#fullscreenLogsButton{display:none!important}`;
+          }
+        }
         const requestedNames = startupQuery.get("services") || startupQuery.get("names");
         if (requestedNames) state.selectedServices = new Set(requestedNames.split(",").map((name) => name.trim()).filter(Boolean));
         bindEvents(); $("#followButton").classList.add("primary");
+        if (guardPanel === "logs") setSectionExpanded($("#logs"), true);
         if (isDemo) {
           $("#modeBadge").hidden = false; setConnection("", "OFFLINE DEMO");
           $("#logsKicker").textContent = "Deterministic offline sample · no network requests are made.";

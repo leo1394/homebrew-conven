@@ -96,6 +96,7 @@ type ConnectionProcess struct {
 	Managed    bool      `json:"managed"`
 	Elevated   bool      `json:"elevated"`
 	Fingerprint string   `json:"fingerprint"`
+	GuardConnectionID string `json:"guardConnectionId,omitempty"`
 }
 
 type Store struct {

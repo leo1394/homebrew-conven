@@ -16,9 +16,13 @@ import (
 
 const KafkaConsumersEnabledEnv = "SERVICE_KAFKA_CONSUMERS_ENABLED"
 const KafkaConsumerGuardMode = "guarded"
-const KafkaConsumersDefaultValue = "true"
+const KafkaConsumersDefaultValue = "false"
 
 func InspectKafkaConsumerEvidence(repository string, workdir string) ([]RepositoryConsumerEvidence, error) {
+	return InspectKafkaConsumerEvidenceWithGuard(repository, workdir, KafkaConsumersEnabledEnv, "")
+}
+
+func InspectKafkaConsumerEvidenceWithGuard(repository string, workdir string, envName string, propertyName string) ([]RepositoryConsumerEvidence, error) {
 	root := repository
 	if filepath.IsAbs(workdir) {
 		root = workdir
@@ -77,13 +81,17 @@ func InspectKafkaConsumerEvidence(repository string, workdir string) ([]Reposito
 		var evidence []RepositoryConsumerEvidence
 		switch extension {
 		case ".go":
-			evidence, err = goKafkaConsumerEvidenceInSource(file, source)
+			evidence, err = goKafkaConsumerEvidenceInSourceWithGuard(file, source, envName)
 		case ".java", ".kt":
-			evidence = javaKafkaConsumerEvidenceInSource(file, string(source))
+			javaProperty := propertyName
+			if javaProperty == "" && envName == KafkaConsumersEnabledEnv {
+				javaProperty = "service.kafka.consumers.enabled"
+			}
+			evidence = javaKafkaConsumerEvidenceInSourceWithGuard(file, string(source), javaProperty)
 		case ".js", ".cjs", ".mjs", ".ts":
-			evidence = nodeKafkaConsumerEvidenceInSource(file, string(source))
+			evidence = nodeKafkaConsumerEvidenceInSourceWithGuard(file, string(source), envName)
 		case ".py":
-			evidence = pythonKafkaConsumerEvidenceInSource(file, string(source))
+			evidence = pythonKafkaConsumerEvidenceInSourceWithGuard(file, string(source), envName)
 		}
 		if err != nil {
 			return err
@@ -101,34 +109,50 @@ func InspectKafkaConsumerEvidence(repository string, workdir string) ([]Reposito
 }
 
 func goKafkaConsumerEvidenceInSource(file string, source []byte) ([]RepositoryConsumerEvidence, error) {
+	return goKafkaConsumerEvidenceInSourceWithGuard(file, source, KafkaConsumersEnabledEnv)
+}
+
+func goKafkaConsumerEvidenceInSourceWithGuard(file string, source []byte, envName string) ([]RepositoryConsumerEvidence, error) {
 	set := token.NewFileSet()
 	parsed, err := parser.ParseFile(set, file, source, 0)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s for Kafka consumer analysis: %w", file, err)
 	}
 	result := make([]RepositoryConsumerEvidence, 0)
-	for _, declaration := range parsed.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if !ok || function.Body == nil {
-			continue
+	record := func(node ast.Node, function *ast.FuncDecl) {
+		consumer := false
+		switch value := node.(type) {
+		case *ast.CallExpr:
+			consumer = recognizedGoKafkaConsumerCall(value)
+		case *ast.CompositeLit:
+			consumer = recognizedGoKafkaConsumerLiteral(value.Type)
+		case *ast.ValueSpec:
+			consumer = len(value.Values) == 0 && recognizedGoKafkaConsumerLiteral(value.Type)
 		}
-		ast.Inspect(function.Body, func(node ast.Node) bool {
-			consumer := false
-			switch value := node.(type) {
-			case *ast.CallExpr:
-				consumer = recognizedGoKafkaConsumerCall(value)
-			case *ast.CompositeLit:
-				consumer = recognizedGoKafkaConsumerLiteral(value.Type)
-			}
-			if !consumer {
-				return true
-			}
+		if consumer {
 			position := set.Position(node.Pos())
+			protected := function != nil && goKafkaCallProtected(function, node, envName)
 			result = append(result, RepositoryConsumerEvidence{
 				Driver:    "kafka",
 				File:      fmt.Sprintf("%s:%d", file, position.Line),
-				Protected: goKafkaCallProtected(function, node),
+				Protected: protected,
 			})
+		}
+	}
+	for _, declaration := range parsed.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil {
+			general, ok := declaration.(*ast.GenDecl)
+			if ok && general.Tok == token.VAR {
+				ast.Inspect(general, func(node ast.Node) bool {
+					record(node, nil)
+					return true
+				})
+			}
+			continue
+		}
+		ast.Inspect(function.Body, func(node ast.Node) bool {
+			record(node, function)
 			return true
 		})
 	}
@@ -136,6 +160,10 @@ func goKafkaConsumerEvidenceInSource(file string, source []byte) ([]RepositoryCo
 }
 
 func recognizedGoKafkaConsumerCall(callExpression *ast.CallExpr) bool {
+	if function, ok := callExpression.Fun.(*ast.Ident); ok && (function.Name == "NewKafkaReader" || function.Name == "NewKafkaConsumer") { return true }
+	if function, ok := callExpression.Fun.(*ast.Ident); ok && function.Name == "new" && len(callExpression.Args) == 1 {
+		return recognizedGoKafkaConsumerLiteral(callExpression.Args[0])
+	}
 	selector, ok := callExpression.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -144,6 +172,7 @@ func recognizedGoKafkaConsumerCall(callExpression *ast.CallExpr) bool {
 	if !ok {
 		return false
 	}
+	if selector.Sel.Name == "NewKafkaReader" || selector.Sel.Name == "NewKafkaConsumer" { return true }
 	call := qualifier.Name + "." + selector.Sel.Name
 	switch call {
 	case "kq.NewQueue", "kq.MustNewQueue", "kafka.NewReader", "kafka.NewConsumer", "kafka.NewConsumerGroup", "sarama.NewConsumer", "sarama.NewConsumerFromClient", "sarama.NewConsumerGroup", "sarama.NewConsumerGroupFromClient":
@@ -169,34 +198,51 @@ func recognizedGoKafkaConsumerCall(callExpression *ast.CallExpr) bool {
 }
 
 func recognizedGoKafkaConsumerLiteral(expression ast.Expr) bool {
+	if identifier, ok := expression.(*ast.Ident); ok {
+		return identifier.Name == "KafkaReader" || identifier.Name == "KafkaConsumer"
+	}
 	selector, ok := expression.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "Reader" {
+	if !ok {
 		return false
 	}
+	// Named wrappers are consumer evidence, not proof of their internal behavior.
+	if selector.Sel.Name == "KafkaReader" || selector.Sel.Name == "KafkaConsumer" { return true }
+	if selector.Sel.Name != "Reader" { return false }
 	qualifier, ok := selector.X.(*ast.Ident)
 	return ok && qualifier.Name == "kafka"
 }
 
-func goKafkaCallProtected(function *ast.FuncDecl, call ast.Node) bool {
+func goKafkaCallProtected(function *ast.FuncDecl, call ast.Node, envName string) bool {
+	unsafeJump := false
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		branch, ok := node.(*ast.BranchStmt)
+		if ok && branch.Tok == token.GOTO {
+			unsafeJump = true
+		}
+		return !unsafeJump
+	})
+	if unsafeJump {
+		return false
+	}
 	for _, statement := range function.Body.List {
 		guard, ok := statement.(*ast.IfStmt)
 		if !ok {
 			continue
 		}
-		if guard.End() < call.Pos() && goKafkaDisabledCondition(guard.Cond) && blockReturns(guard.Body) {
+		if guard.End() < call.Pos() && goKafkaDisabledCondition(guard.Cond, envName) && blockReturns(guard.Body) {
 			return true
 		}
-		if call.Pos() > guard.Body.Pos() && call.End() < guard.Body.End() && goKafkaEnabledCondition(guard.Cond) {
+		if call.Pos() > guard.Body.Pos() && call.End() < guard.Body.End() && goKafkaEnabledCondition(guard.Cond, envName) {
 			return true
 		}
 	}
 	return false
 }
 
-func goKafkaDisabledCondition(expression ast.Expr) bool {
+func goKafkaDisabledCondition(expression ast.Expr, envName string) bool {
 	switch value := expression.(type) {
 	case *ast.ParenExpr:
-		return goKafkaDisabledCondition(value.X)
+		return goKafkaDisabledCondition(value.X, envName)
 	case *ast.CallExpr:
 		selector, ok := value.Fun.(*ast.SelectorExpr)
 		if !ok {
@@ -204,33 +250,33 @@ func goKafkaDisabledCondition(expression ast.Expr) bool {
 		}
 		qualifier, qualified := selector.X.(*ast.Ident)
 		return qualified && qualifier.Name == "strings" && selector.Sel.Name == "EqualFold" && len(value.Args) == 2 &&
-			((goKafkaEnvironmentLookup(value.Args[0]) && goStringLiteral(value.Args[1]) == "false") ||
-				(goKafkaEnvironmentLookup(value.Args[1]) && goStringLiteral(value.Args[0]) == "false"))
+			((goKafkaEnvironmentLookup(value.Args[0], envName) && goStringLiteral(value.Args[1]) == "false") ||
+				(goKafkaEnvironmentLookup(value.Args[1], envName) && goStringLiteral(value.Args[0]) == "false"))
 	case *ast.BinaryExpr:
-		return value.Op == token.EQL && ((goKafkaEnvironmentLookup(value.X) && goStringLiteral(value.Y) == "false") ||
-			(goKafkaEnvironmentLookup(value.Y) && goStringLiteral(value.X) == "false"))
+		return value.Op == token.EQL && ((goKafkaEnvironmentLookup(value.X, envName) && goStringLiteral(value.Y) == "false") ||
+			(goKafkaEnvironmentLookup(value.Y, envName) && goStringLiteral(value.X) == "false"))
 	default:
 		return false
 	}
 }
 
-func goKafkaEnabledCondition(expression ast.Expr) bool {
+func goKafkaEnabledCondition(expression ast.Expr, envName string) bool {
 	switch value := expression.(type) {
 	case *ast.ParenExpr:
-		return goKafkaEnabledCondition(value.X)
+		return goKafkaEnabledCondition(value.X, envName)
 	case *ast.UnaryExpr:
-		return value.Op == token.NOT && goKafkaDisabledCondition(value.X)
+		return value.Op == token.NOT && goKafkaDisabledCondition(value.X, envName)
 	case *ast.BinaryExpr:
-		return value.Op == token.NEQ && ((goKafkaEnvironmentLookup(value.X) && goStringLiteral(value.Y) == "false") ||
-			(goKafkaEnvironmentLookup(value.Y) && goStringLiteral(value.X) == "false"))
+		return value.Op == token.NEQ && ((goKafkaEnvironmentLookup(value.X, envName) && goStringLiteral(value.Y) == "false") ||
+			(goKafkaEnvironmentLookup(value.Y, envName) && goStringLiteral(value.X) == "false"))
 	default:
 		return false
 	}
 }
 
-func goKafkaEnvironmentLookup(expression ast.Expr) bool {
+func goKafkaEnvironmentLookup(expression ast.Expr, envName string) bool {
 	call, ok := expression.(*ast.CallExpr)
-	if !ok || len(call.Args) != 1 || goStringLiteral(call.Args[0]) != KafkaConsumersEnabledEnv {
+	if !ok || envName == "" || len(call.Args) != 1 || goStringLiteral(call.Args[0]) != envName {
 		return false
 	}
 	selector, ok := call.Fun.(*ast.SelectorExpr)
@@ -262,22 +308,28 @@ func blockReturns(block *ast.BlockStmt) bool {
 }
 
 func javaKafkaConsumerEvidenceInSource(file string, source string) []RepositoryConsumerEvidence {
+	return javaKafkaConsumerEvidenceInSourceWithGuard(file, source, "service.kafka.consumers.enabled")
+}
+
+func javaKafkaConsumerEvidenceInSourceWithGuard(file string, source string, propertyName string) []RepositoryConsumerEvidence {
 	code := stripCStyleComments(source)
 	patterns := []*regexp.Regexp{
 		regexp.MustCompile(`@KafkaListener\b`),
 		regexp.MustCompile(`\bnew\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)*KafkaConsumer\s*[<(]`),
 		regexp.MustCompile(`\b(?:ConcurrentMessageListenerContainer|KafkaMessageListenerContainer)\s*[<(]`),
 	}
-	trusted := trustedSpringKafkaConsumerRanges(source, code)
-	return textKafkaEvidence(file, code, patterns, trusted)
+	trusted := trustedSpringKafkaConsumerRanges(code, propertyName)
+	evidence := textKafkaEvidence(file, code, patterns, trusted)
+	for index := range evidence { evidence[index].GuardProperty = propertyName }
+	return evidence
 }
 
-func trustedSpringKafkaConsumerRanges(source string, code string) [][2]int {
+func trustedSpringKafkaConsumerRanges(code string, propertyName string) [][2]int {
 	annotationPattern := regexp.MustCompile(`(?s)@(?:org\.springframework\.boot\.autoconfigure\.condition\.)?ConditionalOnProperty\s*\((.*?)\)`)
-	classPattern := regexp.MustCompile(`(?s)\b(?:public\s+|protected\s+|private\s+|internal\s+|open\s+|final\s+|abstract\s+|data\s+)*(?:class|object)\s+[A-Za-z_][A-Za-z0-9_]*[^\{]*\{`)
+	classPattern := regexp.MustCompile(`(?s)\b(?:public\s+|protected\s+|private\s+|internal\s+|open\s+|final\s+|abstract\s+|data\s+)*(?:class|object|record|enum)\s+[A-Za-z_][A-Za-z0-9_]*[^\{]*\{`)
 	ranges := make([][2]int, 0)
-	for _, annotation := range annotationPattern.FindAllStringSubmatchIndex(source, -1) {
-		if len(annotation) < 4 || !trustedSpringKafkaConsumerCondition(source[annotation[2]:annotation[3]]) {
+	for _, annotation := range annotationPattern.FindAllStringSubmatchIndex(code, -1) {
+		if len(annotation) < 4 || !trustedSpringKafkaConsumerCondition(code[annotation[2]:annotation[3]], propertyName) {
 			continue
 		}
 		class := classPattern.FindStringIndex(code[annotation[1]:])
@@ -285,27 +337,60 @@ func trustedSpringKafkaConsumerRanges(source string, code string) [][2]int {
 			continue
 		}
 		classStart := annotation[1] + class[0]
+		if strings.ContainsAny(code[annotation[1]:classStart], ";{}") {
+			continue
+		}
 		opening := strings.IndexByte(code[classStart:annotation[1]+class[1]], '{')
 		if opening < 0 {
 			continue
 		}
 		opening += classStart
-		closing := matchingBrace(code, opening)
+		closing := matchingKafkaBrace(code, opening, false)
 		if closing > opening {
-			ranges = append(ranges, [2]int{opening, closing})
+			cursor := opening
+			for _, nested := range classPattern.FindAllStringIndex(code[opening+1:closing], -1) {
+				nestedOpening := opening + 1 + nested[1] - 1
+				if nestedOpening <= cursor {
+					continue
+				}
+				nestedClosing := matchingKafkaBrace(code, nestedOpening, false)
+				if nestedClosing < 0 || nestedClosing > closing {
+					cursor = closing
+					break
+				}
+				ranges = append(ranges, [2]int{cursor, nestedOpening})
+				cursor = nestedClosing
+			}
+			if cursor < closing {
+				ranges = append(ranges, [2]int{cursor, closing})
+			}
 		}
 	}
 	return ranges
 }
 
-func trustedSpringKafkaConsumerCondition(arguments string) bool {
-	return springConditionalStringValue(arguments, "prefix") == "service.kafka.consumers" &&
-		springConditionalStringValue(arguments, "name") == "enabled" &&
+func trustedSpringKafkaConsumerCondition(arguments string, propertyName string) bool {
+	if propertyName == "" {
+		return false
+	}
+	prefix := springConditionalStringValue(arguments, "prefix")
+	name := springConditionalStringValue(arguments, "name")
+	if name == "" {
+		name = springConditionalStringValue(arguments, "value")
+	}
+	if prefix != "" {
+		name = prefix + "." + name
+	}
+	return name == propertyName &&
 		springConditionalStringValue(arguments, "havingValue") == "true" &&
 		regexp.MustCompile(`(?s)(?:^|,)\s*matchIfMissing\s*=\s*true\s*(?:,|$)`).MatchString(arguments)
 }
 
 func nodeKafkaConsumerEvidenceInSource(file string, source string) []RepositoryConsumerEvidence {
+	return nodeKafkaConsumerEvidenceInSourceWithGuard(file, source, KafkaConsumersEnabledEnv)
+}
+
+func nodeKafkaConsumerEvidenceInSourceWithGuard(file string, source string, envName string) []RepositoryConsumerEvidence {
 	code := stripCStyleComments(source)
 	if !regexp.MustCompile(`(?i)(kafkajs|node-rdkafka|@confluentinc/kafka-javascript|from\s+["'][^"']*kafka[^"']*["'])`).MatchString(source) {
 		return nil
@@ -315,15 +400,22 @@ func nodeKafkaConsumerEvidenceInSource(file string, source string) []RepositoryC
 		regexp.MustCompile(`\.\s*run\s*\(`),
 		regexp.MustCompile(`\bnew\s+KafkaConsumer\s*\(`),
 	}
-	return textKafkaEvidence(file, code, patterns, javascriptKafkaGuardRanges(code))
+	return textKafkaEvidence(file, code, patterns, javascriptKafkaGuardRanges(code, envName))
 }
 
-func javascriptKafkaGuardRanges(source string) [][2]int {
-	pattern := regexp.MustCompile(`(?s)if\s*\([^)]*(?:process\.env|Bun\.env)\.` + KafkaConsumersEnabledEnv + `[^)]*(?:!==?|!=)\s*["']false["'][^)]*\)\s*\{`)
+func javascriptKafkaGuardRanges(source string, envName string) [][2]int {
+	if envName == "" {
+		return nil
+	}
+	pattern := regexp.MustCompile(`if\s*\(\s*(?:process\.env|Bun\.env)\.` + regexp.QuoteMeta(envName) + `\s*(?:!==|!=)\s*["']false["']\s*\)\s*\{`)
 	return braceGuardRanges(source, pattern)
 }
 
 func pythonKafkaConsumerEvidenceInSource(file string, source string) []RepositoryConsumerEvidence {
+	return pythonKafkaConsumerEvidenceInSourceWithGuard(file, source, KafkaConsumersEnabledEnv)
+}
+
+func pythonKafkaConsumerEvidenceInSourceWithGuard(file string, source string, envName string) []RepositoryConsumerEvidence {
 	if !regexp.MustCompile(`(?i)(confluent_kafka|aiokafka|kafka(?:-python)?)`).MatchString(source) {
 		return nil
 	}
@@ -331,10 +423,14 @@ func pythonKafkaConsumerEvidenceInSource(file string, source string) []Repositor
 	patterns := []*regexp.Regexp{
 		regexp.MustCompile(`\b(?:KafkaConsumer|AIOKafkaConsumer|Consumer)\s*\(`),
 	}
-	return textKafkaEvidence(file, code, patterns, pythonKafkaGuardRanges(code))
+	return textKafkaEvidence(file, code, patterns, pythonKafkaGuardRanges(code, envName))
 }
 
-func pythonKafkaGuardRanges(source string) [][2]int {
+func pythonKafkaGuardRanges(source string, envName string) [][2]int {
+	if envName == "" {
+		return nil
+	}
+	condition := regexp.MustCompile(`^if\s+os\.(?:getenv|environ\.get)\(\s*["']` + regexp.QuoteMeta(envName) + `["']\s*,\s*["']true["']\s*\)\.lower\(\)\s*!=\s*["']false["']\s*:$`)
 	lines := strings.SplitAfter(source, "\n")
 	offsets := make([]int, len(lines)+1)
 	for index, line := range lines {
@@ -343,7 +439,7 @@ func pythonKafkaGuardRanges(source string) [][2]int {
 	result := make([][2]int, 0)
 	for index, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "if ") || !strings.Contains(trimmed, KafkaConsumersEnabledEnv) || !strings.Contains(trimmed, "false") || !strings.HasSuffix(trimmed, ":") {
+		if !condition.MatchString(trimmed) {
 			continue
 		}
 		indent := len(line) - len(strings.TrimLeft(line, " \t"))
@@ -373,12 +469,68 @@ func braceGuardRanges(source string, pattern *regexp.Regexp) [][2]int {
 			continue
 		}
 		opening += match[0]
-		closing := matchingBrace(source, opening)
+		closing := matchingKafkaBrace(source, opening, true)
 		if closing > opening {
 			result = append(result, [2]int{opening, closing})
 		}
 	}
 	return result
+}
+
+func matchingKafkaBrace(source string, opening int, rejectSlash bool) int {
+	depth := 0
+	quote := byte(0)
+	escaped := false
+	triple := false
+	for index := opening; index < len(source); index++ {
+		character := source[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				continue
+			}
+			if quote == '`' && character == '$' && index+1 < len(source) && source[index+1] == '{' {
+				return -1
+			}
+			if triple {
+				if strings.HasPrefix(source[index:], `"""`) {
+					quote = 0
+					triple = false
+					index += 2
+				}
+			} else if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		if character == '"' && strings.HasPrefix(source[index:], `"""`) {
+			quote = '"'
+			triple = true
+			index += 2
+			continue
+		}
+		if character == '"' || character == '\'' || character == '`' {
+			quote = character
+			continue
+		}
+		if rejectSlash && character == '/' {
+			return -1
+		}
+		switch character {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return index
+			}
+		}
+	}
+	return -1
 }
 
 func textKafkaEvidence(file string, source string, patterns []*regexp.Regexp, trusted [][2]int) []RepositoryConsumerEvidence {

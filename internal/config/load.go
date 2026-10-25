@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -569,10 +570,10 @@ func validateServiceDiscovery(manifest *model.Manifest, name string, service mod
 		seenConsumers[driver] = true
 		isolation, found := service.Isolation.Consumers[driver]
 		if !found {
-			return fmt.Errorf("services.%s.isolation.consumers.%s is required for the discovered %s consumer", name, driver, driver)
+			continue
 		}
-		if isolation.Mode != KafkaConsumerGuardMode || isolation.Env != KafkaConsumersEnabledEnv {
-			return fmt.Errorf("services.%s.isolation.consumers.%s must set mode=%s and env=%s", name, driver, KafkaConsumerGuardMode, KafkaConsumersEnabledEnv)
+		if isolation.Mode != KafkaConsumerGuardMode || !validKafkaConsumerGuard(isolation.Env, isolation.Property) {
+			return fmt.Errorf("services.%s.isolation.consumers.%s must set mode=%s and a valid env or property guard", name, driver, KafkaConsumerGuardMode)
 		}
 	}
 	for driver := range service.Isolation.Consumers {
@@ -581,6 +582,19 @@ func validateServiceDiscovery(manifest *model.Manifest, name string, service mod
 		}
 	}
 	return nil
+}
+
+func validKafkaConsumerGuard(envName string, propertyName string) bool {
+	if envName == "" && propertyName == "" {
+		return false
+	}
+	if envName != "" && !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(envName) {
+		return false
+	}
+	if propertyName != "" && !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)*$`).MatchString(propertyName) {
+		return false
+	}
+	return true
 }
 
 func validateEnvironmentResolutions(manifest *model.Manifest) error {

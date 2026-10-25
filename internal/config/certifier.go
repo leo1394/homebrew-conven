@@ -191,10 +191,11 @@ func certifyDisabledKafkaConsumerEvidence(request RepositoryCertificationRequest
 		if evidence.Driver != "kafka" || evidence.Protected {
 			continue
 		}
-		return fmt.Errorf(`%s service %q cannot disable Kafka consumers because its current source has no trusted runtime guard
+		return fmt.Errorf(`%s service %q cannot start with Kafka consumers disabled by default because its current source has no trusted runtime guard
   - Source: %s
-  - Required switch: %s
-  => Add this guard before the consumer is created:
+  - Default switch: %s=false
+  => Prefer an existing application switch: configure isolation.consumers.kafka.env or .property.
+  => Otherwise, a developer can add a neutral guard before the consumer is created (Conven never edits source during start):
 
 %s`, request.Framework, request.Name, evidence.File, KafkaConsumersEnabledEnv, kafkaConsumerGuardExample(request.Framework, request.Runtime))
 	}

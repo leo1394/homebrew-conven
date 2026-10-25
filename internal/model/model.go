@@ -193,6 +193,7 @@ type ServiceIsolation struct {
 type ConsumerIsolation struct {
 	Mode string `yaml:"mode"`
 	Env  string `yaml:"env"`
+	Property string `yaml:"property"`
 }
 
 const (

@@ -462,7 +462,7 @@ services:
 		"ktctl.kubeconfig=/secure/dev-kubeconfig",
 		"ktctl.path=/usr/local/bin/ktctl",
 		"Available services",
-		"api:    http:18080 + metrics:19090 · go-generic · listen=all-interfaces · kafka:enabled(default)",
+		"api:    http:18080 + metrics:19090 · go-generic · listen=all-interfaces · kafka:unrestricted",
 		"Remote dependency registries",
 		"local.consul:    consul · http://consul.default:8500",
 		"Configured endpoints",
@@ -531,7 +531,7 @@ func TestStatusServiceSummaryOmitsDefaultsAndKeepsExceptions(t *testing.T) {
 				Discovery: model.ServiceDiscovery{Certifier: "spring-boot", Consumers: []string{"kafka"}},
 				Ports: map[string]int{"rpc": 18081, "http": 18080},
 			},
-			want: "http:18080 + rpc:18081 · spring-boot · listen=all-interfaces · kafka:enabled(default) · path=services/api",
+			want: "http:18080 + rpc:18081 · spring-boot · listen=all-interfaces · kafka:unrestricted · path=services/api",
 		},
 		{
 			name: "runner only", serviceName: "worker",

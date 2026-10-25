@@ -54,6 +54,9 @@ type WebSnapshotData struct {
 	Connection   *WebConnection      `json:"connection"`
 }
 
+// LocalLANAddress uses the same interface selection as the runtime dashboard.
+func LocalLANAddress() (string, string) { return discoverLocalIPv4() }
+
 type WebService struct {
 	Name         string            `json:"name"`
 	PID          int               `json:"pid"`
@@ -62,6 +65,7 @@ type WebService struct {
 	Listeners    []WebListener     `json:"listeners"`
 	Verification string            `json:"verification"`
 	Health       WebHealth         `json:"health"`
+	Consumers    map[string]ConsumerIsolationEvidence `json:"consumers,omitempty"`
 }
 
 type WebListener struct {
@@ -306,6 +310,7 @@ func WebSnapshot(ctx context.Context, workspace *WorkspaceData, version string) 
 			Listeners:    webListeners(process.Listeners),
 			Verification: process.Verification,
 			Health:       webCachedHealth(workspace.Root, snapshot.SessionToken, process, state),
+			Consumers:    copyConsumerIsolation(process.ConsumerIsolation),
 		}
 		snapshot.Services = append(snapshot.Services, service)
 	}

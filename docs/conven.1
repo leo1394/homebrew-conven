@@ -636,13 +636,15 @@ with
 .B network.listen: all-interfaces
 is intentionally reachable through every host interface permitted by the
 firewall.
-Detected typed Kafka consumers require a neutral, default-enabled source guard.
-Until unified local asynchronous-workload routing is implemented, Conven
-defaults
-.B SERVICE_KAFKA_CONSUMERS_ENABLED=true
-for local starts. Such consumers may join remote consumer groups; the plan and
-status report the effective value. A service environment can explicitly set
-the value to false. Kafka producers remain enabled. Local services may still
+Conven CLI does not isolate Kafka consumption. It does not interpret
+.B SERVICE_KAFKA_CONSUMERS_ENABLED
+or inject consumer switches or require source guards. Local services may join
+shared remote consumer groups. Application settings and inherited environment
+retain their application-defined meaning. Conven never edits business source.
+Guard network protection is separate. Isolated topic/group routing
+is not yet implemented. Independently scoped credentials, topics, and read/group
+ACLs are manually configured defense in depth; Conven does not write cluster
+ACLs. Local services may still
 connect to remote databases, RPC endpoints, and other infrastructure, write
 data, run scheduled jobs, and produce messages.
 .PP

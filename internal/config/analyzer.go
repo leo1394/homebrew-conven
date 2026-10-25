@@ -47,6 +47,7 @@ type RepositoryConsumerEvidence struct {
 	Driver    string
 	File      string
 	Protected bool
+	GuardProperty string
 }
 
 type RepositoryAnalysis struct {

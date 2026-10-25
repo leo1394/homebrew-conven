@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.5 - 2026-10-25
+
+- Preserve application Kafka consumer behavior in ordinary CLI launches: no consumer switch injection or source guard requirement.
+- Report unrestricted consumers explicitly and keep Guard network isolation separate from application switches.
+- Fail early on fatal ktctl DNS/port-forward transport errors and clean up owned failed connections.
+- Resolve Apollo readiness from the selected environment and add Guard host preparation and connection integration.
+
 ## 1.1.4 - 2026-10-14
 
 - Capture timestamps for service output without application timestamps while preserving raw logs and source timestamp precedence.

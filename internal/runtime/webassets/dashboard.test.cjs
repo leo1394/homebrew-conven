@@ -8,6 +8,14 @@ const test = require("node:test");
 const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
+test("Guard service log presentation hides only embedded viewer chrome", () => {
+  assert.match(script, /if \(guardPanel === "logs"\) \{\s*style.textContent \+= `#logs \.artboard-label,#logs \.section-toggle,#pauseButton,#fullscreenLogsButton\{display:none!important\}`/);
+  assert.match(script, /if \(guardPanel === "logs"\) setSectionExpanded\(\$\("#logs"\), true\)/);
+  assert.ok(!script.includes('notice.textContent = "HOST'));
+  assert.match(html, /id="pauseButton"/);
+  assert.match(html, /id="fullscreenLogsButton"/);
+});
+
 test("binding rows use identical column tracks regardless of label length", () => {
   const style = html.match(/\.route-row\s*\{([^}]+)\}/)[1];
   assert.match(style, /grid-template-columns: minmax\(0, 1fr\) 16px minmax\(0, 1fr\) minmax\(0, 1\.5fr\)/);
@@ -293,6 +301,28 @@ test("topology table separates prominent ports from listeners, with multiple and
   assert.match(html, /\.port-list\s*\{[^}]*color: var\(--cyan\)/);
   get("#serviceSearch").value = "missing"; ui.renderServiceTable([]);
   assert.equal(get("#serviceTableBody").children[0].children[0].colSpan, 5);
+});
+
+test("consumer state distinguishes shared consumption from configuration guards", () => {
+  const { ui, get } = dashboard();
+  ui.renderServiceTable([
+    { name: "shared", state: "running", consumers: { kafka: { status: "enabled" } } },
+    { name: "guarded", state: "running", consumers: { kafka: { status: "disabled" } } },
+    { name: "legacy", state: "running" },
+    { name: "cli", state: "running", consumers: { kafka: { status: "unrestricted" } } },
+    { name: "protected", state: "running", consumers: { kafka: { status: "network-blocked" } } }
+  ]);
+  const rows = get("#serviceTableBody").children;
+  const shared = rows[0].children[2].children[1];
+  const guarded = rows[1].children[2].children[1];
+  assert.match(shared.textContent, /shared consumption allowed/);
+  assert.equal(shared.className, "state warn");
+  assert.match(guarded.textContent, /disabled \(guard\)/);
+  assert.match(guarded.title, /not runtime-verified/);
+  assert.equal(rows[2].children[2].children.length, 1);
+  assert.match(rows[3].children[2].children[1].textContent, /shared consumption allowed/);
+  assert.equal(rows[3].children[2].children[1].className, "state warn");
+  assert.match(rows[4].children[2].children[1].textContent, /network blocked/);
 });
 
 test("topology panes share a bounded desktop height and tall graphs scroll inside", () => {

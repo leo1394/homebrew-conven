@@ -22,6 +22,27 @@ func (springBootConsulRuntimeContract) Name() string {
 	return "spring-boot-repository-overlay"
 }
 
+func (springBootConsulRuntimeContract) ConsumerRuntime() string { return "spring-boot" }
+
+func (springBootConsulRuntimeContract) ConsumerArguments(name string, guard model.ConsumerIsolation, argv []string, enabled bool) ([]string, error) {
+	if guard.Property == "" && guard.Env == config.KafkaConsumersEnabledEnv { guard.Property = "service.kafka.consumers.enabled" }
+	if guard.Property == "" { return argv, nil }
+	if len(argv) < 3 || filepath.Base(argv[0]) != "java" || argv[1] != "-jar" {
+		return nil, fmt.Errorf("service %s Kafka property guard requires a direct java -jar command; shell wrappers cannot prove delivery of the protected property", name)
+	}
+	value := "false"
+	if enabled { value = "true" }
+	// Reject competing assignments instead of relying on duplicate precedence.
+	for _, argument := range argv {
+		for _, prefix := range []string{"--"+guard.Property, "-D"+guard.Property} {
+			if argument == prefix || strings.HasPrefix(argument, prefix+"=") {
+				return nil, fmt.Errorf("service %s Kafka property %s is protected; remove its duplicate runner/policy argument", name, guard.Property)
+			}
+		}
+	}
+	return append(append([]string(nil), argv...), "--"+guard.Property+"="+value), nil
+}
+
 func (springBootConsulRuntimeContract) Matches(policy model.Policy, kind string) bool {
 	runtimeName := policy.Drivers.Runtime
 	if runtimeName == "" {

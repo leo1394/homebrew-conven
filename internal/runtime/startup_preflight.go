@@ -130,7 +130,16 @@ func materializeRuntimeConfigs(ctx context.Context, plan *Plan, names []string, 
 		if service.Config.Plan.Driver != materialize.DriverEnvironment {
 			fmt.Fprintf(output, "%s %s config\n", style.Stage("Materializing"), style.Identifier(name))
 			fmt.Fprintln(output, style.Detail(fmt.Sprintf("Drivers: %s -> %s", service.Config.Plan.SourceDriver, service.Config.Plan.Driver)))
-			origins, err := materialize.MaterializeWithReport(ctx, service.Config.Plan)
+			var origins []materialize.BindingOrigin
+			var err error
+			if plan.GuardSession != nil {
+				source := plan.GuardSession.Services[name]
+				var snapshot *materialize.HostSnapshot
+				snapshot, err = materialize.NewHostSnapshot(source.Bootstrap, source.Application)
+				if err == nil { origins, err = materialize.MaterializeFromSource(ctx, service.Config.Plan, snapshot) }
+			} else {
+				origins, err = materialize.MaterializeWithReport(ctx, service.Config.Plan)
+			}
 			if err != nil {
 				return fmt.Errorf("materialize %s config: %w", name, err)
 			}

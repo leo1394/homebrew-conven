@@ -93,7 +93,8 @@ func snapshotServiceRegistryOnce(ctx context.Context, workspace string, service 
 	if service.Registry == nil || service.RegistryRef == "" || service.RegistryIdentity == "" {
 		return nil, nil
 	}
-	registry := *service.Registry
+	registry, err := effectiveObservationRegistry(service)
+	if err != nil { return nil, fmt.Errorf("service %s registry observation: %w", service.Name, err) }
 	adapter, err := registryObserverFor(registry.Driver)
 	if err != nil {
 		return nil, fmt.Errorf("service %s registry observation: %w", service.Name, err)

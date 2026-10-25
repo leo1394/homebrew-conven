@@ -73,6 +73,20 @@ func MaterializeWithReport(ctx context.Context, plan Plan) ([]BindingOrigin, err
 }
 
 func materializeWithReport(ctx context.Context, plan Plan, report *[]BindingOrigin) error {
+	return materializeWithSource(ctx, plan, report, nil)
+}
+
+// MaterializeFromSource lets the trusted host preparation stage supply configuration
+// without giving the guest network access. Routing, guards and atomic publication
+// still use the same pipeline. This does not certify or authorize runtime egress.
+func MaterializeFromSource(ctx context.Context, plan Plan, source ConfigSource) ([]BindingOrigin, error) {
+	if source == nil { return nil, errors.New("host configuration source is required") }
+	var origins []BindingOrigin
+	err := materializeWithSource(ctx, plan, &origins, source)
+	return origins, err
+}
+
+func materializeWithSource(ctx context.Context, plan Plan, report *[]BindingOrigin, source ConfigSource) error {
 	validated, err := validatePlan(plan)
 	if err != nil {
 		return err
@@ -130,6 +144,7 @@ func materializeWithReport(ctx context.Context, plan Plan, report *[]BindingOrig
 	if err != nil {
 		return err
 	}
+	if source != nil { adapter = source }
 	repositoryApplication := application
 	application, err = adapter.Application(ctx, SourceInput{
 		Application: application,
@@ -345,6 +360,12 @@ func VerifyGuards(targetDir string, guards []Guard) error {
 }
 
 func VerifyPlanGuards(targetDir string, driver Driver, guards []Guard) error {
+	if driver == DriverEnvironment {
+		if len(guards) != 0 {
+			return errors.New("environment delivery cannot verify file guards")
+		}
+		return nil
+	}
 	if err := requireRealDirectory(targetDir, "guard target directory"); err != nil {
 		return err
 	}

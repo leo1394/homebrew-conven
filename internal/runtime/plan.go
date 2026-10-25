@@ -10,6 +10,7 @@ import (
 
 	"github.com/leo1394/homebrew-conven/internal/config"
 	"github.com/leo1394/homebrew-conven/internal/dependency"
+	"github.com/leo1394/homebrew-conven/internal/guardproof"
 	"github.com/leo1394/homebrew-conven/internal/model"
 )
 
@@ -42,6 +43,7 @@ type Plan struct {
 	Services        map[string]PlannedService
 	Resolutions     map[string]map[string]dependency.Resolution
 	Connection      ConnectionConfig
+	GuardSession    *guardproof.Session `json:"-"`
 }
 
 type PlannedRuntime struct {
@@ -74,6 +76,7 @@ type ConsumerIsolationEvidence struct {
 	Mode   string `json:"mode"`
 	Env    string `json:"env"`
 	Status string `json:"status"`
+	Property string `json:"property,omitempty"`
 }
 
 // PlannedService is retained as the orchestration-facing name for the unified
@@ -203,6 +206,8 @@ func buildPlan(workspace *WorkspaceData, options CommonOptions, selected []strin
 		ReuseCurrent:    reuseCurrent,
 		Services:        make(map[string]PlannedService, len(selected)),
 	}
+	plan.GuardSession, err = guardproof.LoadSession(workspace.Root, workspace.ConfigPath, environmentName, selected)
+	if err != nil { return nil, err }
 	environmentValues := make(map[string]string, len(environment.Env))
 	mergeValues(environmentValues, environment.Env)
 	var resolutions map[string]map[string]dependency.Resolution
@@ -235,7 +240,7 @@ func buildPlan(workspace *WorkspaceData, options CommonOptions, selected []strin
 		}
 		plan.Services[name] = service
 	}
-	if includeConnection {
+	if includeConnection && plan.GuardSession == nil {
 		connection, err := planConnection(plan, options)
 		if err != nil {
 			return nil, err
@@ -449,6 +454,7 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 	if err != nil {
 		return PlannedService{}, fmt.Errorf("expand %s build command: %w", name, err)
 	}
+	if plan.GuardSession != nil { prepare = guardOfflineGoPrepare(prepare, build) }
 	runCommand := append([]string(nil), service.Runner.Run...)
 	if hasPolicy {
 		runCommand = append(runCommand, policy.Process.Args...)
@@ -561,17 +567,21 @@ func planService(plan *Plan, name string, selected map[string]bool) (PlannedServ
 			return PlannedService{}, fmt.Errorf("service %s kind %s environment isolation: %w", name, kind, err)
 		}
 	}
-	if err := validatePlannedConsumerIsolation(name, runtimeName, directory, workdir, service, expandedValues); err != nil {
-		return PlannedService{}, fmt.Errorf(`%w
-
-  => To start without Kafka consumer isolation:
-     %s=true conven -C %q services --start --env %q %q
-
-This explicitly allows remote Kafka consumer-group membership for this service`, err, config.KafkaConsumersEnabledEnv, plan.Workspace.Root, plan.EnvironmentName, name)
+	networkDenied, err := guardproof.DeniesAll(plan.Workspace.Root, plan.Workspace.ConfigPath, name)
+	if err != nil { return PlannedService{}, fmt.Errorf("service %s Guard proof: %w", name, err) }
+	if plan.GuardSession != nil { networkDenied = true }
+	// Ordinary CLI execution preserves application consumer behavior. A legacy
+	// source guard declaration is metadata, not an enforced network boundary.
+	consumerIsolation := map[string]ConsumerIsolationEvidence{}
+	for _, driver := range service.Discovery.Consumers {
+		consumerIsolation[driver] = ConsumerIsolationEvidence{Driver:driver, Mode:"application", Status:"unrestricted"}
 	}
-	consumerIsolation, err := applyProtectedConsumerIsolation(name, service, expandedValues)
-	if err != nil {
-		return PlannedService{}, err
+	for driver := range service.Isolation.Consumers {
+		consumerIsolation[driver] = ConsumerIsolationEvidence{Driver:driver, Mode:"application", Status:"unrestricted"}
+	}
+	if networkDenied {
+		consumerIsolation["kafka"] = ConsumerIsolationEvidence{Driver: "kafka", Mode: "network-deny-all", Status: "network-blocked"}
+		if plan.GuardSession != nil { consumerIsolation["kafka"] = ConsumerIsolationEvidence{Driver: "kafka", Mode: "network-exact-egress", Status: "network-blocked"} }
 	}
 	for _, kind := range kinds {
 		if err := validateRuntimeConfigConsumption(name, plannedConfig.ForKind(kind), run, expandedValues); err != nil {
@@ -622,16 +632,35 @@ This explicitly allows remote Kafka consumer-group membership for this service`,
 	}, nil
 }
 
+func validateConsumerWithBoundary(networkDenied bool, name string, runtimeName string, directory string, workdir string, service model.Service, environment map[string]string) error {
+	// Only the root-owned VM proof may select this path. No manifest option or
+	// environment variable can turn source checks into network isolation.
+	if networkDenied { return nil }
+	return validatePlannedConsumerIsolation(name, runtimeName, directory, workdir, service, environment)
+}
+
 func validatePlannedConsumerIsolation(name string, runtimeName string, directory string, workdir string, service model.Service, environment map[string]string) error {
-	if !kafkaConsumersDisabled(environment) {
+	enabled, err := kafkaConsumersEnabled(environment)
+	if err != nil {
+		return err
+	}
+	if enabled {
 		return nil
 	}
-	evidence, err := config.InspectKafkaConsumerEvidence(directory, workdir)
+	guard := service.Isolation.Consumers["kafka"]
+	guardEnv := guard.Env
+	if guardEnv == "" && guard.Property == "" { guardEnv = config.KafkaConsumersEnabledEnv }
+	evidence, err := config.InspectKafkaConsumerEvidenceWithGuard(directory, workdir, guardEnv, guard.Property)
 	if err != nil {
 		return fmt.Errorf("service %s Kafka consumer preflight: %w", name, err)
 	}
 	actual := make(map[string]bool)
 	for _, item := range evidence {
+		if item.GuardProperty != "" {
+			if consumerArgumentsAdapter(runtimeName) == nil {
+				return fmt.Errorf("service %s consumer guard at %s needs a property-capable runtime adapter; runtime %q cannot protect property %s", name, item.File, runtimeName, item.GuardProperty)
+			}
+		}
 		actual[item.Driver] = true
 	}
 	declared := make(map[string]bool)
@@ -640,12 +669,12 @@ func validatePlannedConsumerIsolation(name string, runtimeName string, directory
 	}
 	for driver := range actual {
 		if !declared[driver] {
-			return fmt.Errorf("service %s source contains a %s consumer but the manifest has no discovery.consumers entry; run conven services --registry after adding the neutral consumer guard", name, driver)
+			return fmt.Errorf("service %s source contains a %s consumer but the manifest has no discovery.consumers entry; run conven services --update and configure an existing consumer switch or add a minimal guard", name, driver)
 		}
 	}
 	for driver := range declared {
 		if !actual[driver] {
-			return fmt.Errorf("service %s declares discovery.consumers=%s but current source no longer proves that consumer; run conven services --registry to refresh the manifest", name, driver)
+			return fmt.Errorf("service %s declares discovery.consumers=%s but current source no longer proves that consumer; run conven services --update to refresh the manifest", name, driver)
 		}
 	}
 	if err := config.ValidateDisabledKafkaConsumerEvidence(name, runtimeName, evidence); err != nil {
@@ -654,12 +683,19 @@ func validatePlannedConsumerIsolation(name string, runtimeName string, directory
 	return nil
 }
 
-func kafkaConsumersDisabled(environment map[string]string) bool {
+func kafkaConsumersEnabled(environment map[string]string) (bool, error) {
 	value := environment[config.KafkaConsumersEnabledEnv]
 	if override, found := os.LookupEnv(config.KafkaConsumersEnabledEnv); found {
 		value = override
 	}
-	return strings.EqualFold(strings.TrimSpace(value), "false")
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true":
+		return true, nil
+	case "", "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true or false (empty defaults to false), got %q", config.KafkaConsumersEnabledEnv, value)
+	}
 }
 
 func applyProtectedConsumerIsolation(name string, service model.Service, environment map[string]string) (map[string]ConsumerIsolationEvidence, error) {
@@ -671,21 +707,37 @@ func applyProtectedConsumerIsolation(name string, service model.Service, environ
 	evidence := make(map[string]ConsumerIsolationEvidence, len(drivers))
 	for _, driver := range drivers {
 		isolation := service.Isolation.Consumers[driver]
-		if driver != "kafka" || isolation.Mode != config.KafkaConsumerGuardMode || isolation.Env != config.KafkaConsumersEnabledEnv {
+		if driver != "kafka" || isolation.Mode != config.KafkaConsumerGuardMode || (isolation.Env == "" && isolation.Property == "") {
 			return nil, fmt.Errorf("service %s consumer guard %s is not a supported protected contract", name, driver)
 		}
-		value := config.KafkaConsumersDefaultValue
-		if kafkaConsumersDisabled(environment) {
-			value = "false"
+		enabled, err := kafkaConsumersEnabled(environment)
+		if err != nil {
+			return nil, fmt.Errorf("service %s Kafka consumer guard: %w", name, err)
 		}
-		environment[isolation.Env] = value
+		value := config.KafkaConsumersDefaultValue
+		if enabled {
+			value = "true"
+		}
+		if isolation.Env != "" { environment[isolation.Env] = value }
 		status := "enabled"
 		if value == "false" {
 			status = "disabled"
 		}
-		evidence[driver] = ConsumerIsolationEvidence{Driver: driver, Mode: isolation.Mode, Env: isolation.Env, Status: status}
+		evidence[driver] = ConsumerIsolationEvidence{Driver: driver, Mode: isolation.Mode, Env: isolation.Env, Property: isolation.Property, Status: status}
 	}
 	return evidence, nil
+}
+
+func protectedKafkaConsumerArguments(name string, runtimeName string, service model.Service, argv []string, environment map[string]string) ([]string, error) {
+	guard, found := service.Isolation.Consumers["kafka"]
+	if !found { return argv, nil }
+	enabled, err := kafkaConsumersEnabled(environment)
+	if err != nil { return nil, err }
+	if consumer := consumerArgumentsAdapter(runtimeName); consumer != nil {
+		return consumer.ConsumerArguments(name, guard, argv, enabled)
+	}
+	if guard.Property != "" { return nil, fmt.Errorf("service %s runtime %q has no consumer property guard adapter", name, runtimeName) }
+	return argv, nil
 }
 
 func copyPorts(ports map[string]int) map[string]int {
@@ -763,6 +815,9 @@ func planConnection(plan *Plan, options CommonOptions) (ConnectionConfig, error)
 		RunDir:      plan.RunDir,
 		Environment: plan.EnvironmentName,
 		Manifest:    plan.Workspace.Manifest,
+	}
+	if err := selectApolloConnectionReadiness(plan, context, requirements); err != nil {
+		return ConnectionConfig{}, err
 	}
 	command := ""
 	var err error

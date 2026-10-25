@@ -548,7 +548,7 @@ func TestBuildPlanAppendsSpringServerArgsAfterCommonArgs(t *testing.T) {
 	}
 }
 
-func TestKafkaConsumerGuardDefaultsEnabledAndAllowsExplicitDisable(t *testing.T) {
+func TestKafkaConsumerGuardDefaultsDisabledAndRequiresExplicitEnable(t *testing.T) {
 	service := model.Service{Isolation: model.ServiceIsolation{Consumers: map[string]model.ConsumerIsolation{
 		"kafka": {Mode: "guarded", Env: "SERVICE_KAFKA_CONSUMERS_ENABLED"},
 	}}}
@@ -558,26 +558,70 @@ func TestKafkaConsumerGuardDefaultsEnabledAndAllowsExplicitDisable(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if environment["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "true" || evidence["kafka"].Status != "enabled" {
+	if environment["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "false" || evidence["kafka"].Status != "disabled" {
 		t.Fatalf("Kafka consumer guard environment=%#v evidence=%#v", environment, evidence)
 	}
-	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "false")
-	disabled := map[string]string{}
-	evidence, err = applyProtectedConsumerIsolation("visit-plan-mgr-service", service, disabled)
+	if err := os.Unsetenv("SERVICE_KAFKA_CONSUMERS_ENABLED"); err != nil {
+		t.Fatal(err)
+	}
+	missing := map[string]string{}
+	evidence, err = applyProtectedConsumerIsolation("visit-plan-mgr-service", service, missing)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disabled["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "false" || evidence["kafka"].Status != "disabled" {
-		t.Fatalf("Kafka consumer guard override environment=%#v evidence=%#v", disabled, evidence)
+	if missing["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "false" || evidence["kafka"].Status != "disabled" {
+		t.Fatalf("missing Kafka consumer guard environment=%#v evidence=%#v", missing, evidence)
+	}
+	configured := map[string]string{"SERVICE_KAFKA_CONSUMERS_ENABLED": "true"}
+	evidence, err = applyProtectedConsumerIsolation("visit-plan-mgr-service", service, configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "true" || evidence["kafka"].Status != "enabled" {
+		t.Fatalf("configured Kafka consumer guard environment=%#v evidence=%#v", configured, evidence)
+	}
+	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "")
+	evidence, err = applyProtectedConsumerIsolation("visit-plan-mgr-service", service, configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "false" || evidence["kafka"].Status != "disabled" {
+		t.Fatalf("empty Kafka consumer shell override environment=%#v evidence=%#v", configured, evidence)
+	}
+	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "false")
+	evidence, err = applyProtectedConsumerIsolation("visit-plan-mgr-service", service, configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "false" || evidence["kafka"].Status != "disabled" {
+		t.Fatalf("Kafka consumer shell override environment=%#v evidence=%#v", configured, evidence)
+	}
+	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "true")
+	evidence, err = applyProtectedConsumerIsolation("visit-plan-mgr-service", service, configured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "true" || evidence["kafka"].Status != "enabled" {
+		t.Fatalf("enabled Kafka consumer shell override environment=%#v evidence=%#v", configured, evidence)
+	}
+}
+
+func TestKafkaConsumerGuardRejectsInvalidValues(t *testing.T) {
+	service := model.Service{Isolation: model.ServiceIsolation{Consumers: map[string]model.ConsumerIsolation{
+		"kafka": {Mode: "guarded", Env: "SERVICE_KAFKA_CONSUMERS_ENABLED"},
+	}}}
+	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "")
+	if err := os.Unsetenv("SERVICE_KAFKA_CONSUMERS_ENABLED"); err != nil {
+		t.Fatal(err)
+	}
+	environment := map[string]string{"SERVICE_KAFKA_CONSUMERS_ENABLED": "sometimes"}
+	if _, err := applyProtectedConsumerIsolation("events", service, environment); err == nil || !strings.Contains(err.Error(), "must be true or false") {
+		t.Fatalf("invalid service Kafka consumer setting error = %v", err)
 	}
 	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "sometimes")
-	nonFalse := map[string]string{"SERVICE_KAFKA_CONSUMERS_ENABLED": "false"}
-	evidence, err = applyProtectedConsumerIsolation("visit-plan-mgr-service", service, nonFalse)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if nonFalse["SERVICE_KAFKA_CONSUMERS_ENABLED"] != "true" || evidence["kafka"].Status != "enabled" {
-		t.Fatalf("non-false Kafka consumer override environment=%#v evidence=%#v", nonFalse, evidence)
+	environment["SERVICE_KAFKA_CONSUMERS_ENABLED"] = "true"
+	if _, err := applyProtectedConsumerIsolation("events", service, environment); err == nil || !strings.Contains(err.Error(), "must be true or false") {
+		t.Fatalf("invalid shell Kafka consumer setting error = %v", err)
 	}
 }
 
@@ -596,7 +640,7 @@ func startConsumers() {
 	if err := validatePlannedConsumerIsolation("events", "go-zero", repository, repository, service, map[string]string{}); err != nil {
 		t.Fatalf("enabled Kafka consumer triggered source validation: %v", err)
 	}
-	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "false")
+	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "")
 	err := validatePlannedConsumerIsolation("events", "go-zero", repository, repository, service, map[string]string{})
 	if err == nil || !strings.Contains(err.Error(), "manifest has no discovery.consumers entry") {
 		t.Fatalf("undeclared Kafka consumer error = %v", err)
@@ -621,7 +665,7 @@ func startConsumers() {
 	}
 }
 
-func TestPlanServiceSuggestsEnabledOverrideOnlyWhenIsolationIsRequested(t *testing.T) {
+func TestPlanServiceAllowsUnguardedKafkaConsumerWithoutChangingSource(t *testing.T) {
 	plan := dependencyEnvironmentPlan(t, "false", "false")
 	service := plan.Workspace.Manifest.Services["api"]
 	service.Policy = "go-local"
@@ -633,31 +677,30 @@ func TestPlanServiceSuggestsEnabledOverrideOnlyWhenIsolationIsRequested(t *testi
 	plan.Workspace.Manifest.Policies = map[string]model.Policy{
 		"go-local": {Drivers: model.PolicyDrivers{Runtime: "go-zero"}},
 	}
-	if err := os.WriteFile(filepath.Join(plan.Workspace.Root, "api", "consumer.go"), []byte(`package api
+	consumerFile := filepath.Join(plan.Workspace.Root, "api", "consumer.go")
+	source := []byte(`package api
 func start() { kq.NewQueue(config, handler) }
-`), 0600); err != nil {
+`)
+	if err := os.WriteFile(consumerFile, source, 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "false")
-	_, err := planService(plan, "api", map[string]bool{"api": true, "a-svc": true})
-	if err == nil {
-		t.Fatal("unguarded Kafka consumer started while isolation was requested")
+	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "")
+	planned, err := planService(plan, "api", map[string]bool{"api": true, "a-svc": true})
+	if err != nil { t.Fatal(err) }
+	if planned.ConsumerIsolation["kafka"].Status != "unrestricted" { t.Fatal("CLI incorrectly claims consumer isolation") }
+	current, err := os.ReadFile(consumerFile)
+	if err != nil || string(current) != string(source) {
+		t.Fatalf("Kafka consumer source changed during preflight: error=%v source=%q", err, current)
 	}
-	for _, expected := range []string{
-		"cannot disable Kafka consumers",
-		"Go example:",
-		`SERVICE_KAFKA_CONSUMERS_ENABLED=true conven -C "` + plan.Workspace.Root + `" services --start --env "dev" "api"`,
-		"explicitly allows remote Kafka consumer-group membership",
-	} {
-		if !strings.Contains(err.Error(), expected) {
-			t.Fatalf("Kafka isolation error is missing %q: %v", expected, err)
-		}
+	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "sometimes")
+	if _, err := planService(plan, "api", map[string]bool{"api": true, "a-svc": true}); err != nil {
+		t.Fatalf("CLI interpreted an application environment variable: %v", err)
 	}
 
 	t.Setenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "true")
 	if _, err := planService(plan, "api", map[string]bool{"api": true, "a-svc": true}); err != nil {
-		t.Fatalf("explicit enabled override did not bypass source guard review: %v", err)
+		t.Fatalf("application environment prevented planning: %v", err)
 	}
 }
 

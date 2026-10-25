@@ -69,7 +69,7 @@ func TestPrintPlanUsesPlainStageAndDetailStructure(t *testing.T) {
 		"  - Drivers: policy=retail, framework=go-zero, source=apollo, discovery=consul, materializer=yaml-overlay\n" +
 		"  - Output: /workspace/.conven/runtime/current/configs/api\n" +
 		"  - Local isolation: registration=not-applicable; listener=loopback(127.0.0.1:18080); runtime-config=guarded-bootstrap(config-local.yaml->application.yaml)\n" +
-		"  - Consumer guard: kafka=enabled via SERVICE_KAFKA_CONSUMERS_ENABLED (mode=guarded)\n" +
+		"  - Consumer guard: kafka=enabled via SERVICE_KAFKA_CONSUMERS_ENABLED (mode=guarded); shared consumption allowed: may receive remote messages\n" +
 		"  - Local route: partner via partnerRpc (replace)\n" +
 		"✓ Dry run complete; no connection, config fetch/materialization, build, process, or state changes were made.\n"
 	if output.String() != want {

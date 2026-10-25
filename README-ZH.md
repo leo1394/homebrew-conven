@@ -96,9 +96,12 @@ Conven 内置的 materializer 只将生成的 YAML 写入
 
 > **本地服务隔离不等于数据隔离。** 本地服务仍会使用运行时配置中的远程
 > 数据库、Kafka、未选中的 RPC 客户端和后台任务，因此可能写入数据或消费消息。
-> Conven 不会隔离这些副作用。在统一异步工作负载本地路由实现前，
-> `SERVICE_KAFKA_CONSUMERS_ENABLED` 默认取 `true`，也不强制源码实现 guard。只有显式
-> 设置为 `false` 请求隔离 Kafka consumer 时，Conven 才会在启动前验证服务能否响应该开关。
+> Conven CLI 不隔离 Kafka 消费，本地服务可能加入共享远程消费组。
+> CLI 不解释 `SERVICE_KAFKA_CONSUMERS_ENABLED`，不注入消费开关，也不要求源码 guard。
+> 业务配置及继承的环境变量仍按应用自身语义生效。Conven 不修改业务源码；
+> Guard 的网络防护是独立能力。
+> 隔离的 topic/group 路由尚未实现。独立凭证、topic 和 read/group ACL 是需手动配置的
+> 纵深防护；Conven 不会写入集群 ACL。
 
 未声明 `kinds` 的 runner-only 服务不具备相同的 Adapter 安全保证。项目自定义的
 `prepare` 和 `build` 命令也会以当前用户权限运行，并可能修改其工作目录。

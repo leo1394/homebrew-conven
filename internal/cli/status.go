@@ -175,7 +175,7 @@ func statusServiceSummary(name string, service model.Service) string {
 	consumerNames := append([]string(nil), service.Discovery.Consumers...)
 	sort.Strings(consumerNames)
 	for _, consumerName := range consumerNames {
-		parts = append(parts, consumerName+":enabled(default)")
+		parts = append(parts, consumerName+":unrestricted")
 	}
 	if service.Path != name {
 		parts = append(parts, "path="+service.Path)

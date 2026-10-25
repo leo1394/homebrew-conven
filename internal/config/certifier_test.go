@@ -213,7 +213,7 @@ func TestDisabledKafkaConsumerValidationReportsLanguageSpecificFix(t *testing.T)
 	if err == nil {
 		t.Fatal("unguarded Kafka consumer was accepted while disabling consumers")
 	}
-	for _, expected := range []string{"visit-plan-mgr-service", "handler/kq_routes.go:14", "SERVICE_KAFKA_CONSUMERS_ENABLED", "strings.EqualFold"} {
+	for _, expected := range []string{"visit-plan-mgr-service", "handler/kq_routes.go:14", "cannot start with Kafka consumers disabled by default", "SERVICE_KAFKA_CONSUMERS_ENABLED", "strings.EqualFold"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Fatalf("Kafka consumer certification error is missing %q: %v", expected, err)
 		}

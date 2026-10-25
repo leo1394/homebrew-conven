@@ -35,6 +35,18 @@ type RegistrationAdapter interface {
 	ExternalDependencies(PlannedService, string) ([]ExternalConsulDependency, bool, error)
 }
 
+type ConsumerArgumentsAdapter interface {
+	ConsumerRuntime() string
+	ConsumerArguments(string, model.ConsumerIsolation, []string, bool) ([]string, error)
+}
+
+func consumerArgumentsAdapter(runtimeName string) ConsumerArgumentsAdapter {
+	for _, adapter := range builtinRuntimeContractAdapters() {
+		if consumer, ok := adapter.(ConsumerArgumentsAdapter); ok && consumer.ConsumerRuntime() == runtimeName { return consumer }
+	}
+	return nil
+}
+
 type RoutingAdapter interface {
 	Rule(model.PolicyRouting, bool) model.RouteRule
 }

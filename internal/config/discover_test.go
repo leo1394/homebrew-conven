@@ -821,8 +821,14 @@ func TestBackfillSynchronizesKafkaConsumerIsolationEvidence(t *testing.T) {
 	if !changed || !reflect.DeepEqual(updated.Discovery.Consumers, []string{"kafka"}) {
 		t.Fatalf("added consumer evidence = %#v, changed=%t", updated, changed)
 	}
-	if isolation := updated.Isolation.Consumers["kafka"]; isolation.Mode != KafkaConsumerGuardMode || isolation.Env != KafkaConsumersEnabledEnv {
-		t.Fatalf("added Kafka isolation = %#v", updated.Isolation)
+	if len(updated.Isolation.Consumers) != 0 {
+		t.Fatalf("discovery injected Kafka switches = %#v", updated.Isolation)
+	}
+	custom := existing
+	custom.Isolation.Consumers = map[string]model.ConsumerIsolation{"kafka": {Mode: KafkaConsumerGuardMode, Env: "APP_EVENTS_ENABLED", Property: "app.events.enabled"}}
+	preserved, changed := backfillDiscoveredDescription(custom, discovered, 3)
+	if !changed || preserved.Isolation.Consumers["kafka"] != custom.Isolation.Consumers["kafka"] {
+		t.Fatalf("custom Kafka isolation not preserved = %#v, changed=%t", preserved.Isolation, changed)
 	}
 
 	removed, changed := backfillDiscoveredDescription(updated, DiscoveredService{Analyzer: "go-subdirectory-module"}, 3)

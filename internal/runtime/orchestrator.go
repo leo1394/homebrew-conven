@@ -219,6 +219,7 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		return nil, fmt.Errorf("record completed session transition startup stage: %w", err)
 	}
 	printPlan(output, plan, false)
+	if plan.GuardSession != nil { fmt.Fprintln(output, style.Detail("Guard offline build: exact Go module prefetch resolves the required dependency graph; missing build dependencies fail closed.")) }
 	if err := beginDiagnosticStage("endpoints", ""); err != nil {
 		return nil, fmt.Errorf("record endpoint startup stage: %w", err)
 	}
@@ -497,7 +498,9 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 				process := started[name]
 				if err := WaitHealthyChecks(ctx, process, service.HealthChecks); err != nil {
 					fmt.Fprintf(output, "%s %s; last log lines:\n", style.Failure("✗ Health check failed:"), style.Identifier(name))
-					ShowLogs(context.Background(), session, []string{name}, false, output)
+					var failureLogs strings.Builder
+					ShowLogs(context.Background(), session, []string{name}, false, &failureLogs)
+					fmt.Fprintln(output, diagnostics.safeText(failureLogs.String(), 32 << 10))
 					return nil, fail(diagnoseStartupFailure(err, process, service))
 				}
 				process.Verification = "healthy"

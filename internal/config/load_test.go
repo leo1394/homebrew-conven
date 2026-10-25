@@ -450,13 +450,35 @@ func TestManifestKafkaConsumerRequiresDisabledIsolation(t *testing.T) {
 		},
 	}
 	err := validateManifest(manifest)
-	if err == nil || !strings.Contains(err.Error(), "isolation.consumers.kafka") {
-		t.Fatalf("missing Kafka isolation error = %v", err)
+	if err != nil {
+		t.Fatalf("consumer discovery without a switch rejected: %v", err)
 	}
 	service := manifest.Services["api"]
 	service.Isolation.Consumers = map[string]model.ConsumerIsolation{"kafka": {Mode: "guarded", Env: "SERVICE_KAFKA_CONSUMERS_ENABLED"}}
 	manifest.Services["api"] = service
 	if err := validateManifest(manifest); err != nil {
 		t.Fatalf("valid Kafka isolation rejected: %v", err)
+	}
+	for _, isolation := range []model.ConsumerIsolation{
+		{Mode: "guarded", Env: "APP_EVENTS_ENABLED"},
+		{Mode: "guarded", Property: "app.events.enabled"},
+		{Mode: "guarded", Env: "APP_EVENTS_ENABLED", Property: "app.events.enabled"},
+	} {
+		service.Isolation.Consumers["kafka"] = isolation
+		manifest.Services["api"] = service
+		if err := validateManifest(manifest); err != nil {
+			t.Fatalf("valid custom Kafka isolation %+v rejected: %v", isolation, err)
+		}
+	}
+	for _, isolation := range []model.ConsumerIsolation{
+		{Mode: "guarded"},
+		{Mode: "guarded", Env: "APP-EVENTS"},
+		{Mode: "guarded", Property: "app.events;enabled"},
+	} {
+		service.Isolation.Consumers["kafka"] = isolation
+		manifest.Services["api"] = service
+		if err := validateManifest(manifest); err == nil {
+			t.Fatalf("invalid custom Kafka isolation %+v accepted", isolation)
+		}
 	}
 }

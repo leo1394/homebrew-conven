@@ -45,7 +45,7 @@ Typed service 必须：
 1. 接收框架原生运行时参数或环境变量；
 2. 创建每个已声明 listener 时真正使用传入 host 和 port；
 3. 通过框架原生设置或中性、默认开启的应用设置禁用注册；
-4. 用中性、默认开启的 consumer 开关保护检测到的 Kafka consumer 构造点；
+4. 用可验证的环境变量开关或 Spring Boot 属性保护检测到的 Kafka consumer 构造点；
 5. 提供确定性的构建和可执行入口；
 6. 以参数作为原生接口时，把进程 argv 继续交给框架。
 
@@ -131,78 +131,15 @@ if enabled:
 
 关闭阶段的注销也必须受同一条件保护。
 
-## Kafka consumer runtime guard
+## Kafka 消费与 CLI 边界
 
-创建 Kafka consumer 的 typed service 使用中性开关
-`SERVICE_KAFKA_CONSUMERS_ENABLED`；环境变量缺失时默认开启。
-`services --registry` 发现 consumer 后生成：
-
-```yaml
-discovery:
-  consumers: [kafka]
-isolation:
-  consumers:
-    kafka:
-      mode: guarded
-      env: SERVICE_KAFKA_CONSUMERS_ENABLED
-```
-
-最终值不是 `false` 时，Conven 会将其规范为 `true`，直接使用 service 当前的 consumer
-实现启动，不复核 Kafka consumer 源码。只有显式设置 `false` 才表示请求隔离；此时 Conven
-重新扫描所选 service，拒绝没有 guard 的构造路径或过期声明，确认源码不会创建 consumer
-后才启动。该操作开关允许 shell 环境变量覆盖 manifest 和环境配置；开发者暂时不便修改
-源码时，可以明确选择优先启动：
-
-```bash
-SERVICE_KAFKA_CONSUMERS_ENABLED=true \
-  conven -C /path/to/workspace services --start --env test service-name
-```
-
-该命令会允许本地进程加入远程 Kafka consumer group。当前 contract 是显式启用的隔离
-控制，不是 Kafka 本地路由能力。
-
-Go 必须在创建 queue/reader 前返回：
-
-```go
-if strings.EqualFold(os.Getenv("SERVICE_KAFKA_CONSUMERS_ENABLED"), "false") {
-    return []service.Service{}, nil
-}
-consumer, err := kq.NewQueue(config, handler)
-```
-
-Spring Boot 可保护持有 `@KafkaListener` 或 consumer 构造逻辑的 configuration；Spring
-relaxed binding 会把环境变量映射到以下属性：
-
-```java
-@ConditionalOnProperty(
-    prefix = "service.kafka.consumers",
-    name = "enabled",
-    havingValue = "true",
-    matchIfMissing = true
-)
-class KafkaConsumers {
-    // listener 或 consumer 构造逻辑
-}
-```
-
-Node/Bun 与 Python 使用相同的默认开启语义：
-
-```js
-if (process.env.SERVICE_KAFKA_CONSUMERS_ENABLED !== "false") {
-  await startKafkaConsumers();
-}
-```
-
-```python
-if os.getenv("SERVICE_KAFKA_CONSUMERS_ENABLED", "true").lower() != "false":
-    start_kafka_consumers()
-```
-
-显式设置 `false` 且源码验证通过时，该契约通过不创建 consumer 阻止本地进程加入远程
-consumer group；默认 `true` 时 consumer 正常创建。Kafka producer 不受影响。Conven 不从
-broker TCP 连接
-推断 membership，因为 producer 和 consumer 可以共用同一 endpoint。统一异步工作负载
-本地路由实现后，再评估把默认值收紧为 `false`。
+普通 Conven CLI 启动不隔离 Kafka 消费，本地服务可能加入远程共享消费组。
+CLI 不解释 `SERVICE_KAFKA_CONSUMERS_ENABLED`，不要求源码 guard，也不注入消费
+环境变量或属性开关。继承的环境变量和显式业务配置保留原有语义，不强制开启消费者。
+旧的 `isolation.consumers` 声明继续作为可读取的元数据，但不在 CLI 启动时执行
+消费隔离；计划将已声明消费者显示为 unrestricted。消费能力发现仅供提示，
+不等于完整的 broker membership 检测。Guard 网络防护是独立、需验证的边界。
+Conven 不修改业务源码、不创建隔离 topic/group，也不修改集群 ACL。
 
 ## Spring Boot 配置交付
 

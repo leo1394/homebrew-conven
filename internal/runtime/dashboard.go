@@ -1696,9 +1696,12 @@ func dashboardServiceLine(service dashboardService, nameWidth int) dashboardLine
 	sort.Strings(consumerNames)
 	for _, name := range consumerNames {
 		consumer := service.Consumers[name]
+		detail := name + "=" + consumer.Mode + "/" + consumer.Status
+		if consumer.Status == "enabled" { detail += "(shared)" }
+		if consumer.Status == "disabled" { detail += "(config)" }
 		segments = append(segments,
 			dashboardSegment{Text: "  ·  ", Style: dashboardDim},
-			dashboardSegment{Text: name + "=" + consumer.Mode + "/" + consumer.Status, Style: dashboardDim},
+			dashboardSegment{Text: detail, Style: dashboardDim},
 		)
 	}
 	return dashboardLine{Segments: segments}
