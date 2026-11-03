@@ -39,6 +39,8 @@ func guardPreparationFixture(t *testing.T) (*WorkspaceData, string, string) {
 
 func TestPrepareGuardConfigurationsPublishesPrivateSnapshotWithoutSourceWrites(t *testing.T) {
 	workspace, responses, output := guardPreparationFixture(t)
+	alpha := workspace.Manifest.Services["alpha"]; alpha.Ports = map[string]int{"http": 18083}; alpha.Network.Listen = model.NetworkListenAllInterfaces; workspace.Manifest.Services["alpha"] = alpha
+	beta := workspace.Manifest.Services["beta"]; beta.Ports = map[string]int{"rpc": 18081}; workspace.Manifest.Services["beta"] = beta
 	dir, err := PrepareGuardConfigurations(context.Background(), workspace, "test", []string{"alpha", "beta"}, responses, output)
 	if err != nil { t.Fatal(err) }
 	info, err := os.Stat(dir)
@@ -48,6 +50,30 @@ func TestPrepareGuardConfigurationsPublishesPrivateSnapshotWithoutSourceWrites(t
 		if err != nil || !strings.Contains(string(data), "remote: true") { t.Fatalf("materialized %s: %v", name, err) }
 		data, err = os.ReadFile(filepath.Join(workspace.Root, name, "application.yaml"))
 		if err != nil || string(data) != "original: true\n" { t.Fatalf("source modified: %s", name) }
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "sources.json"))
+	if err != nil { t.Fatal(err) }
+	var prepared guardPreparedSources
+	if err := json.Unmarshal(data, &prepared); err != nil { t.Fatal(err) }
+	if len(prepared.Ingress) != 2 || prepared.Ingress[0].Service != "beta" || prepared.Ingress[0].Address != "127.0.0.1" || prepared.Ingress[1].Service != "alpha" || prepared.Ingress[1].Address != "0.0.0.0" || prepared.Ingress[1].Port != 18083 { t.Fatalf("service exposure not preserved: %+v", prepared.Ingress) }
+	for _, name := range []string{"alpha", "beta"} {
+		effective, err := os.ReadFile(filepath.Join(dir, "configs", name, "application.yaml"))
+		if err != nil || string(prepared.Services[name].Application) != string(effective) { t.Fatalf("Guard adapter did not receive effective %s config: %v", name, err) }
+	}
+}
+
+func TestPrepareGuardConfigurationsApolloDefaultFallback(t *testing.T) {
+	for _, cluster := range []string{"default", "prod", ""} {
+		t.Run(cluster, func(t *testing.T) {
+			workspace, responses, output := guardPreparationFixture(t)
+			bootstrap := filepath.Join(workspace.Root, "alpha", "bootstrap.yaml")
+			if err := os.WriteFile(bootstrap, []byte("appId: alpha\ncluster: test\nnamespaceName: application.yml\nip: apollo.test:8080\n"), 0600); err != nil { t.Fatal(err) }
+			data, _ := json.Marshal(map[string]any{"appId":"alpha", "cluster":cluster, "namespaceName":"application.yml", "configurations":map[string]string{"content":"remote: true\n"}})
+			if err := os.WriteFile(filepath.Join(responses, "alpha.json"), data, 0600); err != nil { t.Fatal(err) }
+			_, err := PrepareGuardConfigurations(context.Background(), workspace, "test", []string{"alpha"}, responses, output)
+			if (err == nil) != (cluster == "default") { t.Fatalf("cluster %q: %v", cluster, err) }
+			original, _ := os.ReadFile(bootstrap); if !strings.Contains(string(original), "cluster: test") { t.Fatal("source bootstrap changed") }
+		})
 	}
 }
 

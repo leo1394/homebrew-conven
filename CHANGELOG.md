@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.6 - 2026-11-03
+
+- Prepare effective configuration and dependency inventories for selected Guard services, retaining independent configuration failures and Apollo default-cluster fallback.
+- Prepare selected Linux Go build dependencies on the host and verify offline module availability before protected startup.
+- Avoid duplicate Consul availability and remote registration checks in validated Guard sessions while retaining runtime health and isolation validation.
+- Add workspace configuration editing with revision checks, optional per-environment kubeconfig selection, and connection source previews.
+- Validate protected service ingress and support the protected dashboard viewer without changing application Kafka consumer switches.
+- Recognize X-Request-Id in service logs and improve full-screen log navigation and layout.
+
 ## 1.1.5 - 2026-10-25
 
 - Preserve application Kafka consumer behavior in ordinary CLI launches: no consumer switch injection or source guard requirement.

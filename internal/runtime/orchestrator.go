@@ -30,6 +30,13 @@ type StartOptions struct {
 	Output              io.Writer
 }
 
+func runtimeObservationModes(plan *Plan, skipVerify bool) (bool, bool) {
+	observeRuntime := !skipVerify && plan.Workspace.Manifest.Version >= 3
+	// GuardSession is loaded only from root-owned, VM-boot-bound evidence. Its
+	// exact read-only client routes do not authorize remote registration reads.
+	return observeRuntime, observeRuntime && plan.GuardSession == nil
+}
+
 type RunningServicesError struct {
 	Services     []string
 	SessionToken string
@@ -428,7 +435,7 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 		return nil, fail(fmt.Errorf("record completed runtime preflight startup stage: %w", err))
 	}
 	started := make(map[string]ServiceProcess, len(plan.Order))
-	observeRuntime := !options.SkipVerify && workspace.Manifest.Version >= 3
+	observeRuntime, observeRegistry := runtimeObservationModes(plan, options.SkipVerify)
 	for _, group := range plan.Groups {
 		registryBaselines := make(map[string]*RegistrySnapshot, len(group))
 		for _, name := range group {
@@ -439,7 +446,7 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 			if err := preflightServicePorts(service); err != nil {
 				return nil, fail(err)
 			}
-			if observeRuntime {
+			if observeRegistry {
 				baseline, err := snapshotServiceRegistry(ctx, workspace.Root, service)
 				if err != nil {
 					return nil, fail(err)
@@ -522,9 +529,12 @@ func start(ctx context.Context, workspace *WorkspaceData, options StartOptions, 
 					if err := workspace.Store.Save(session); err != nil {
 						return nil, fail(err)
 					}
-					registration, err := verifyServiceRegistry(ctx, workspace.Root, service, registryBaselines[name])
-					if err != nil {
-						return nil, fail(err)
+					var registration *RegistrationEvidence
+					if observeRegistry {
+						registration, err = verifyServiceRegistry(ctx, workspace.Root, service, registryBaselines[name])
+						if err != nil {
+							return nil, fail(err)
+						}
 					}
 					process.Registration = registration
 					if registration != nil {

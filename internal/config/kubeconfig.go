@@ -10,36 +10,42 @@ import (
 )
 
 func ResolveKubeconfig(connection model.Connection, explicit string, configured string) (string, error) {
+	path, _, err := ResolveKubeconfigWithSource(connection, explicit, configured)
+	return path, err
+}
+
+func ResolveKubeconfigWithSource(connection model.Connection, explicit string, configured string) (string, string, error) {
+	resolve := func(value, source string) (string, string, error) { path, err := normalizeKubeconfig(value, source); return path, source, err }
 	if value := strings.TrimSpace(explicit); value != "" {
-		return normalizeKubeconfig(value, "command line")
+		return resolve(value, "command line")
 	}
 	if value := strings.TrimSpace(os.Getenv("CONVEN_KUBECONFIG")); value != "" {
-		return normalizeKubeconfig(value, "CONVEN_KUBECONFIG")
+		return resolve(value, "CONVEN_KUBECONFIG")
 	}
 	if value := strings.TrimSpace(os.Getenv("KTCTL_KUBECONFIG")); value != "" {
-		return normalizeKubeconfig(value, "KTCTL_KUBECONFIG")
+		return resolve(value, "KTCTL_KUBECONFIG")
 	}
 
 	if environmentVariable := strings.TrimSpace(connection.KubeconfigEnv); environmentVariable != "" {
 		if value := strings.TrimSpace(os.Getenv(environmentVariable)); value != "" {
-			return normalizeKubeconfig(value, environmentVariable)
+			return resolve(value, environmentVariable)
 		}
 	}
 	if value := strings.TrimSpace(configured); value != "" {
-		return normalizeKubeconfig(value, "ktctl.kubeconfig")
+		return resolve(value, "ktctl.kubeconfig")
 	}
 	if value := strings.TrimSpace(connection.Kubeconfig); value != "" {
-		return normalizeKubeconfig(value, "manifest connection.kubeconfig")
+		return resolve(value, "manifest connection.kubeconfig")
 	}
 	if value := strings.TrimSpace(os.Getenv("KUBECONFIG")); value != "" {
-		return normalizeKubeconfig(value, "KUBECONFIG")
+		return resolve(value, "KUBECONFIG")
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve default kubeconfig: %w", err)
+		return "", "default", fmt.Errorf("resolve default kubeconfig: %w", err)
 	}
-	return filepath.Join(home, ".kube", "config"), nil
+	return filepath.Join(home, ".kube", "config"), "default ~/.kube/config", nil
 }
 
 func normalizeKubeconfig(value string, source string) (string, error) {

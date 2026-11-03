@@ -8,6 +8,16 @@ const test = require("node:test");
 const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
+test("fullscreen alone places service filters above search controls below logs", () => {
+  assert.match(html, /\.logs-panel\.is-fullscreen \.service-filters \{[^}]*order: 1;/);
+  assert.match(html, /\.logs-panel\.is-fullscreen \.logs-controls \{[^}]*order: 2;/);
+  assert.match(html, /\.logs-panel\.is-fullscreen \.logs-foot \{[^}]*order: 3;/);
+  assert.doesNotMatch(html, /\n    \.(?:logs-controls|service-filters) \{[^}]*order:/);
+  const section = html.slice(html.indexOf('<section class="artboard" id="logs"'), html.indexOf('<section class="artboard" id="attempts"'));
+  assert.ok(section.indexOf('class="logs-controls"') < section.indexOf('id="serviceFilters"'));
+  assert.ok(section.indexOf('id="serviceFilters"') < section.indexOf('id="logFrame"'));
+});
+
 test("Guard service log presentation hides only embedded viewer chrome", () => {
   assert.match(script, /if \(guardPanel === "logs"\) \{\s*style.textContent \+= `#logs \.artboard-label,#logs \.section-toggle,#pauseButton,#fullscreenLogsButton\{display:none!important\}`/);
   assert.match(script, /if \(guardPanel === "logs"\) setSectionExpanded\(\$\("#logs"\), true\)/);
@@ -39,7 +49,7 @@ class Element {
 function load(document, overrides = {}) {
   const context = { document, location: { protocol: "file:" }, console, URLSearchParams, setTimeout, clearTimeout, ...overrides };
   vm.createContext(context);
-  vm.runInContext(script.replace("      init();", "      globalThis.ui = { state, servingLayout, servingPath, renderTopology, initializeSections, setSectionExpanded, revealSection, setLogsFullscreen, handleLogsFullscreenKey, renderServiceFilters, updateServiceSelection, renderLogs, filteredLogs, resetLogPoll, pollLogs, loadBacklog, renderFailure, renderServiceTable, selectAttempt, renderTimeline, renderSnapshot, bindEvents };"), context);
+  vm.runInContext(script.replace("      init();", "      globalThis.ui = { state, servingLayout, servingPath, renderTopology, initializeSections, setSectionExpanded, revealSection, setLogsFullscreen, handleLogsFullscreenKey, renderServiceFilters, updateServiceSelection, renderLogs, filteredLogs, resetLogPoll, pollLogs, loadBacklog, renderFailure, renderServiceTable, selectAttempt, renderTimeline, renderSnapshot, bindEvents, init, applyRequestedView };"), context);
   return context.ui;
 }
 
@@ -413,4 +423,61 @@ test("log fullscreen locks outer scrolling, retains position and exits with Esca
   assert.equal(frame.scrollLeft, 17);
   assert.equal(button.focused, true);
   assert.match(html, /\.log-frame\s*\{[^}]*overscroll-behavior: contain/);
+});
+
+function startupDashboard(search) {
+  const elements = new Map();
+  const get = (selector) => { if (!elements.has(selector)) elements.set(selector, new Element("div")); return elements.get(selector); };
+  const panel = get(".logs-panel"); panel.className = "panel";
+  const body = new Element("div"); body.className = "section-body"; body.hidden = true;
+  const toggle = new Element("button"); toggle.className = "section-toggle";
+  panel.append(body, toggle); get("#logs").append(panel);
+  const root = new Element("html"), head = new Element("head"), requests = [], stored = new Map(), replaced = [];
+  const location = { protocol: "http:", pathname: "/", search, hash: "#token=viewer-token" };
+  const ui = load({ documentElement: root, head, querySelector: get, querySelectorAll: () => [], getElementById: (id) => get(`#${id}`), addEventListener: () => {}, createElement: (tag) => new Element(tag) }, {
+    location, sessionStorage: { getItem: (key) => stored.get(key), setItem: (key, value) => stored.set(key, value) },
+    history: { replaceState: (_, __, url) => { replaced.push(url); location.hash = ""; } },
+    AbortController, IntersectionObserver: class { observe() {} }, window: { setTimeout: () => 0, clearTimeout: () => {} },
+    requestAnimationFrame: (callback) => callback(), fetch: (url, options) => { requests.push({ url, options }); return new Promise(() => {}); }
+  });
+  return { ui, get, root, head, body, requests, stored, replaced };
+}
+
+test("explicit browser log deep link starts fullscreen before snapshot and retains filters and token", () => {
+  const search = "?view=logs&fullscreen=logs&services=api,worker";
+  const { ui, get, root, head, body, requests, stored, replaced } = startupDashboard(search);
+  get("#logQuery").value = "listener ready";
+  ui.init();
+  assert.ok(root.classes.has("logs-fullscreen"));
+  assert.equal(body.hidden, false);
+  assert.equal(head.children.length, 0);
+  assert.equal(get("#fullscreenLogsButton").attributes["aria-pressed"], "true");
+  assert.deepEqual(Array.from(ui.state.selectedServices), ["api", "worker"]);
+  assert.equal(get("#logQuery").value, "listener ready");
+  assert.equal(stored.get("conven.sessionToken"), "viewer-token");
+  assert.deepEqual(replaced, [`/${search}`]);
+  const logs = requests.find((request) => request.url.startsWith("/api/logs?"));
+  const params = new URLSearchParams(logs.url.split("?")[1]);
+  assert.equal(params.get("services"), "api,worker");
+  assert.equal(params.get("query"), "listener ready");
+  assert.equal(logs.options.headers.Authorization, "Bearer viewer-token");
+  ui.bindEvents();
+  get("#fullscreenLogsButton").events.click();
+  assert.equal(root.classes.has("logs-fullscreen"), false);
+  ui.applyRequestedView();
+  assert.equal(root.classes.has("logs-fullscreen"), false);
+  get("#fullscreenLogsButton").events.click();
+  ui.handleLogsFullscreenKey({ key: "Escape", preventDefault() {} });
+  assert.equal(root.classes.has("logs-fullscreen"), false);
+  const refreshed = startupDashboard(search); refreshed.ui.init();
+  assert.ok(refreshed.root.classes.has("logs-fullscreen"));
+});
+
+test("fullscreen startup is opt-in and leaves Guard embeds unchanged", () => {
+  for (const search of ["", "?view=logs", "?fullscreen=logs", "?view=configuration&fullscreen=logs", "?view=logs&fullscreen=true", "?guardPanel=logs&view=logs&fullscreen=logs", "?guardPanel=configuration&view=logs&fullscreen=logs", "?view=arbitrary&fullscreen=logs"]) {
+    const { ui, root, head } = startupDashboard(search);
+    ui.init();
+    assert.equal(root.classes.has("logs-fullscreen"), false, search);
+    assert.equal(head.children.length, search.includes("guardPanel=") ? 1 : 0, search);
+  }
 });

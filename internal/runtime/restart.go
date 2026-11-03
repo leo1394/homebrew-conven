@@ -172,8 +172,8 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 		return nil, err
 	}
 	registryBaselines := make(map[string]*RegistrySnapshot, len(targets))
-	observeRuntime := !options.SkipVerify && workspace.Manifest.Version >= 3
-	if observeRuntime {
+	observeRuntime, observeRegistry := runtimeObservationModes(plan, options.SkipVerify)
+	if observeRegistry {
 		for _, name := range targets {
 			service := plan.Services[name]
 			baseline, err := snapshotServiceRegistry(ctx, workspace.Root, service)
@@ -286,9 +286,12 @@ func Restart(ctx context.Context, workspace *WorkspaceData, options RestartOptio
 					if err := workspace.Store.Save(session); err != nil {
 						return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
 					}
-					registration, err := verifyServiceRegistry(ctx, workspace.Root, service, registryBaselines[name])
-					if err != nil {
-						return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
+					var registration *RegistrationEvidence
+					if observeRegistry {
+						registration, err = verifyServiceRegistry(ctx, workspace.Root, service, registryBaselines[name])
+						if err != nil {
+							return nil, rollbackRestartGroup(workspace, session, processes, started, output, err)
+						}
 					}
 					process.Registration = registration
 					if registration != nil {

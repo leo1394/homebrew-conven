@@ -672,6 +672,32 @@ Workspace values live in `.conven/config`; global values live in
 `~/.conven/config`. Local values override global values. Keep kubeconfig files
 and credentials out of source control.
 
+To use a different kubeconfig for each environment in the CLI or Conven Guard,
+explicitly enable `workspace.connectionByEnvironment` in the existing
+`.conven/conven.yaml` (merge these fields into your manifest):
+
+```yaml
+workspace:
+  connectionByEnvironment: true
+environments:
+  dev:
+    connection:
+      kubeconfig: /secure/dev-kubeconfig
+  prod:
+    connection:
+      kubeconfig: /secure/prod-kubeconfig
+```
+
+This defaults to `false`, preserving the existing precedence of local/global
+`ktctl.kubeconfig` over environment manifest paths. When `true`, a nonempty
+environment `connection.kubeconfig` takes precedence over that setting; an empty
+path still falls back to the setting. Explicit `--kubeconfig`,
+`CONVEN_KUBECONFIG`, `KTCTL_KUBECONFIG`, and the environment's `kubeconfigEnv`
+override keep their existing higher priority. Plain `KUBECONFIG` remains a
+fallback after manifest/settings paths. Only paths are stored in the manifest,
+not kubeconfig contents or credentials. Disabling the opt-in restores the
+original priority without changing `.conven/config` or global settings.
+
 Manage local Python plugins with:
 
 ```bash

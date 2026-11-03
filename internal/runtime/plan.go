@@ -855,8 +855,13 @@ func planConnection(plan *Plan, options CommonOptions) (ConnectionConfig, error)
 		return ConnectionConfig{}, fmt.Errorf("expand connection namespace: %w", err)
 	}
 	kubeconfig := ""
+	kubeconfigSource := ""
 	if connection.Driver == "ktctl" {
-		kubeconfig, err = config.ResolveKubeconfig(connection, options.Kubeconfig, plan.Workspace.Settings["ktctl.kubeconfig"])
+		configuredKubeconfig := plan.Workspace.Settings["ktctl.kubeconfig"]
+		if plan.Workspace.Manifest.Workspace.ConnectionByEnvironment && strings.TrimSpace(connection.Kubeconfig) != "" {
+			configuredKubeconfig = ""
+		}
+		kubeconfig, kubeconfigSource, err = config.ResolveKubeconfigWithSource(connection, options.Kubeconfig, configuredKubeconfig)
 		if err != nil {
 			return ConnectionConfig{}, err
 		}
@@ -900,6 +905,7 @@ func planConnection(plan *Plan, options CommonOptions) (ConnectionConfig, error)
 		Command:    command,
 		Args:       args,
 		Kubeconfig: kubeconfig,
+		KubeconfigSource: kubeconfigSource,
 		Context:    connectionContext,
 		Namespace:  namespace,
 		Sudo:       connection.Sudo,

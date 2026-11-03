@@ -85,6 +85,10 @@ type RegistrationEvidence struct {
 }
 
 type ConnectionProcess struct {
+	SourceKubeconfig string `json:"sourceKubeconfig,omitempty"`
+	KubeconfigSource string `json:"kubeconfigSource,omitempty"`
+	Context string `json:"context,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
 	Driver     string    `json:"driver"`
 	PID        int       `json:"pid"`
 	PGID       int       `json:"pgid"`

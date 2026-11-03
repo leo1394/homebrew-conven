@@ -98,7 +98,7 @@ func TestWebSnapshotDoesNotFabricateRoutesWithoutMatchingAttempt(t *testing.T) {
 func TestWebLogsRedactsSecretsScrubsControlsAndAdvancesCursor(t *testing.T) {
 	workspace := newWebTestWorkspace(t)
 	logPath := filepath.Join(workspace.Store.CurrentDir, "logs", "api.log")
-	first := "{\"timestamp\":\"2026-01-02T03:04:05Z\",\"level\":\"INFO\",\"requestId\":\"req-1\",\"traceId\":\"trace-1\",\"message\":\"Authorization: Bearer abc.def password=hunter2 cookie=session-cookie https://user:pass@example.test/?token=url-secret \\u001b[31mred\\u001b[0m\"}\npassword:\nmultiline-secret\n"
+	first := "{\"timestamp\":\"2026-01-02T03:04:05Z\",\"level\":\"INFO\",\"requestId\":\"req-1\",\"traceId\":\"trace-1\",\"message\":\"Authorization: Bearer abc.def password=hunter2 cookie=session-cookie https://user:pass@example.test/?token=url-secret https://files.example.test/auth?app_id=fixture&app_secret=auth-fixture \\u001b[31mred\\u001b[0m\"}\npassword:\nmultiline-secret\n"
 	if err := os.WriteFile(logPath, []byte(first), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestWebLogsRedactsSecretsScrubsControlsAndAdvancesCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	visible := string(encoded)
-	for _, secret := range []string{"abc.def", "hunter2", "session-cookie", "user:pass", "url-secret", "multiline-secret", "\\u001b"} {
+	for _, secret := range []string{"abc.def", "hunter2", "session-cookie", "user:pass", "url-secret", "auth-fixture", "multiline-secret", "\\u001b"} {
 		if strings.Contains(visible, secret) {
 			t.Fatalf("Web log page exposed %q: %s", secret, visible)
 		}
@@ -142,6 +142,24 @@ func TestWebLogsRedactsSecretsScrubsControlsAndAdvancesCursor(t *testing.T) {
 	}
 	if next.Reset || len(next.Entries) != 1 || next.Entries[0].RequestID != "req-2" {
 		t.Fatalf("cursor did not advance to appended entry: %#v", next)
+	}
+}
+
+func TestWebLogsRedactsAppSecretQuery(t *testing.T) {
+	line := "[HTTP] GET - 200 - //internal/auth?app_id=fixture&app_secret=auth-fixture"
+	if got := redactWebLogText(line); strings.Contains(got, "auth-fixture") { t.Fatalf("app_secret query exposed: %s", got) }
+}
+
+func TestParseWebLogLineExtractsRequestIDFromHTTPHeader(t *testing.T) {
+	line := `{"@timestamp":"2026-10-30T04:09:18.391Z","level":"info","content":"[HTTP] POST - 200 => POST /file HTTP/1.1  Host: file-service  X-Request-Id: efd54e03-aed3-453d-93c0-d22f39a7810c"}`
+	parsed, _ := parseWebLogLine(line, false)
+	if parsed.requestID != "efd54e03-aed3-453d-93c0-d22f39a7810c" {
+		t.Fatalf("request ID from HTTP header = %q", parsed.requestID)
+	}
+	line = `{"level":"info","headers":{"X-Request-Id":"efd54e03-aed3-453d-93c0-d22f39a7810c"}}`
+	parsed, _ = parseWebLogLine(line, false)
+	if parsed.requestID != "efd54e03-aed3-453d-93c0-d22f39a7810c" {
+		t.Fatalf("request ID from structured headers = %q", parsed.requestID)
 	}
 }
 

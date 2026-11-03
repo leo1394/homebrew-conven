@@ -588,6 +588,30 @@ conven config --global ktctl.path ktctl
 workspace 配置位于 `.conven/config`，全局配置位于 `~/.conven/config`，本地值覆盖
 全局值。不要将 kubeconfig 文件和凭据提交到源码仓库。
 
+如需 CLI 或 Conven Guard 按环境选择不同的 kubeconfig，请在现有
+`.conven/conven.yaml` 中显式启用 `workspace.connectionByEnvironment`，将以下字段
+合并到现有 manifest（保留其他配置）：
+
+```yaml
+workspace:
+  connectionByEnvironment: true
+environments:
+  dev:
+    connection:
+      kubeconfig: /secure/dev-kubeconfig
+  prod:
+    connection:
+      kubeconfig: /secure/prod-kubeconfig
+```
+
+该字段默认 `false`，保持本地/全局 `ktctl.kubeconfig` 优先于环境 manifest 路径的
+原有顺序。设为 `true` 后，非空的环境 `connection.kubeconfig` 优先于该统一设置；
+环境路径为空时仍回退到统一设置。显式 `--kubeconfig`、`CONVEN_KUBECONFIG`、
+`KTCTL_KUBECONFIG` 和环境的 `kubeconfigEnv` 覆盖仍保留更高优先级。
+普通 `KUBECONFIG` 仍在 manifest/设置路径之后作为回退。manifest 仅保存路径，不保存
+kubeconfig 内容或凭据。关闭此选项会恢复原有优先级，不会修改 `.conven/config`
+或全局设置。
+
 使用以下命令管理本地 Python 插件：
 
 ```bash

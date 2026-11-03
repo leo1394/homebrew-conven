@@ -231,7 +231,9 @@
     .logs-panel.is-fullscreen > .section-body { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
     .logs-panel.is-fullscreen .log-frame { flex: 1; height: auto; min-height: 0; }
     .logs-panel.is-fullscreen .logs-controls, .logs-panel.is-fullscreen .service-filters { flex-shrink: 0; max-height: 18vh; overflow: auto; overscroll-behavior: contain; }
-    .logs-panel.is-fullscreen .logs-foot { flex-shrink: 0; }
+    .logs-panel.is-fullscreen .service-filters { order: 1; border-top: 1px solid var(--line); }
+    .logs-panel.is-fullscreen .logs-controls { order: 2; }
+    .logs-panel.is-fullscreen .logs-foot { order: 3; flex-shrink: 0; }
     .backlog-row { position: sticky; top: 0; z-index: 2; display: flex; justify-content: center; padding: 6px; background: linear-gradient(#070b0e 50%, transparent); }
     .log-empty { padding: 60px 20px; text-align: center; color: var(--muted); }
     .log-row {
@@ -1351,7 +1353,10 @@
         const target = requested === "timeline" ? "attempts" : requested;
         if (["overview", "configuration", "logs", "attempts"].includes(target)) {
           state.viewHandled = true;
-          requestAnimationFrame(() => revealSection(target));
+          requestAnimationFrame(() => {
+            revealSection(target);
+            if (target === "logs" && params.get("fullscreen") === "logs" && !params.has("guardPanel")) setLogsFullscreen(true);
+          });
         }
       }
 
@@ -1435,6 +1440,7 @@
         if (requestedNames) state.selectedServices = new Set(requestedNames.split(",").map((name) => name.trim()).filter(Boolean));
         bindEvents(); $("#followButton").classList.add("primary");
         if (guardPanel === "logs") setSectionExpanded($("#logs"), true);
+        applyRequestedView();
         if (isDemo) {
           $("#modeBadge").hidden = false; setConnection("", "OFFLINE DEMO");
           $("#logsKicker").textContent = "Deterministic offline sample · no network requests are made.";

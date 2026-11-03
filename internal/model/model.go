@@ -12,6 +12,7 @@ type Workspace struct {
 	Name             string   `yaml:"name"`
 	Policy           string   `yaml:"policy"`
 	DisabledBindings []string `yaml:"disabledBindings"`
+	ConnectionByEnvironment bool `yaml:"connectionByEnvironment"`
 }
 
 type Policy struct {

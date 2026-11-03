@@ -201,10 +201,14 @@ func runRuntimePreflight(ctx context.Context, plan *Plan, output io.Writer, anno
 			connection = "ktctl connect only"
 		}
 		fmt.Fprintln(output, style.Success("✓ Conven inbound routing contract: "+connection+"."))
-		if preflightEnabled {
+		if preflightEnabled && plan.GuardSession == nil {
 			fmt.Fprintln(output, style.Stage("External Consul dependency preflight"))
 		}
 	}
+	// A validated Guard preparation owns dependency necessity and readiness.
+	// Keep final config/isolation inspection above, but do not activate optional
+	// channels by probing every Consul binding again inside the guest.
+	if plan.GuardSession != nil { return nil }
 	if err := preflightExternalConsulDependencies(ctx, dependencies); err != nil {
 		if preflightEnabled {
 			fmt.Fprintln(output, style.Detail(err.Error()))

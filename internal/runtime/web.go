@@ -240,7 +240,13 @@ func (server *webServer) observe(snapshot WebSnapshotData) []webObservation {
 
 // ServeWebDashboard is the private child-process entry point. The separate lock
 // is held for its lifetime; it never holds the workspace orchestration lock.
-func ServeWebDashboard(ctx context.Context, workspace *WorkspaceData, version, executable string) error {
+func ServeWebDashboard(ctx context.Context, workspace *WorkspaceData, version, executable string, fixedPort ...int) error {
+	address := "127.0.0.1:0"
+	if len(fixedPort) > 1 { return errors.New("only one loopback dashboard port is allowed") }
+	if len(fixedPort) == 1 {
+		if fixedPort[0] < 1024 || fixedPort[0] > 65535 { return errors.New("dashboard port must be an unprivileged port") }
+		address = fmt.Sprintf("127.0.0.1:%d", fixedPort[0])
+	}
 	if err := workspace.Store.ensureRoot(); err != nil { return err }
 	fd, err := unix.Open(filepath.Join(workspace.Store.Root,"web.lock"), unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW,0600)
 	if err != nil { return err }
@@ -251,7 +257,7 @@ func ServeWebDashboard(ctx context.Context, workspace *WorkspaceData, version, e
 	if err := lock.Chmod(0600); err != nil { return err }
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil { return err }
 	defer unix.Flock(fd,unix.LOCK_UN)
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := net.Listen("tcp4", address)
 	if err != nil { return err }
 	defer listener.Close()
 	secret := make([]byte,32)

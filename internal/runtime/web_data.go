@@ -1117,21 +1117,31 @@ func parseWebLogLine(line string, pendingSecret bool) (webParsedLog, bool) {
 		parsed := webParsedLog{levelSource: "source"}
 		rawText := webJSONText(object)
 		parsed.level = webJSONString(object, "level", "severity")
-		parsed.requestID = webJSONString(object, "requestId", "request_id", "request-id")
+		parsed.requestID = webJSONString(object, "requestId", "request_id", "request-id", "X-Request-Id")
+		if parsed.requestID == "" {
+			if headers, ok := object["headers"].(map[string]interface{}); ok {
+				for key, value := range headers {
+					if strings.EqualFold(key, "X-Request-Id") {
+						parsed.requestID, _ = value.(string)
+						break
+					}
+				}
+			}
+		}
 		parsed.traceID = webJSONString(object, "traceId", "trace_id", "trace-id", "trace")
 		parsed.attempt = webJSONString(object, "attempt", "attemptId", "attempt_id")
 		if value := webJSONString(object, "time", "timestamp", "@timestamp", "ts"); value != "" {
 			parsed.time = webParseLogTime(value)
 		}
 		if parsed.requestID == "" {
-			parsed.requestID = webPlainLogValue(rawText, "requestId", "request_id", "request-id")
+			parsed.requestID = webPlainLogValue(rawText, "requestId", "request_id", "request-id", "X-Request-Id")
 		}
 		if parsed.traceID == "" {
 			parsed.traceID = webPlainLogValue(rawText, "traceId", "trace_id", "trace-id", "trace")
 		}
 		parsed.text = redactWebLogText(rawText)
 		if parsed.requestID == "" {
-			parsed.requestID = webPlainLogValue(parsed.text, "requestId", "request_id", "request-id")
+			parsed.requestID = webPlainLogValue(parsed.text, "requestId", "request_id", "request-id", "X-Request-Id")
 		}
 		if parsed.traceID == "" {
 			parsed.traceID = webPlainLogValue(parsed.text, "traceId", "trace_id", "trace-id", "trace")
@@ -1163,7 +1173,7 @@ func parseWebLogLine(line string, pendingSecret bool) (webParsedLog, bool) {
 		case "ftl": parsed.level = "fatal"
 		}
 	}
-	parsed.requestID = webPlainLogValue(line, "requestId", "request_id", "request-id")
+	parsed.requestID = webPlainLogValue(line, "requestId", "request_id", "request-id", "X-Request-Id")
 	parsed.traceID = webPlainLogValue(line, "traceId", "trace_id", "trace-id")
 	parsed.attempt = webPlainLogValue(line, "attempt", "attemptId", "attempt_id")
 	return parsed, nextPending

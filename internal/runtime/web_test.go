@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,38 @@ func TestWebFavicon(t *testing.T) {
 	if w.Code!=403 {t.Fatal("favicon bypassed host validation")}
 	html,err:=webAssets.ReadFile("webassets/index.html")
 	if err!=nil || !strings.Contains(string(html),`href="/favicon.png"`) {t.Fatal("page does not reference favicon")}
+}
+
+func TestWebFixedPortRejectsPrivilegedAndInvalidPorts(t *testing.T) {
+	for _, ports := range [][]int{{0}, {80}, {-1}, {65536}, {18080, 18081}} {
+		if err := ServeWebDashboard(context.Background(), nil, "test", "", ports...); err == nil {
+			t.Fatalf("accepted invalid dashboard ports: %v", ports)
+		}
+	}
+}
+
+func TestWebFixedPortPreservesAuthenticatedIdentity(t *testing.T) {
+	reservation, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil { t.Fatal(err) }
+	address := reservation.Addr().String()
+	port := reservation.Addr().(*net.TCPAddr).Port
+	reservation.Close()
+	workspace := testWorkspace(t, t.TempDir(), &model.Manifest{Version:3})
+	ctx, cancel := context.WithCancel(context.Background()); defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- ServeWebDashboard(ctx, workspace, "test", "", port) }()
+	var instance webInstance
+	deadline := time.Now().Add(5*time.Second)
+	for time.Now().Before(deadline) {
+		instance, _ = readWebInstance(workspace)
+		if probeWebInstance(ctx, instance, workspace.Root) { break }
+		time.Sleep(10*time.Millisecond)
+	}
+	if instance.URL != "http://"+address || !probeWebInstance(ctx, instance, workspace.Root) { t.Fatal("fixed loopback viewer identity failed") }
+	wrong := instance; wrong.Token = strings.Repeat("0", 64)
+	if probeWebInstance(ctx, wrong, workspace.Root) { t.Fatal("viewer accepted incorrect token") }
+	cancel()
+	select { case err := <-done: if err != nil { t.Fatal(err) }; case <-time.After(5*time.Second): t.Fatal("viewer did not stop") }
 }
 
 func TestWebServerAuthenticationAndOrigins(t *testing.T) {

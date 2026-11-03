@@ -35,6 +35,7 @@ type ConnectionConfig struct {
 	Command    string
 	Args       []string
 	Kubeconfig string
+	KubeconfigSource string
 	Context    string
 	Namespace  string
 	Sudo       bool
@@ -74,7 +75,11 @@ const connectionReadinessStableProbes = 2
 const ktctlTunnelReadyMarker = "all looks good, now you can access to resources in the kubernetes cluster"
 const ktctlTunnelEvidenceBytes = 1024 * 1024
 
-func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath string, lease string, output io.Writer) (*ConnectionProcess, error) {
+func EnsureConnection(ctx context.Context, config ConnectionConfig, logPath string, lease string, output io.Writer) (result *ConnectionProcess, resultErr error) {
+	sourcePath := config.Kubeconfig
+	defer func() {
+		if result != nil && resultErr == nil { result.SourceKubeconfig = sourcePath; result.KubeconfigSource = config.KubeconfigSource; result.Context = config.Context; result.Namespace = config.Namespace }
+	}()
 	if config.Driver == "" || config.Driver == "none" {
 		return nil, nil
 	}
